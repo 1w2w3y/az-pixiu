@@ -12,6 +12,11 @@ import { modelConfigHash } from '../model/client.js';
 import { renderMarkdownReport } from '../report/markdown.js';
 import { buildRunArtifact, writeRunArtifact } from '../report/runjson.js';
 import {
+  propagateAttributes,
+  setActiveTraceIO,
+  updateActiveObservation,
+} from '@langfuse/tracing';
+import {
   initializeTracing,
   shutdownTracing,
   type ObservabilityMode,
@@ -113,10 +118,74 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
 
   const traceId = `run-${runId}`;
 
+  // Trace-level attributes that should ride down into every child span
+  // and surface on the Langfuse trace itself (Langfuse skill baseline
+  // §"Discover Additional Context Needs"):
+  //   - traceName: `analyze.<type>` so traces are filterable by analysis
+  //   - userId:    Azure account identity (the natural "actor")
+  //   - sessionId: AMG endpoint (groups every run that hit the same
+  //                Grafana instance — useful when comparing across
+  //                tenants/environments)
+  //   - tags:      analysis_type + 'fixture' when running offline, so
+  //                the UI can filter offline vs live runs
+  const tags = [`analysis:${options.scope.analysis_type}`];
+  if (options.fixtureId) tags.push('fixture');
+
   try {
     const result = await withSpan(
       SpanNames.RunRoot,
-      async () => doRun({ ...options, runId, startedAt, runDir, reportPath, runJsonPath, traceId }),
+      async (rootSpan) =>
+        propagateAttributes(
+          {
+            traceName: `analyze.${options.scope.analysis_type}`,
+            userId: options.credentialIdentity.identity,
+            sessionId: options.config.amg.endpoint,
+            tags,
+            metadata: {
+              run_id: runId,
+              amg_mcp_endpoint: options.config.amg.endpoint,
+              model_deployment: options.config.foundry.deployment,
+              model_deployment_sku: options.config.foundry.deployment_sku,
+              credential_source: options.credentialIdentity.implementation,
+              ...(options.fixtureId ? { fixture_id: options.fixtureId } : {}),
+            },
+          },
+          async () => {
+            // Trace-level input is the operator's effective ask; trace-level
+            // output is set after doRun returns so Langfuse renders the
+            // request → response pair on the trace card.
+            setActiveTraceIO({
+              input: {
+                scope: {
+                  subscription_ids: options.scope.subscription_ids,
+                  analysis_type: options.scope.analysis_type,
+                  time_window: options.scope.time_window,
+                  baseline_window: options.scope.baseline_window,
+                  resource_group_names: options.scope.resource_group_names,
+                  effective_scope_summary: options.scope.effective_scope_summary,
+                },
+              },
+            });
+            // Annotate the root span itself with a structured input too,
+            // so it's discoverable when filtering on root-span observations.
+            updateActiveObservation({ input: { scope_summary: options.scope.effective_scope_summary } });
+            const r = await doRun({ ...options, runId, startedAt, runDir, reportPath, runJsonPath, traceId });
+            const outputSummary = {
+              run_id: r.run_id,
+              status: r.metadata.status,
+              recommendations: r.reasoning.recommendations.length,
+              facts: r.reasoning.facts.length,
+              hypotheses: r.reasoning.hypotheses.length,
+              data_quality_findings: r.reasoning.data_quality.length,
+              report_path: r.report_path,
+              passed_all_rubrics: r.score.passed_all,
+            };
+            setActiveTraceIO({ output: outputSummary });
+            updateActiveObservation({ output: outputSummary });
+            rootSpan.setAttribute(ATTR.status, r.metadata.status);
+            return r;
+          },
+        ),
       {
         [ATTR.agentName]: 'az-pixiu',
         [ATTR.agentDomain]: 'finops',

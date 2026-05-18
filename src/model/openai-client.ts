@@ -1,19 +1,19 @@
 import { AzureOpenAI } from 'openai';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import { getBearerTokenProvider, type TokenCredential } from '@azure/identity';
+import { observeOpenAI } from '@langfuse/openai';
 import type { z } from 'zod';
 import type { GenerateStructuredArgs, ModelClient } from './client.js';
 
 /**
  * OpenAIModelClient — real Foundry-hosted GPT-5.x via Entra ID
  * (design §15.3, §15.9). Uses zodResponseFormat for strict-JSON-Schema
- * structured output. Wrapping with @langfuse/openai for OTEL spans is
- * deferred to step 10.
- *
- * Smoke-test status: written, not run live. Real calls require
- * `az login` (or another TokenCredential), a reachable Foundry endpoint,
- * and a valid deployment name. The MockModelClient covers the test
- * surface until step 11 wires live access.
+ * structured output, and wraps the SDK with `observeOpenAI` from
+ * @langfuse/openai so every call is captured as a Langfuse `generation`
+ * with model name, prompt/completion bodies, token usage, latency, and
+ * errors — no manual instrumentation needed. The wrapper is a no-op when
+ * the global tracer provider has no Langfuse processor installed (i.e.,
+ * for `--observability noop|memory`).
  */
 
 const FOUNDRY_OPENAI_SCOPE = 'https://cognitiveservices.azure.com/.default';
@@ -32,18 +32,21 @@ export class OpenAIModelClient implements ModelClient {
 
   constructor(options: OpenAIModelClientOptions) {
     this.deployment = options.deployment;
-    this.client = new AzureOpenAI({
+    const rawClient = new AzureOpenAI({
       endpoint: options.endpoint,
       apiVersion: options.apiVersion ?? '2024-10-21',
       azureADTokenProvider: getBearerTokenProvider(options.credential, FOUNDRY_OPENAI_SCOPE),
     });
+    // observeOpenAI returns a Proxy with the same type, so the parse()
+    // call below is unchanged. The wrapper captures every chat/completions
+    // request as a Langfuse generation under whatever span is active.
+    this.client = observeOpenAI(rawClient);
   }
 
   async generateStructured<TSchema extends z.ZodTypeAny>(
     args: GenerateStructuredArgs<TSchema>,
   ): Promise<z.infer<TSchema>> {
     const responseFormat = zodResponseFormat(args.schema, args.schemaName);
-    // TEMP DEBUG: dump the JSON schema being sent to identify strict-mode rejects.
     if (process.env.PIXIU_DEBUG_SCHEMA === '1') {
       process.stderr.write(
         `[debug] ${args.schemaName} JSON schema: ${JSON.stringify(responseFormat, null, 2)}\n`,

@@ -12,9 +12,10 @@ import { LangfuseSpanProcessor } from '@langfuse/otel';
  * provider for the run. Three modes:
  *
  *   - 'langfuse' — registers a LangfuseSpanProcessor. The processor's
- *     constructor validates LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY /
- *     LANGFUSE_BASEURL at call time, so callers should only select this
- *     mode when those are set (or supply explicit options).
+ *     constructor reads LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY /
+ *     LANGFUSE_BASE_URL (legacy LANGFUSE_BASEURL also accepted) at call
+ *     time, so callers should only select this mode when those are set
+ *     (or supply explicit options).
  *   - 'memory' — InMemorySpanExporter, used by tests and by the local
  *     trace-artifact mode when Langfuse is disabled.
  *   - 'noop' — no exporter; spans created but never shipped. Default
