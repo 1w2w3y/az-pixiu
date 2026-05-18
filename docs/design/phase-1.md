@@ -54,10 +54,10 @@ Ten components, each owning one architectural concern from the [architecture pri
 
 ### 4.1 `config` — configuration and operator transparency
 
-- **Purpose.** Resolve all run inputs and dependency endpoints from layered sources (flags > env > TOML); tell the operator before each run what data and external services will be touched.
-- **Inputs / outputs.** Raw CLI args + env + config file → `RunConfiguration`.
-- **Hard constraints.** Operator transparency ([architecture principles](../architecture-principles.md)); [CLI experience PRD](../prd/cli-experience.md) FR-4, FR-9, FR-14 (no secrets logged).
-- **Swappable.** Secret store, config file format.
+- **Purpose.** Resolve all run inputs and dependency endpoints from layered sources (flags > env > TOML); construct the `TokenCredential` (§15.9) used for both AMG-MCP and Foundry; tell the operator before each run what data and external services will be touched and which credential is in use.
+- **Inputs / outputs.** Raw CLI args + env + config file → `RunConfiguration` (endpoints + resolved `TokenCredential`).
+- **Hard constraints.** Operator transparency ([architecture principles](../architecture-principles.md)); [CLI experience PRD](../prd/cli-experience.md) FR-4, FR-9, FR-14 (no secrets logged — raw tokens never echoed or persisted). Credential source and resolved identity surfaced in `RunMetadata.credential_source` (§5.7).
+- **Swappable.** Secret store, config file format, credential implementation (§15.9).
 
 ### 4.2 `scope` — scope intake and confirmation
 
@@ -67,8 +67,8 @@ Ten components, each owning one architectural concern from the [architecture pri
 
 ### 4.3 `mcp_client` — AMG-MCP client and capability discovery
 
-- **Purpose.** The only component that knows the MCP transport. Opens the AMG-MCP session, discovers capabilities, dispatches tool calls, enforces a static read-only allowlist of capabilities.
-- **Inputs / outputs.** Transport config → `CapabilityCatalog` + invocation function.
+- **Purpose.** The only component that knows the MCP transport. Opens the AMG-MCP session, discovers capabilities, dispatches tool calls, enforces a static read-only allowlist of capabilities. Acquires AMG-resource-scoped Entra ID tokens through the injected `TokenCredential` (§15.9) and attaches them as `Authorization: Bearer <token>` on every request; token refresh is handled by the credential's internal cache.
+- **Inputs / outputs.** Transport config + `TokenCredential` → `CapabilityCatalog` + invocation function.
 - **Hard constraints.** AMG-MCP is the sole boundary ([AMG-MCP integration PRD](../prd/amg-mcp-integration.md) FR-1); discovery before reliance (FR-2, FR-11); explicit read-only (FR-8 — `dashboard_update` denied; any future mutating tool denied by default); every call wrapped in a trace span (FR-7).
 - **Swappable.** Transport (streamable HTTP / SSE) without touching upstream components.
 
@@ -277,6 +277,7 @@ Durable shapes across component boundaries. Types of values shown; serialization
 | `prompt_versions` | `{planner: vN, reasoner: vM}` |
 | `model_provider` / `model_name` / `model_config_hash` | strings/hash (e.g., provider=`foundry`, name=`gpt-5.4`) |
 | `model_deployment_sku` | Foundry deployment type (`GlobalStandard` / `DataZoneStandard` / regional). Determines where prompts and responses are processed; required for the data-residency record. |
+| `credential_source` | `TokenCredential` implementation in use (`AzureCliCredential` / `DefaultAzureCredential` / `ClientSecretCredential` / etc.) and the resolved identity (UPN or service-principal name) for audit. Raw tokens never recorded. |
 | `experiment_variant` | optional string |
 | `amg_mcp_endpoint` | URL of the remote AMG-MCP server |
 | `capability_versions` | map of capability → version snapshot |
@@ -551,6 +552,7 @@ run.root                                  [trace]
     scope.baseline_window
     prompt.versions = {planner: vN, reasoner: vM}
     model.provider, model.name, model.config_hash, model.deployment_sku
+    credential.source, credential.identity
     experiment.variant (optional)
     fixture.id (optional)
     capability.versions (object)
@@ -612,7 +614,7 @@ Neither AMG-MCP nor Microsoft Foundry constrains client language — both are la
 
 | Option | Trade-offs |
 |---|---|
-| **Microsoft Foundry — OpenAI gpt-5.4** ✅ | Same Azure tenant as AMG-MCP and the source data; one Entra ID identity covers both boundaries; first-class strict JSON Schema (`response_format: json_schema`, `strict: true`) for the §8.3 structured-output pipeline, accepting Zod schemas directly through the OpenAI SDK; operator already has access through their Azure environment. Trade-off: data-residency depends on the deployment SKU — `GlobalStandard` may process anywhere, `DataZoneStandard` stays in US or EU, regional pins to one location ([Foundry deployment types](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/deployment-types)). The chosen SKU must be surfaced through `config` (§4.1) and recorded in `RunMetadata.model_deployment_sku` (§5.7) before each run. |
+| **Microsoft Foundry — OpenAI gpt-5.4** ✅ | Same Azure tenant as AMG-MCP and the source data; one shared `TokenCredential` (§15.9) covers both boundaries — the `AzureOpenAI` client accepts the credential directly via `azureADTokenProvider` (scope `https://cognitiveservices.azure.com/.default`), and the same credential mints AMG-MCP tokens with the Managed Grafana resource scope; first-class strict JSON Schema (`response_format: json_schema`, `strict: true`) for the §8.3 structured-output pipeline, accepting Zod schemas directly through the OpenAI SDK; operator already has access through their Azure environment. Trade-off: data-residency depends on the deployment SKU — `GlobalStandard` may process anywhere, `DataZoneStandard` stays in US or EU, regional pins to one location ([Foundry deployment types](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/deployment-types)). The chosen SKU must be surfaced through `config` (§4.1) and recorded in `RunMetadata.model_deployment_sku` (§5.7) before each run. |
 | Claude via Anthropic API | Strong tool-use and calibration-on-uncertainty behavior; established Langfuse integration. Trade-off: genuinely external — sensitive Azure telemetry summaries cross a tenant boundary; operator opt-in required and surfaced in CLI before each run. |
 | Local model (Ollama / llama.cpp) | Strict-local — no model call leaves the workstation. Trade-off: Phase 1 quality on strict JSON Schema adherence and FinOps-domain reasoning is meaningfully below frontier; risks missing the "useful enough to act on" bar ([goals](../goals.md)). |
 
@@ -631,7 +633,7 @@ AMG-MCP is a remote MCP server hosted by Azure Managed Grafana. Az-Pixiu connect
 
 **Phase 1 default: streamable HTTP**, falling back to whatever transport AMG-MCP currently exposes as primary. The choice is constrained by the server, not by Az-Pixiu. Swap is a single-component change in `mcp_client` (§4.3).
 
-**Auth handoff.** Because AMG-MCP is remote, Az-Pixiu authenticates *to* the MCP server (token-based, per the server's auth model — likely Entra ID; supplied via `config` per §4.1). The server holds the Azure credentials it uses to reach Cost Management, Resource Graph, and Azure Monitor. This narrows the agent's credential surface: the agent never holds Azure subscription credentials directly. The `auth` failure class in §11 covers failures at the agent→AMG-MCP boundary; downstream Azure auth issues surface as `authz_gap` or `unsupported_capability` from the server.
+**Auth handoff.** Az-Pixiu authenticates *to* the MCP server using a Microsoft Entra ID bearer token, acquired from the shared `TokenCredential` (§15.9) with scope `ce34e7e5-485f-4d76-964f-b3d2b16d1e4f/.default` (the Azure Managed Grafana app ID, per the [AMG-MCP server docs](https://learn.microsoft.com/azure/managed-grafana/grafana-mcp-server)). The token is attached as `Authorization: Bearer <token>` on every streamable-HTTP request. The server holds the Azure credentials it uses internally to reach Cost Management, Resource Graph, and Azure Monitor — the agent never holds those directly. The `auth` failure class in §11 covers failures at the agent→AMG-MCP boundary (no `az login`, expired CLI cache, identity has no Grafana RBAC role); downstream Azure auth issues surface as `authz_gap` or `unsupported_capability` from the server. The Grafana service-account-token (`glsa_xxx`) path is supported as a fallback (§15.9) but is not the default, since Entra ID keeps the credential surface unified with Foundry.
 
 **Local-first implication.** AMG-MCP is a managed Azure resource that operators already own in their own tenant. The agent runs on the operator's workstation; sensitive cloud telemetry flows operator-tenant → operator-workstation, not through any Az-Pixiu-operated service. The local-first principle is preserved even though the MCP server is remote.
 
@@ -674,6 +676,30 @@ AMG-MCP is a remote MCP server hosted by Azure Managed Grafana. Az-Pixiu connect
 | CLI flags only | Most explicit; noisy for common case. |
 
 **Phase 1 default: layered.**
+
+### 15.9 Azure credential and token acquisition
+
+Both Azure-resident dependencies — AMG-MCP and Microsoft Foundry — accept Microsoft Entra ID bearer tokens. Az-Pixiu uses a single `TokenCredential` from `@azure/identity` (resolved in `config`, §4.1) to mint scope-specific tokens for each boundary. One credential, two scopes, one identity recorded on the trace.
+
+| Option | Trade-offs |
+|---|---|
+| **`AzureCliCredential`** ✅ | Uses the `az` CLI's cached token; matches how operators interactively manage Azure access on a workstation; no secrets in env or config files. Trade-off: requires `az login` ahead of time; not suitable for headless/CI runs. |
+| `DefaultAzureCredential` | Tries env vars, managed identity, Azure CLI, etc. in order. Right choice for headless runs. Trade-off: resolution-order surprises unless the chosen source is logged. |
+| `ClientSecretCredential` / `ClientCertificateCredential` | Deterministic service-principal credential, suitable for CI. Trade-off: secret hygiene. |
+| Grafana service account token (`glsa_xxx`) — AMG-MCP only | The fallback the AMG-MCP docs describe. Trade-off: AMG-MCP-only — does not authenticate Foundry; splits the credential surface. |
+
+**Phase 1 default: `AzureCliCredential`.** The audience is local operators running against their own subscriptions; `az login` is already part of their workflow. Switching to `DefaultAzureCredential` or a service principal is a single-line change in `config`; the rest of the design depends on the `TokenCredential` interface, not the implementation.
+
+**Token scopes** — one credential, two resource scopes:
+
+| Boundary | Scope |
+|---|---|
+| AMG-MCP | `ce34e7e5-485f-4d76-964f-b3d2b16d1e4f/.default` (the Azure Managed Grafana app ID, per the [AMG-MCP server docs](https://learn.microsoft.com/azure/managed-grafana/grafana-mcp-server)) |
+| Foundry OpenAI | `https://cognitiveservices.azure.com/.default` |
+
+The `AzureOpenAI` client takes the credential directly via `azureADTokenProvider` (built with `getBearerTokenProvider(credential, scope)`), which handles refresh internally. The MCP client (§4.3) calls `credential.getToken(amgScope)` and attaches the bearer token as `Authorization: Bearer <token>` on the streamable-HTTP transport; the credential's internal cache prevents repeated CLI invocations across requests within a run.
+
+**Operator transparency.** Before each run, the CLI (§4.10) prints the credential source and the resolved identity (UPN or service-principal name); raw tokens are never logged. The same identity is recorded on `RunMetadata.credential_source` (§5.7) and on the trace root span (§14) so runs are attributable.
 
 ---
 
