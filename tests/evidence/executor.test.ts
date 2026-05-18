@@ -25,8 +25,8 @@ class FakeTransport implements MCPTransport {
 
 const phase1Catalog: CapabilityCatalog = {
   capabilities: [
-    { name: 'cost_analysis', version: '1.0.0' },
-    { name: 'query_resource_graph', version: '1.2.0' },
+    { name: 'amgmcp_cost_analysis', version: '1.0.0' },
+    { name: 'amgmcp_query_resource_graph', version: '1.2.0' },
   ],
 };
 
@@ -44,8 +44,8 @@ describe('EvidenceExecutor — happy path', () => {
 
     const plan: EvidencePlan = {
       requests: [
-        { capability: 'cost_analysis', parameters: { sub: 'a' }, intent: 'cost_breakdown' },
-        { capability: 'query_resource_graph', parameters: { q: 'select *' }, intent: 'inventory' },
+        { capability: 'amgmcp_cost_analysis', parameters: { sub: 'a' }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_query_resource_graph', parameters: { q: 'select *' }, intent: 'inventory' },
       ],
     };
 
@@ -65,27 +65,27 @@ describe('EvidenceExecutor — happy path', () => {
     const executor = new EvidenceExecutor({ client, catalog });
     const plan: EvidencePlan = {
       requests: [
-        { capability: 'query_resource_graph', parameters: { i: 1 }, intent: 'inventory' },
-        { capability: 'cost_analysis', parameters: { i: 2 }, intent: 'cost_breakdown' },
-        { capability: 'query_resource_graph', parameters: { i: 3 }, intent: 'inventory' },
+        { capability: 'amgmcp_query_resource_graph', parameters: { i: 1 }, intent: 'inventory' },
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 2 }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_query_resource_graph', parameters: { i: 3 }, intent: 'inventory' },
       ],
     };
     const { raw_evidence } = await executor.execute(plan);
     expect(raw_evidence.map((e) => e.request.capability)).toEqual([
-      'query_resource_graph',
-      'cost_analysis',
-      'query_resource_graph',
+      'amgmcp_query_resource_graph',
+      'amgmcp_cost_analysis',
+      'amgmcp_query_resource_graph',
     ]);
   });
 
   it('falls back to "unknown" capability_version when discovery did not record one', async () => {
-    const catalog: CapabilityCatalog = { capabilities: [{ name: 'cost_analysis' }] };
+    const catalog: CapabilityCatalog = { capabilities: [{ name: 'amgmcp_cost_analysis' }] };
     const transport = new FakeTransport(catalog, async () => ({ content: {} }));
     const client = new MCPClient({ transport });
     const discovered = await client.discover();
     const executor = new EvidenceExecutor({ client, catalog: discovered });
     const { raw_evidence } = await executor.execute({
-      requests: [{ capability: 'cost_analysis', parameters: {}, intent: 'cost_breakdown' }],
+      requests: [{ capability: 'amgmcp_cost_analysis', parameters: {}, intent: 'cost_breakdown' }],
     });
     expect(raw_evidence[0]?.capability_version).toBe('unknown');
   });
@@ -94,7 +94,7 @@ describe('EvidenceExecutor — happy path', () => {
 describe('EvidenceExecutor — failure paths', () => {
   it('collects per-request failures as ClassifiedFailures (does not throw)', async () => {
     const transport = new FakeTransport(phase1Catalog, async (cap) => {
-      if (cap === 'cost_analysis') throw Object.assign(new Error('quota'), { status: 429 });
+      if (cap === 'amgmcp_cost_analysis') throw Object.assign(new Error('quota'), { status: 429 });
       return { content: 'ok' };
     });
     const client = new MCPClient({ transport });
@@ -103,17 +103,17 @@ describe('EvidenceExecutor — failure paths', () => {
 
     const plan: EvidencePlan = {
       requests: [
-        { capability: 'cost_analysis', parameters: {}, intent: 'cost_breakdown' },
-        { capability: 'query_resource_graph', parameters: {}, intent: 'inventory' },
+        { capability: 'amgmcp_cost_analysis', parameters: {}, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_query_resource_graph', parameters: {}, intent: 'inventory' },
       ],
     };
 
     const { raw_evidence, failures } = await executor.execute(plan);
     expect(raw_evidence).toHaveLength(1);
-    expect(raw_evidence[0]?.request.capability).toBe('query_resource_graph');
+    expect(raw_evidence[0]?.request.capability).toBe('amgmcp_query_resource_graph');
     expect(failures).toHaveLength(1);
     expect(failures[0]?.category).toBe('rate_limit');
-    expect(failures[0]?.capability).toBe('cost_analysis');
+    expect(failures[0]?.capability).toBe('amgmcp_cost_analysis');
   });
 
   it('continues after multiple failures so analysis can produce bounded results (§11)', async () => {
@@ -126,8 +126,8 @@ describe('EvidenceExecutor — failure paths', () => {
 
     const plan: EvidencePlan = {
       requests: [
-        { capability: 'cost_analysis', parameters: {}, intent: 'cost_breakdown' },
-        { capability: 'query_resource_graph', parameters: {}, intent: 'inventory' },
+        { capability: 'amgmcp_cost_analysis', parameters: {}, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_query_resource_graph', parameters: {}, intent: 'inventory' },
       ],
     };
     const { raw_evidence, failures } = await executor.execute(plan);
@@ -148,7 +148,7 @@ describe('EvidenceExecutor — against the seeded fixture', () => {
     const plan: EvidencePlan = {
       requests: [
         {
-          capability: 'cost_analysis',
+          capability: 'amgmcp_cost_analysis',
           parameters: {
             subscription_id: '11111111-1111-1111-1111-111111111111',
             time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
@@ -158,7 +158,7 @@ describe('EvidenceExecutor — against the seeded fixture', () => {
           intent: 'cost_breakdown',
         },
         {
-          capability: 'cost_analysis',
+          capability: 'amgmcp_cost_analysis',
           parameters: {
             subscription_id: '11111111-1111-1111-1111-111111111111',
             time_window: { start: '2026-04-24T00:00:00Z', end: '2026-05-01T00:00:00Z' },
@@ -184,7 +184,7 @@ describe('EvidenceExecutor — against the seeded fixture', () => {
     const executor = new EvidenceExecutor({ client, catalog });
     const { raw_evidence, failures } = await executor.execute({
       requests: [
-        { capability: 'cost_analysis', parameters: { unrecorded: true }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_cost_analysis', parameters: { unrecorded: true }, intent: 'cost_breakdown' },
       ],
     });
     expect(raw_evidence).toHaveLength(0);

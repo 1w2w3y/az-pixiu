@@ -33,37 +33,37 @@ const manifest = {
 const capabilities = {
   capabilities: [
     {
-      name: 'query_azure_subscriptions',
+      name: 'amgmcp_query_azure_subscriptions',
       version: '1.0.0',
       description: 'List subscriptions reachable by the AMG identity.',
     },
     {
-      name: 'cost_analysis',
+      name: 'amgmcp_cost_analysis',
       version: '1.0.0',
       description: 'Cost breakdown for a subscription scope and time window.',
     },
     {
-      name: 'query_resource_graph',
+      name: 'amgmcp_query_resource_graph',
       version: '1.0.0',
       description: 'Kusto-style queries over the Azure Resource Graph.',
     },
     {
-      name: 'query_resource_metric_definition',
+      name: 'amgmcp_query_resource_metric_definition',
       version: '1.0.0',
       description: 'List available metrics for a resource type.',
     },
     {
-      name: 'query_resource_metric',
+      name: 'amgmcp_query_resource_metric',
       version: '1.0.0',
       description: 'Fetch Azure Monitor metrics for a batch of resources.',
     },
     {
-      name: 'query_activity_log',
+      name: 'amgmcp_query_activity_log',
       version: '1.0.0',
       description: 'Management-plane activity log entries for a scope and window.',
     },
     {
-      name: 'query_resource_health',
+      name: 'amgmcp_query_resource_health',
       version: '1.0.0',
       description: 'Availability transitions for a resource over a window.',
     },
@@ -78,7 +78,7 @@ type FixtureCall = {
 
 const calls: FixtureCall[] = [
   {
-    capability: 'query_azure_subscriptions',
+    capability: 'amgmcp_query_azure_subscriptions',
     parameters: {},
     response: {
       content: {
@@ -90,7 +90,7 @@ const calls: FixtureCall[] = [
     },
   },
   {
-    capability: 'cost_analysis',
+    capability: 'amgmcp_cost_analysis',
     parameters: {
       subscription_id: SUBSCRIPTION_ID,
       time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
@@ -118,7 +118,7 @@ const calls: FixtureCall[] = [
     },
   },
   {
-    capability: 'cost_analysis',
+    capability: 'amgmcp_cost_analysis',
     parameters: {
       subscription_id: SUBSCRIPTION_ID,
       time_window: { start: '2026-04-24T00:00:00Z', end: '2026-05-01T00:00:00Z' },
@@ -144,7 +144,7 @@ const calls: FixtureCall[] = [
     },
   },
   {
-    capability: 'query_resource_graph',
+    capability: 'amgmcp_query_resource_graph',
     parameters: {
       subscription_ids: [SUBSCRIPTION_ID],
       query:
@@ -174,7 +174,7 @@ const calls: FixtureCall[] = [
     },
   },
   {
-    capability: 'query_activity_log',
+    capability: 'amgmcp_query_activity_log',
     parameters: {
       subscription_id: SUBSCRIPTION_ID,
       time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },

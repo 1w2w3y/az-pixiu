@@ -19,13 +19,13 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
 
   const requests: EvidenceRequest[] = [
     {
-      capability: 'query_azure_subscriptions',
+      capability: 'amgmcp_query_azure_subscriptions',
       parameters: {},
       intent: 'inventory',
       expected_role: 'confirm scope is reachable and identity has subscription read access',
     },
     {
-      capability: 'cost_analysis',
+      capability: 'amgmcp_cost_analysis',
       parameters: {
         subscription_id: subId,
         time_window: scope.time_window,
@@ -36,7 +36,7 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
       expected_role: 'analysis-window cost by service',
     },
     {
-      capability: 'cost_analysis',
+      capability: 'amgmcp_cost_analysis',
       parameters: {
         subscription_id: subId,
         time_window: scope.baseline_window,
@@ -51,7 +51,7 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
   if (scope.resource_group_names && scope.resource_group_names.length > 0) {
     for (const rg of scope.resource_group_names) {
       requests.push({
-        capability: 'query_resource_graph',
+        capability: 'amgmcp_query_resource_graph',
         parameters: {
           subscription_ids: [subId],
           query: `Resources | where resourceGroup =~ '${rg}' | project id, name, type, location, sku, tags`,
@@ -60,7 +60,7 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
         expected_role: `inventory of ${rg}`,
       });
       requests.push({
-        capability: 'query_activity_log',
+        capability: 'amgmcp_query_activity_log',
         parameters: {
           subscription_id: subId,
           time_window: scope.time_window,
@@ -72,7 +72,7 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
     }
   } else {
     requests.push({
-      capability: 'query_resource_graph',
+      capability: 'amgmcp_query_resource_graph',
       parameters: {
         subscription_ids: [subId],
         query:
@@ -82,7 +82,7 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
       expected_role: 'top resource types by count for an unscoped subscription view',
     });
     requests.push({
-      capability: 'query_activity_log',
+      capability: 'amgmcp_query_activity_log',
       parameters: {
         subscription_id: subId,
         time_window: scope.time_window,

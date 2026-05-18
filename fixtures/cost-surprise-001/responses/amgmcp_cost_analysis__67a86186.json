@@ -1,5 +1,5 @@
 {
-  "capability": "cost_analysis",
+  "capability": "amgmcp_cost_analysis",
   "parameters": {
     "subscription_id": "11111111-1111-1111-1111-111111111111",
     "time_window": {

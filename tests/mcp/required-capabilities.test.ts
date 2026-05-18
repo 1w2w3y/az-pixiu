@@ -31,12 +31,12 @@ describe('REQUIRED_CAPABILITY_MAP', () => {
 
   it('cost_analysis is required (the central signal)', () => {
     const cs = REQUIRED_CAPABILITY_MAP.cost_surprise;
-    expect(cs?.required).toContain('cost_analysis');
+    expect(cs?.required).toContain('amgmcp_cost_analysis');
   });
 
   it('query_resource_health is optional (degradable per §11)', () => {
     const cs = REQUIRED_CAPABILITY_MAP.cost_surprise;
-    expect(cs?.optional).toContain('query_resource_health');
+    expect(cs?.optional).toContain('amgmcp_query_resource_health');
   });
 });
 

@@ -7,15 +7,15 @@ import {
 } from '../../src/mcp/allowlist.js';
 
 describe('PHASE_1_READ_ONLY_ALLOWLIST', () => {
-  it('contains exactly the seven Phase 1 capabilities (design §15.4)', () => {
+  it('contains exactly the seven Phase 1 capabilities (real AMG-MCP `amgmcp_*` wire names)', () => {
     expect(Array.from(PHASE_1_READ_ONLY_ALLOWLIST).sort()).toEqual([
-      'cost_analysis',
-      'query_activity_log',
-      'query_azure_subscriptions',
-      'query_resource_graph',
-      'query_resource_health',
-      'query_resource_metric',
-      'query_resource_metric_definition',
+      'amgmcp_cost_analysis',
+      'amgmcp_query_activity_log',
+      'amgmcp_query_azure_subscriptions',
+      'amgmcp_query_resource_graph',
+      'amgmcp_query_resource_health',
+      'amgmcp_query_resource_metric',
+      'amgmcp_query_resource_metric_definition',
     ]);
   });
 });
@@ -74,13 +74,13 @@ describe('isMutatingCapabilityName', () => {
 
 describe('isAllowedCapability', () => {
   it.each([
-    'query_azure_subscriptions',
-    'cost_analysis',
-    'query_resource_graph',
-    'query_resource_metric_definition',
-    'query_resource_metric',
-    'query_activity_log',
-    'query_resource_health',
+    'amgmcp_query_azure_subscriptions',
+    'amgmcp_cost_analysis',
+    'amgmcp_query_resource_graph',
+    'amgmcp_query_resource_metric_definition',
+    'amgmcp_query_resource_metric',
+    'amgmcp_query_activity_log',
+    'amgmcp_query_resource_health',
   ])('allows Phase 1 read-only capability "%s"', (name) => {
     expect(isAllowedCapability(name)).toBe(true);
   });
@@ -97,16 +97,16 @@ describe('isAllowedCapability', () => {
   });
 
   it.each([
-    'pulse_check',
-    'kusto_query',
-    'mssql_query',
-    'prometheus_query',
-    'query_resource_log',
-    'query_application_insights_trace',
-    'insights_get_agents',
-    'datasource_list',
-    'dashboard_inspect',
-    'dashboard_search',
+    'amgmcp_pulse_check',
+    'amgmcp_kusto_query',
+    'amgmcp_mssql_query',
+    'amgmcp_prometheus_query',
+    'amgmcp_query_resource_log',
+    'amgmcp_query_application_insights_trace',
+    'amgmcp_insights_get_agents',
+    'amgmcp_datasource_list',
+    'amgmcp_dashboard_inspect',
+    'amgmcp_dashboard_search',
   ])('denies read-only capability "%s" that is not in the Phase 1 allowlist', (name) => {
     expect(isAllowedCapability(name)).toBe(false);
   });

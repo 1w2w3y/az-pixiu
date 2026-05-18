@@ -14,7 +14,9 @@ const defaultWindow: TimeWindow = {
 function rawEvidence(overrides: Partial<RawEvidence> = {}): RawEvidence {
   return {
     request: {
-      capability: 'cost_analysis',
+      capability: 'amgmcp_cost_analysis',
+      // already prefixed above; this comment is a no-op edit anchor
+
       parameters: { subscription_id: '11111111-1111-1111-1111-111111111111' },
       intent: 'cost_breakdown',
     },
@@ -31,7 +33,7 @@ describe('EvidenceNormalizer — happy path', () => {
     const n = new EvidenceNormalizer();
     const { records, data_quality } = n.normalize([rawEvidence()], { defaultTimeWindow: defaultWindow });
     expect(records).toHaveLength(1);
-    expect(records[0]?.evidence_id).toBe(`ev-cost_analysis-${'a'.repeat(8)}`);
+    expect(records[0]?.evidence_id).toBe(`ev-amgmcp_cost_analysis-${'a'.repeat(8)}`);
     expect(data_quality).toHaveLength(0);
   });
 
@@ -41,7 +43,7 @@ describe('EvidenceNormalizer — happy path', () => {
     const { records } = n.normalize(
       [
         rawEvidence({
-          request: { capability: 'cost_analysis', parameters: { subscription_id: subId }, intent: 'cost_breakdown' },
+          request: { capability: 'amgmcp_cost_analysis', parameters: { subscription_id: subId }, intent: 'cost_breakdown' },
         }),
       ],
       { defaultTimeWindow: defaultWindow },
@@ -59,7 +61,7 @@ describe('EvidenceNormalizer — happy path', () => {
       [
         rawEvidence({
           request: {
-            capability: 'query_resource_graph',
+            capability: 'amgmcp_query_resource_graph',
             parameters: { subscription_ids: subs },
             intent: 'inventory',
           },
@@ -77,7 +79,7 @@ describe('EvidenceNormalizer — happy path', () => {
       [
         rawEvidence({
           request: {
-            capability: 'cost_analysis',
+            capability: 'amgmcp_cost_analysis',
             parameters: { time_window: customWindow },
             intent: 'cost_breakdown',
           },
@@ -94,7 +96,7 @@ describe('EvidenceNormalizer — happy path', () => {
       [
         rawEvidence({
           request: {
-            capability: 'query_azure_subscriptions',
+            capability: 'amgmcp_query_azure_subscriptions',
             parameters: {},
             intent: 'inventory',
           },
@@ -131,7 +133,7 @@ describe('EvidenceNormalizer — per-capability summaries', () => {
       { defaultTimeWindow: defaultWindow },
     );
     expect(records[0]?.payload_summary).toEqual({
-      capability: 'cost_analysis',
+      capability: 'amgmcp_cost_analysis',
       row_count: 3,
       total_cost: 6,
       currency: 'USD',
@@ -143,7 +145,7 @@ describe('EvidenceNormalizer — per-capability summaries', () => {
     const { records } = n.normalize(
       [
         rawEvidence({
-          request: { capability: 'query_resource_graph', parameters: {}, intent: 'inventory' },
+          request: { capability: 'amgmcp_query_resource_graph', parameters: {}, intent: 'inventory' },
           result: {
             content: {
               data: [
@@ -169,7 +171,7 @@ describe('EvidenceNormalizer — per-capability summaries', () => {
     const { records } = n.normalize(
       [
         rawEvidence({
-          request: { capability: 'query_activity_log', parameters: {}, intent: 'activity' },
+          request: { capability: 'amgmcp_query_activity_log', parameters: {}, intent: 'activity' },
           result: {
             content: {
               entries: [
@@ -199,7 +201,7 @@ describe('EvidenceNormalizer — data quality findings', () => {
     expect(records[0]?.caveats).toContain('empty payload from upstream');
     expect(data_quality).toHaveLength(1);
     expect(data_quality[0]?.category).toBe('empty_result');
-    expect(data_quality[0]?.affected_capability).toBe('cost_analysis');
+    expect(data_quality[0]?.affected_capability).toBe('amgmcp_cost_analysis');
   });
 
   it('emits tagging_gap when >= 50% of resource_graph rows are untagged', () => {
@@ -207,7 +209,7 @@ describe('EvidenceNormalizer — data quality findings', () => {
     const { records, data_quality } = n.normalize(
       [
         rawEvidence({
-          request: { capability: 'query_resource_graph', parameters: {}, intent: 'inventory' },
+          request: { capability: 'amgmcp_query_resource_graph', parameters: {}, intent: 'inventory' },
           result: {
             content: {
               data: [
@@ -232,7 +234,7 @@ describe('EvidenceNormalizer — data quality findings', () => {
     const { data_quality } = n.normalize(
       [
         rawEvidence({
-          request: { capability: 'query_resource_graph', parameters: {}, intent: 'inventory' },
+          request: { capability: 'amgmcp_query_resource_graph', parameters: {}, intent: 'inventory' },
           result: {
             content: {
               data: [
@@ -275,7 +277,7 @@ describe('EvidenceNormalizer — against seeded fixture end-to-end', () => {
     const plan: EvidencePlan = {
       requests: [
         {
-          capability: 'cost_analysis',
+          capability: 'amgmcp_cost_analysis',
           parameters: {
             subscription_id: '11111111-1111-1111-1111-111111111111',
             time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
@@ -285,7 +287,7 @@ describe('EvidenceNormalizer — against seeded fixture end-to-end', () => {
           intent: 'cost_breakdown',
         },
         {
-          capability: 'query_resource_graph',
+          capability: 'amgmcp_query_resource_graph',
           parameters: {
             subscription_ids: ['11111111-1111-1111-1111-111111111111'],
             query:
@@ -301,8 +303,8 @@ describe('EvidenceNormalizer — against seeded fixture end-to-end', () => {
       defaultTimeWindow: defaultWindow,
     });
     expect(records).toHaveLength(2);
-    expect(records[0]?.source_capability).toBe('cost_analysis');
-    expect(records[1]?.source_capability).toBe('query_resource_graph');
+    expect(records[0]?.source_capability).toBe('amgmcp_cost_analysis');
+    expect(records[1]?.source_capability).toBe('amgmcp_query_resource_graph');
     // The seeded resource_graph response has one tagged + one untagged → 50% → tagging_gap
     expect(data_quality.map((d) => d.category)).toContain('tagging_gap');
   });

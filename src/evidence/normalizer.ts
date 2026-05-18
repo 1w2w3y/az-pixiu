@@ -64,7 +64,7 @@ export class EvidenceNormalizer {
             actionable_hint: 'Confirm the scope and window cover an interval with activity.',
           }),
         );
-      } else if (raw.request.capability === 'query_resource_graph') {
+      } else if (raw.request.capability === 'amgmcp_query_resource_graph') {
         const tagging = inspectTagging(content);
         if (tagging.total > 0 && tagging.untagged / tagging.total >= 0.5) {
           caveats.push(`${tagging.untagged}/${tagging.total} resources untagged`);
@@ -167,7 +167,7 @@ function summarize(capability: string, content: unknown): unknown {
   const c = content as Record<string, unknown>;
 
   switch (capability) {
-    case 'cost_analysis': {
+    case 'amgmcp_cost_analysis': {
       const rows = Array.isArray(c.rows) ? c.rows : [];
       const total = (c.total as { cost?: number; currency?: string } | undefined) ?? {};
       return {
@@ -177,7 +177,7 @@ function summarize(capability: string, content: unknown): unknown {
         currency: total.currency,
       };
     }
-    case 'query_resource_graph': {
+    case 'amgmcp_query_resource_graph': {
       const data = Array.isArray(c.data) ? c.data : [];
       const sample = data
         .slice(0, 3)
@@ -194,15 +194,15 @@ function summarize(capability: string, content: unknown): unknown {
         sample_names: sample,
       };
     }
-    case 'query_resource_metric': {
+    case 'amgmcp_query_resource_metric': {
       const series = Array.isArray(c.series) ? c.series : Array.isArray(c.data) ? c.data : [];
       return { capability, series_count: series.length };
     }
-    case 'query_resource_metric_definition': {
+    case 'amgmcp_query_resource_metric_definition': {
       const metrics = Array.isArray(c.metrics) ? c.metrics : Array.isArray(c.data) ? c.data : [];
       return { capability, metric_count: metrics.length };
     }
-    case 'query_activity_log': {
+    case 'amgmcp_query_activity_log': {
       const entries = Array.isArray(c.entries) ? c.entries : [];
       return {
         capability,
@@ -216,11 +216,11 @@ function summarize(capability: string, content: unknown): unknown {
         ),
       };
     }
-    case 'query_resource_health': {
+    case 'amgmcp_query_resource_health': {
       const transitions = Array.isArray(c.transitions) ? c.transitions : Array.isArray(c.data) ? c.data : [];
       return { capability, transition_count: transitions.length };
     }
-    case 'query_azure_subscriptions': {
+    case 'amgmcp_query_azure_subscriptions': {
       const subs = Array.isArray(c.subscriptions) ? c.subscriptions : [];
       return { capability, subscription_count: subs.length };
     }

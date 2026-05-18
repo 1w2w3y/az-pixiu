@@ -55,7 +55,7 @@ describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)',
       const cannedPlan: EvidencePlan = {
         requests: [
           {
-            capability: 'cost_analysis',
+            capability: 'amgmcp_cost_analysis',
             parameters: {
               subscription_id: subId,
               time_window: item.scope.time_window,
@@ -65,7 +65,7 @@ describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)',
             intent: 'cost_breakdown',
           },
           {
-            capability: 'cost_analysis',
+            capability: 'amgmcp_cost_analysis',
             parameters: {
               subscription_id: subId,
               time_window: item.scope.baseline_window,
@@ -75,7 +75,7 @@ describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)',
             intent: 'cost_breakdown',
           },
           {
-            capability: 'query_resource_graph',
+            capability: 'amgmcp_query_resource_graph',
             parameters: {
               subscription_ids: [subId],
               query:
@@ -84,7 +84,7 @@ describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)',
             intent: 'inventory',
           },
           {
-            capability: 'query_activity_log',
+            capability: 'amgmcp_query_activity_log',
             parameters: {
               subscription_id: subId,
               time_window: item.scope.time_window,

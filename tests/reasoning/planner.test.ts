@@ -18,9 +18,9 @@ const scope: Scope = {
 
 const catalog: CapabilityCatalog = {
   capabilities: [
-    { name: 'cost_analysis', version: '1.0.0' },
-    { name: 'query_resource_graph', version: '1.0.0' },
-    { name: 'query_activity_log', version: '1.0.0' },
+    { name: 'amgmcp_cost_analysis', version: '1.0.0' },
+    { name: 'amgmcp_query_resource_graph', version: '1.0.0' },
+    { name: 'amgmcp_query_activity_log', version: '1.0.0' },
   ],
 };
 
@@ -37,7 +37,7 @@ class FakeTransport implements MCPTransport {
 const validPlan: EvidencePlan = {
   requests: [
     {
-      capability: 'cost_analysis',
+      capability: 'amgmcp_cost_analysis',
       parameters: {
         subscription_id: subId,
         time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
@@ -45,7 +45,7 @@ const validPlan: EvidencePlan = {
       intent: 'cost_breakdown',
     },
     {
-      capability: 'cost_analysis',
+      capability: 'amgmcp_cost_analysis',
       parameters: {
         subscription_id: subId,
         time_window: { start: '2026-04-24T00:00:00Z', end: '2026-05-01T00:00:00Z' },
@@ -139,8 +139,8 @@ describe('Planner — validation', () => {
   it('rejects duplicate (capability, parameters) requests', async () => {
     const duplicatePlan: EvidencePlan = {
       requests: [
-        { capability: 'cost_analysis', parameters: { sub: 'a' }, intent: 'cost_breakdown' },
-        { capability: 'cost_analysis', parameters: { sub: 'a' }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_cost_analysis', parameters: { sub: 'a' }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_cost_analysis', parameters: { sub: 'a' }, intent: 'cost_breakdown' },
       ],
     };
     const mock = new MockModelClient({ responses: [duplicatePlan, duplicatePlan] });

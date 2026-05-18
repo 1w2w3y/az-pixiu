@@ -1,5 +1,5 @@
 {
-  "capability": "query_activity_log",
+  "capability": "amgmcp_query_activity_log",
   "parameters": {
     "subscription_id": "11111111-1111-1111-1111-111111111111",
     "time_window": {

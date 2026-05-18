@@ -21,7 +21,7 @@ describe('loadDataset — eval/cost-surprise-001.json', () => {
     const item = dataset.items[0]!;
     expect(item.id).toBe('cost-surprise-001');
     expect(item.scope.analysis_type).toBe('cost_surprise');
-    expect(item.expectations?.expected_capabilities_invoked).toContain('cost_analysis');
+    expect(item.expectations?.expected_capabilities_invoked).toContain('amgmcp_cost_analysis');
   });
 
   it('fixturePathFor resolves to fixtures/<fixture_id>', async () => {

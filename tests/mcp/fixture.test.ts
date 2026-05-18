@@ -60,8 +60,8 @@ describe('FixtureMCPTransport — listCapabilities', () => {
       {
         capabilities: {
           capabilities: [
-            { name: 'cost_analysis', version: '1.0.0', description: 'cost' },
-            { name: 'query_resource_graph', version: '2.0.0' },
+            { name: 'amgmcp_cost_analysis', version: '1.0.0', description: 'cost' },
+            { name: 'amgmcp_query_resource_graph', version: '2.0.0' },
           ],
         },
       },
@@ -69,7 +69,7 @@ describe('FixtureMCPTransport — listCapabilities', () => {
         const t = new FixtureMCPTransport({ fixturePath: path });
         const catalog = await t.listCapabilities();
         expect(catalog.capabilities).toHaveLength(2);
-        expect(catalog.capabilities[0]?.name).toBe('cost_analysis');
+        expect(catalog.capabilities[0]?.name).toBe('amgmcp_cost_analysis');
         expect(catalog.capabilities[1]?.version).toBe('2.0.0');
       },
     );
@@ -133,11 +133,11 @@ describe('FixtureMCPTransport — invoke', () => {
   it('returns the recorded response for matching parameters', async () => {
     await withFixture(
       {
-        responses: [{ capability: 'cost_analysis', parameters: sampleParams, response: sampleResponse }],
+        responses: [{ capability: 'amgmcp_cost_analysis', parameters: sampleParams, response: sampleResponse }],
       },
       async (path) => {
         const t = new FixtureMCPTransport({ fixturePath: path });
-        const result = await t.invoke('cost_analysis', sampleParams);
+        const result = await t.invoke('amgmcp_cost_analysis', sampleParams);
         expect(result.isError).toBe(false);
         expect(result.content).toEqual({ rows: [['a', 1]] });
       },
@@ -149,7 +149,7 @@ describe('FixtureMCPTransport — invoke', () => {
       {
         responses: [
           {
-            capability: 'cost_analysis',
+            capability: 'amgmcp_cost_analysis',
             parameters: { a: 1, b: 2 },
             response: { content: 'ok' },
           },
@@ -157,7 +157,7 @@ describe('FixtureMCPTransport — invoke', () => {
       },
       async (path) => {
         const t = new FixtureMCPTransport({ fixturePath: path });
-        const result = await t.invoke('cost_analysis', { b: 2, a: 1 });
+        const result = await t.invoke('amgmcp_cost_analysis', { b: 2, a: 1 });
         expect(result.content).toBe('ok');
       },
     );
@@ -168,7 +168,7 @@ describe('FixtureMCPTransport — invoke', () => {
       {
         responses: [
           {
-            capability: 'cost_analysis',
+            capability: 'amgmcp_cost_analysis',
             parameters: { x: 1 },
             response: { content: 'unused' },
           },
@@ -176,7 +176,7 @@ describe('FixtureMCPTransport — invoke', () => {
       },
       async (path) => {
         const t = new FixtureMCPTransport({ fixturePath: path });
-        await expect(t.invoke('cost_analysis', { x: 2 })).rejects.toBeInstanceOf(
+        await expect(t.invoke('amgmcp_cost_analysis', { x: 2 })).rejects.toBeInstanceOf(
           FixtureNotFoundError,
         );
       },
@@ -203,7 +203,7 @@ describe('FixtureMCPTransport — invoke', () => {
       {
         responses: [
           {
-            capability: 'cost_analysis',
+            capability: 'amgmcp_cost_analysis',
             parameters: sampleParams,
             response: sampleResponse,
             override_digest: '0'.repeat(64),
@@ -212,7 +212,7 @@ describe('FixtureMCPTransport — invoke', () => {
       },
       async (path) => {
         const t = new FixtureMCPTransport({ fixturePath: path });
-        await expect(t.invoke('cost_analysis', sampleParams)).rejects.toBeInstanceOf(FixtureError);
+        await expect(t.invoke('amgmcp_cost_analysis', sampleParams)).rejects.toBeInstanceOf(FixtureError);
       },
     );
   });
@@ -222,7 +222,7 @@ describe('FixtureMCPTransport — invoke', () => {
       {
         responses: [
           {
-            capability: 'cost_analysis',
+            capability: 'amgmcp_cost_analysis',
             parameters: sampleParams,
             response: sampleResponse,
             override_capability_in_file: 'wrong_capability',
@@ -231,7 +231,7 @@ describe('FixtureMCPTransport — invoke', () => {
       },
       async (path) => {
         const t = new FixtureMCPTransport({ fixturePath: path });
-        await expect(t.invoke('cost_analysis', sampleParams)).rejects.toBeInstanceOf(FixtureError);
+        await expect(t.invoke('amgmcp_cost_analysis', sampleParams)).rejects.toBeInstanceOf(FixtureError);
       },
     );
   });
@@ -241,7 +241,7 @@ describe('FixtureMCPTransport — invoke', () => {
       {
         responses: [
           {
-            capability: 'cost_analysis',
+            capability: 'amgmcp_cost_analysis',
             parameters: sampleParams,
             // missing content field
             response: { isError: false },
@@ -260,13 +260,13 @@ describe('FixtureMCPTransport — invoke', () => {
         await writeFile(
           join(path, 'responses', filename),
           JSON.stringify({
-            capability: 'cost_analysis',
+            capability: 'amgmcp_cost_analysis',
             parameters: sampleParams,
             parameters_digest: digest,
             response: 42, // not an object
           }),
         );
-        await expect(t.invoke('cost_analysis', sampleParams)).rejects.toBeInstanceOf(FixtureError);
+        await expect(t.invoke('amgmcp_cost_analysis', sampleParams)).rejects.toBeInstanceOf(FixtureError);
       },
     );
   });
@@ -289,19 +289,19 @@ describe('FixtureMCPTransport — against the seeded cost-surprise-001 fixture',
     const catalog = await t.listCapabilities();
     const names = catalog.capabilities.map((c) => c.name);
     expect(names).toEqual([
-      'query_azure_subscriptions',
-      'cost_analysis',
-      'query_resource_graph',
-      'query_resource_metric_definition',
-      'query_resource_metric',
-      'query_activity_log',
-      'query_resource_health',
+      'amgmcp_query_azure_subscriptions',
+      'amgmcp_cost_analysis',
+      'amgmcp_query_resource_graph',
+      'amgmcp_query_resource_metric_definition',
+      'amgmcp_query_resource_metric',
+      'amgmcp_query_activity_log',
+      'amgmcp_query_resource_health',
     ]);
   });
 
   it('returns the recorded cost_analysis response for the analysis window', async () => {
     const t = new FixtureMCPTransport({ fixturePath: FIXTURE_PATH });
-    const result = await t.invoke('cost_analysis', {
+    const result = await t.invoke('amgmcp_cost_analysis', {
       subscription_id: '11111111-1111-1111-1111-111111111111',
       time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
       granularity: 'Daily',
@@ -314,7 +314,7 @@ describe('FixtureMCPTransport — against the seeded cost-surprise-001 fixture',
 
   it('returns a different recorded cost_analysis response for the baseline window', async () => {
     const t = new FixtureMCPTransport({ fixturePath: FIXTURE_PATH });
-    const result = await t.invoke('cost_analysis', {
+    const result = await t.invoke('amgmcp_cost_analysis', {
       subscription_id: '11111111-1111-1111-1111-111111111111',
       time_window: { start: '2026-04-24T00:00:00Z', end: '2026-05-01T00:00:00Z' },
       granularity: 'Daily',
@@ -326,7 +326,7 @@ describe('FixtureMCPTransport — against the seeded cost-surprise-001 fixture',
   it('throws FixtureNotFoundError for an unrecorded parameter combination', async () => {
     const t = new FixtureMCPTransport({ fixturePath: FIXTURE_PATH });
     await expect(
-      t.invoke('cost_analysis', { subscription_id: 'different', granularity: 'Hourly' }),
+      t.invoke('amgmcp_cost_analysis', { subscription_id: 'different', granularity: 'Hourly' }),
     ).rejects.toBeInstanceOf(FixtureNotFoundError);
   });
 });

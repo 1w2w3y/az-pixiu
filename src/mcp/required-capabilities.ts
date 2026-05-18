@@ -31,15 +31,15 @@ export interface RequiredCapabilityMap {
 export const REQUIRED_CAPABILITY_MAP: Partial<Record<AnalysisType, RequiredCapabilityMap>> = {
   cost_surprise: {
     required: [
-      'query_azure_subscriptions',
-      'cost_analysis',
-      'query_resource_graph',
-      'query_resource_metric_definition',
+      'amgmcp_query_azure_subscriptions',
+      'amgmcp_cost_analysis',
+      'amgmcp_query_resource_graph',
+      'amgmcp_query_resource_metric_definition',
     ],
     optional: [
-      'query_resource_metric',
-      'query_activity_log',
-      'query_resource_health',
+      'amgmcp_query_resource_metric',
+      'amgmcp_query_activity_log',
+      'amgmcp_query_resource_health',
     ],
   },
   // Phase 2+ analysis types are reserved in the enum but not yet mapped;

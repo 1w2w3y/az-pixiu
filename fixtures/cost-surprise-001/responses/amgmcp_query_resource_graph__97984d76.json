@@ -1,5 +1,5 @@
 {
-  "capability": "query_resource_graph",
+  "capability": "amgmcp_query_resource_graph",
   "parameters": {
     "subscription_ids": [
       "11111111-1111-1111-1111-111111111111"

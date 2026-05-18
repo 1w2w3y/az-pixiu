@@ -24,9 +24,9 @@
         "min_recommendations": 1,
         "expected_dq_categories": ["tagging_gap"],
         "expected_capabilities_invoked": [
-          "cost_analysis",
-          "query_resource_graph",
-          "query_activity_log"
+          "amgmcp_cost_analysis",
+          "amgmcp_query_resource_graph",
+          "amgmcp_query_activity_log"
         ]
       }
     }

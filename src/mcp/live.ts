@@ -59,7 +59,7 @@ export class LiveMCPTransport implements MCPTransport {
 
   constructor(options: LiveMCPTransportOptions) {
     this.endpoint = options.endpoint.replace(/\/$/, '');
-    this.mcpPath = options.mcpPath ?? '/mcp';
+    this.mcpPath = options.mcpPath ?? '/api/azure-mcp';
     this.credential = options.credential;
     this.clientName = options.clientName ?? 'az-pixiu';
     this.clientVersion = options.clientVersion ?? '0.1.0';

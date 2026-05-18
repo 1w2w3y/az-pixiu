@@ -41,13 +41,13 @@ class FakeMCPTransport implements MCPTransport {
 
 const phase1Catalog: CapabilityCatalog = {
   capabilities: [
-    { name: 'query_azure_subscriptions', version: '1.0.0' },
-    { name: 'cost_analysis', version: '1.0.0' },
-    { name: 'query_resource_graph', version: '1.2.0' },
-    { name: 'query_resource_metric_definition', version: '1.0.0' },
-    { name: 'query_resource_metric', version: '1.0.0' },
-    { name: 'query_activity_log', version: '1.0.0' },
-    { name: 'query_resource_health', version: '1.0.0' },
+    { name: 'amgmcp_query_azure_subscriptions', version: '1.0.0' },
+    { name: 'amgmcp_cost_analysis', version: '1.0.0' },
+    { name: 'amgmcp_query_resource_graph', version: '1.2.0' },
+    { name: 'amgmcp_query_resource_metric_definition', version: '1.0.0' },
+    { name: 'amgmcp_query_resource_metric', version: '1.0.0' },
+    { name: 'amgmcp_query_activity_log', version: '1.0.0' },
+    { name: 'amgmcp_query_resource_health', version: '1.0.0' },
   ],
 };
 
@@ -56,13 +56,13 @@ describe('MCPClient.discover', () => {
     const client = new MCPClient({ transport: new FakeMCPTransport(phase1Catalog) });
     const catalog = await client.discover();
     expect(catalog.allowed.map((c) => c.name).sort()).toEqual([
-      'cost_analysis',
-      'query_activity_log',
-      'query_azure_subscriptions',
-      'query_resource_graph',
-      'query_resource_health',
-      'query_resource_metric',
-      'query_resource_metric_definition',
+      'amgmcp_cost_analysis',
+      'amgmcp_query_activity_log',
+      'amgmcp_query_azure_subscriptions',
+      'amgmcp_query_resource_graph',
+      'amgmcp_query_resource_health',
+      'amgmcp_query_resource_metric',
+      'amgmcp_query_resource_metric_definition',
     ]);
   });
 
@@ -70,13 +70,13 @@ describe('MCPClient.discover', () => {
     const client = new MCPClient({ transport: new FakeMCPTransport(phase1Catalog) });
     const catalog = await client.discover();
     expect(catalog.capability_versions).toEqual({
-      query_azure_subscriptions: '1.0.0',
-      cost_analysis: '1.0.0',
-      query_resource_graph: '1.2.0',
-      query_resource_metric_definition: '1.0.0',
-      query_resource_metric: '1.0.0',
-      query_activity_log: '1.0.0',
-      query_resource_health: '1.0.0',
+      amgmcp_query_azure_subscriptions: '1.0.0',
+      amgmcp_cost_analysis: '1.0.0',
+      amgmcp_query_resource_graph: '1.2.0',
+      amgmcp_query_resource_metric_definition: '1.0.0',
+      amgmcp_query_resource_metric: '1.0.0',
+      amgmcp_query_activity_log: '1.0.0',
+      amgmcp_query_resource_health: '1.0.0',
     });
   });
 
@@ -104,13 +104,13 @@ describe('MCPClient.discover', () => {
     const catalog: CapabilityCatalog = {
       capabilities: [
         ...phase1Catalog.capabilities,
-        { name: 'kusto_query' }, // read-only, but Phase 2 (§15.4)
-        { name: 'pulse_check' },
+        { name: 'amgmcp_kusto_query' }, // read-only, but Phase 2 (§15.4)
+        { name: 'amgmcp_pulse_check' },
       ],
     };
     const client = new MCPClient({ transport: new FakeMCPTransport(catalog) });
     const d = await client.discover();
-    expect(d.denied.map((c) => c.name).sort()).toEqual(['kusto_query', 'pulse_check']);
+    expect(d.denied.map((c) => c.name).sort()).toEqual(['amgmcp_kusto_query', 'amgmcp_pulse_check']);
     expect(d.mutating_denied).toHaveLength(0);
   });
 
@@ -124,13 +124,13 @@ describe('MCPClient.discover', () => {
   it('skips capabilities that lack a version when building capability_versions', async () => {
     const catalog: CapabilityCatalog = {
       capabilities: [
-        { name: 'cost_analysis' }, // no version
-        { name: 'query_resource_graph', version: '1.0.0' },
+        { name: 'amgmcp_cost_analysis' }, // no version
+        { name: 'amgmcp_query_resource_graph', version: '1.0.0' },
       ],
     };
     const client = new MCPClient({ transport: new FakeMCPTransport(catalog) });
     const d = await client.discover();
-    expect(d.capability_versions).toEqual({ query_resource_graph: '1.0.0' });
+    expect(d.capability_versions).toEqual({ amgmcp_query_resource_graph: '1.0.0' });
   });
 });
 
@@ -139,14 +139,14 @@ describe('MCPClient.invoke', () => {
     const transport = new FakeMCPTransport(phase1Catalog);
     const client = new MCPClient({ transport });
     await client.discover();
-    await client.invoke('cost_analysis', { granularity: 'Daily' });
+    await client.invoke('amgmcp_cost_analysis', { granularity: 'Daily' });
     expect(transport.invokes).toHaveLength(1);
-    expect(transport.invokes[0]?.capability).toBe('cost_analysis');
+    expect(transport.invokes[0]?.capability).toBe('amgmcp_cost_analysis');
   });
 
   it('throws DiscoveryNotPerformedError when invoke is called before discover', async () => {
     const client = new MCPClient({ transport: new FakeMCPTransport(phase1Catalog) });
-    await expect(client.invoke('cost_analysis', {})).rejects.toBeInstanceOf(
+    await expect(client.invoke('amgmcp_cost_analysis', {})).rejects.toBeInstanceOf(
       DiscoveryNotPerformedError,
     );
   });
@@ -154,7 +154,7 @@ describe('MCPClient.invoke', () => {
   it('throws CapabilityNotAllowedError when capability is not in the allowlist', async () => {
     const client = new MCPClient({ transport: new FakeMCPTransport(phase1Catalog) });
     await client.discover();
-    await expect(client.invoke('kusto_query', {})).rejects.toBeInstanceOf(
+    await expect(client.invoke('amgmcp_kusto_query', {})).rejects.toBeInstanceOf(
       CapabilityNotAllowedError,
     );
   });
@@ -170,11 +170,11 @@ describe('MCPClient.invoke', () => {
   it('throws CapabilityNotAllowedError when allowed by static set but not advertised by AMG-MCP', async () => {
     // AMG-MCP advertises only 1 of the 7 — invoking another should fail
     const sparseCatalog: CapabilityCatalog = {
-      capabilities: [{ name: 'cost_analysis', version: '1.0.0' }],
+      capabilities: [{ name: 'amgmcp_cost_analysis', version: '1.0.0' }],
     };
     const client = new MCPClient({ transport: new FakeMCPTransport(sparseCatalog) });
     await client.discover();
-    await expect(client.invoke('query_resource_metric', {})).rejects.toBeInstanceOf(
+    await expect(client.invoke('amgmcp_query_resource_metric', {})).rejects.toBeInstanceOf(
       CapabilityNotAllowedError,
     );
   });
@@ -183,12 +183,12 @@ describe('MCPClient.invoke', () => {
     const client = new MCPClient({ transport: new FakeMCPTransport(phase1Catalog) });
     await client.discover();
     try {
-      await client.invoke('kusto_query', {});
+      await client.invoke('amgmcp_kusto_query', {});
       throw new Error('expected throw');
     } catch (err) {
       expect(err).toBeInstanceOf(CapabilityNotAllowedError);
       const e = err as CapabilityNotAllowedError;
-      expect(e.capability).toBe('kusto_query');
+      expect(e.capability).toBe('amgmcp_kusto_query');
       expect(e.reason).toMatch(/allowlist/);
     }
   });
@@ -210,9 +210,9 @@ describe('assertRequiredCapabilities', () => {
     expect(() => assertRequiredCapabilities(d, 'cost_surprise')).not.toThrow();
   });
 
-  it('throws when cost_analysis is missing (the central signal)', async () => {
+  it('throws when amgmcp_cost_analysis is missing (the central signal)', async () => {
     const catalog: CapabilityCatalog = {
-      capabilities: phase1Catalog.capabilities.filter((c) => c.name !== 'cost_analysis'),
+      capabilities: phase1Catalog.capabilities.filter((c) => c.name !== 'amgmcp_cost_analysis'),
     };
     const client = new MCPClient({ transport: new FakeMCPTransport(catalog) });
     const d = await client.discover();
@@ -224,7 +224,7 @@ describe('assertRequiredCapabilities', () => {
   it('passes when only optional capabilities are missing (degradable per §11)', async () => {
     const catalog: CapabilityCatalog = {
       capabilities: phase1Catalog.capabilities.filter(
-        (c) => !['query_resource_health', 'query_activity_log'].includes(c.name),
+        (c) => !['amgmcp_query_resource_health', 'amgmcp_query_activity_log'].includes(c.name),
       ),
     };
     const client = new MCPClient({ transport: new FakeMCPTransport(catalog) });
@@ -235,7 +235,7 @@ describe('assertRequiredCapabilities', () => {
   it('lists all missing required capabilities in the error', async () => {
     const catalog: CapabilityCatalog = {
       capabilities: phase1Catalog.capabilities.filter(
-        (c) => !['cost_analysis', 'query_resource_graph'].includes(c.name),
+        (c) => !['amgmcp_cost_analysis', 'amgmcp_query_resource_graph'].includes(c.name),
       ),
     };
     const client = new MCPClient({ transport: new FakeMCPTransport(catalog) });
@@ -246,8 +246,8 @@ describe('assertRequiredCapabilities', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(RequiredCapabilityMissingError);
       const e = err as RequiredCapabilityMissingError;
-      expect(e.missing).toContain('cost_analysis');
-      expect(e.missing).toContain('query_resource_graph');
+      expect(e.missing).toContain('amgmcp_cost_analysis');
+      expect(e.missing).toContain('amgmcp_query_resource_graph');
       expect(e.analysisType).toBe('cost_surprise');
     }
   });
@@ -273,13 +273,13 @@ describe('MCPClient + seeded fixture integration', () => {
     expect(() => assertRequiredCapabilities(d, 'cost_surprise')).not.toThrow();
   });
 
-  it('invoke against the seeded fixture round-trips a cost_analysis response', async () => {
+  it('invoke against the seeded fixture round-trips a amgmcp_cost_analysis response', async () => {
     const { FixtureMCPTransport } = await import('../../src/mcp/fixture.js');
     const client = new MCPClient({
       transport: new FixtureMCPTransport({ fixturePath: 'fixtures/cost-surprise-001' }),
     });
     await client.discover();
-    const result = await client.invoke('cost_analysis', {
+    const result = await client.invoke('amgmcp_cost_analysis', {
       subscription_id: '11111111-1111-1111-1111-111111111111',
       time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
       granularity: 'Daily',

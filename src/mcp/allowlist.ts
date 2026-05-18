@@ -12,14 +12,20 @@
  *   2. Update the playbook in src/playbooks/ that consumes it.
  */
 
+/**
+ * AMG-MCP advertises its tools with an `amgmcp_` prefix on the wire
+ * (see learn.microsoft.com/azure/managed-grafana/grafana-mcp-server).
+ * The design doc uses the unprefixed names as the conceptual handle for
+ * each capability; the values below are the real wire names.
+ */
 export const PHASE_1_READ_ONLY_ALLOWLIST: ReadonlySet<string> = new Set([
-  'query_azure_subscriptions',
-  'cost_analysis',
-  'query_resource_graph',
-  'query_resource_metric_definition',
-  'query_resource_metric',
-  'query_activity_log',
-  'query_resource_health',
+  'amgmcp_query_azure_subscriptions',
+  'amgmcp_cost_analysis',
+  'amgmcp_query_resource_graph',
+  'amgmcp_query_resource_metric_definition',
+  'amgmcp_query_resource_metric',
+  'amgmcp_query_activity_log',
+  'amgmcp_query_resource_health',
 ]);
 
 /**
