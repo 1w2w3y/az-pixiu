@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+// ---------- Config (operator-local config.json, design §15.8) ----------
+
 export const FoundryConfigSchema = z
   .object({
     endpoint: z.string().url(),

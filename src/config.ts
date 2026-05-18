@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { ConfigSchema } from './schemas.js';
-import type { Config } from './schemas.js';
+import { ConfigSchema } from './schemas/index.js';
+import type { Config } from './schemas/index.js';
 
 export class ConfigError extends Error {
   public override readonly cause?: unknown;

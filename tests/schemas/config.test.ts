@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { ConfigSchema, FoundryConfigSchema, AmgConfigSchema } from '../src/schemas.js';
+import {
+  ConfigSchema,
+  FoundryConfigSchema,
+  AmgConfigSchema,
+} from '../../src/schemas/index.js';
 
 const validConfig = {
   foundry: {
@@ -13,8 +17,7 @@ const validConfig = {
 
 describe('ConfigSchema', () => {
   it('accepts a well-formed config', () => {
-    const result = ConfigSchema.safeParse(validConfig);
-    expect(result.success).toBe(true);
+    expect(ConfigSchema.safeParse(validConfig).success).toBe(true);
   });
 
   it('produces a strongly-typed value when parsing succeeds', () => {
@@ -73,21 +76,18 @@ describe('ConfigSchema', () => {
 
   it('rejects when amg section is omitted', () => {
     const { amg: _amg, ...withoutAmg } = validConfig;
-    const result = ConfigSchema.safeParse(withoutAmg);
-    expect(result.success).toBe(false);
+    expect(ConfigSchema.safeParse(withoutAmg).success).toBe(false);
   });
 });
 
-describe('FoundryConfigSchema', () => {
+describe('FoundryConfigSchema (standalone)', () => {
   it('parses standalone foundry config', () => {
-    const result = FoundryConfigSchema.safeParse(validConfig.foundry);
-    expect(result.success).toBe(true);
+    expect(FoundryConfigSchema.safeParse(validConfig.foundry).success).toBe(true);
   });
 });
 
-describe('AmgConfigSchema', () => {
+describe('AmgConfigSchema (standalone)', () => {
   it('parses standalone amg config', () => {
-    const result = AmgConfigSchema.safeParse(validConfig.amg);
-    expect(result.success).toBe(true);
+    expect(AmgConfigSchema.safeParse(validConfig.amg).success).toBe(true);
   });
 });
