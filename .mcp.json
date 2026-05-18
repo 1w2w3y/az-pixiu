@@ -1,0 +1,11 @@
+{
+    "mcpServers": {
+        "amg": {
+            "type": "http",
+            "url": "${AMG_MCP_URL}",
+            "headers": {
+                "Authorization": "Bearer ${AMG_MCP_TOKEN}"
+            }
+        }
+    }
+}
