@@ -1,3 +1,21 @@
 # Operator-local config (per design doc §15.8). Use config.sample.json
 # as the checked-in template; this file holds the operator's real endpoints.
 config.json
+
+# Node toolchain
+node_modules/
+dist/
+
+# Per-run output (per design doc §15.6)
+runs/
+
+# Local environment overrides
+.env
+.env.local
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+

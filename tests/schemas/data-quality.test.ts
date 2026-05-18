@@ -1,0 +1,62 @@
+import { describe, it, expect } from 'vitest';
+import { DataQualityFindingSchema } from '../../src/schemas/index.js';
+
+const validFinding = {
+  dq_id: 'dq-1',
+  category: 'missing_telemetry',
+  affected_capability: 'query_resource_metric',
+  affected_scope_subset: { resource_group_names: ['rg-db-prod'] },
+  consequence_for_analysis:
+    'utilization signal is unavailable for 2 PostgreSQL servers; cost-only recommendations are bounded',
+  impact_on_recommendations: ['rec-1'],
+  actionable_hint: 'grant Reader on rg-db-prod to fill the telemetry gap',
+};
+
+describe('DataQualityFindingSchema', () => {
+  it('accepts a well-formed finding', () => {
+    expect(DataQualityFindingSchema.safeParse(validFinding).success).toBe(true);
+  });
+
+  it('accepts a finding without an actionable_hint or affected_capability', () => {
+    const { actionable_hint: _h, affected_capability: _c, ...minimal } = validFinding;
+    expect(DataQualityFindingSchema.safeParse(minimal).success).toBe(true);
+  });
+
+  it('rejects an unknown category', () => {
+    expect(
+      DataQualityFindingSchema.safeParse({ ...validFinding, category: 'cosmic_ray' }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an empty consequence_for_analysis', () => {
+    expect(
+      DataQualityFindingSchema.safeParse({ ...validFinding, consequence_for_analysis: '' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('accepts all 12 design-specified categories', () => {
+    for (const category of [
+      'auth',
+      'authz_gap',
+      'unsupported_capability',
+      'invalid_scope',
+      'timeout',
+      'rate_limit',
+      'schema_mismatch',
+      'empty_result',
+      'stale_data',
+      'partial_coverage',
+      'tagging_gap',
+      'missing_telemetry',
+    ]) {
+      expect(DataQualityFindingSchema.safeParse({ ...validFinding, category }).success).toBe(true);
+    }
+  });
+
+  it('rejects unknown keys (strict)', () => {
+    expect(
+      DataQualityFindingSchema.safeParse({ ...validFinding, severity: 'medium' }).success,
+    ).toBe(false);
+  });
+});
