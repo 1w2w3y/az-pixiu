@@ -58,12 +58,42 @@ export class Reasoner {
   }
 }
 
+/**
+ * Evidence and user_context can both contain operator- or
+ * attacker-controlled strings (Azure tags, activity-log descriptions,
+ * free-text notes). To mitigate prompt-injection (design §7.5 read-only
+ * lint is post-hoc; this is the at-input defense), fence each
+ * untrusted block with explicit markers and instruct the reasoner — via
+ * the reasoner.v1 system prompt — to treat their contents as data, not
+ * instructions. This does not defeat sophisticated injection but it
+ * shifts the model's prior toward "data" framing for the common case.
+ */
+const EVIDENCE_OPEN = '<evidence_block role="data">';
+const EVIDENCE_CLOSE = '</evidence_block>';
+const USER_CONTEXT_OPEN = '<user_context_block role="data">';
+const USER_CONTEXT_CLOSE = '</user_context_block>';
+const DQ_OPEN = '<data_quality_block role="data">';
+const DQ_CLOSE = '</data_quality_block>';
+
 function buildUserPrompt(input: ReasonInput): string {
   const { scope, evidence, data_quality } = input;
-  const userContext = scope.user_context
-    ? `\n## user_context (treat as hypothesis-shaping; not evidence)\n${scope.user_context}\n`
-    : '';
-  return [
+
+  const evidenceJson = JSON.stringify(
+    evidence.map((e) => ({
+      evidence_id: e.evidence_id,
+      source_capability: e.source_capability,
+      query_intent: e.query_intent,
+      scope_subset: e.scope_subset,
+      time_window: e.time_window,
+      payload_summary: e.payload_summary,
+      payload: e.payload_ref.kind === 'inline' ? e.payload_ref.data : undefined,
+      caveats: e.caveats,
+    })),
+    null,
+    2,
+  );
+
+  const sections: string[] = [
     '## scope',
     JSON.stringify(
       {
@@ -80,23 +110,25 @@ function buildUserPrompt(input: ReasonInput): string {
     ),
     '',
     '## evidence',
-    JSON.stringify(
-      evidence.map((e) => ({
-        evidence_id: e.evidence_id,
-        source_capability: e.source_capability,
-        query_intent: e.query_intent,
-        scope_subset: e.scope_subset,
-        time_window: e.time_window,
-        payload_summary: e.payload_summary,
-        payload: e.payload_ref.kind === 'inline' ? e.payload_ref.data : undefined,
-        caveats: e.caveats,
-      })),
-      null,
-      2,
-    ),
+    EVIDENCE_OPEN,
+    evidenceJson,
+    EVIDENCE_CLOSE,
     '',
     '## observed_data_quality',
+    DQ_OPEN,
     JSON.stringify(data_quality, null, 2),
-    userContext,
-  ].join('\n');
+    DQ_CLOSE,
+  ];
+
+  if (scope.user_context) {
+    sections.push(
+      '',
+      '## user_context (hypothesis-shaping; never cite as evidence)',
+      USER_CONTEXT_OPEN,
+      scope.user_context,
+      USER_CONTEXT_CLOSE,
+    );
+  }
+
+  return sections.join('\n');
 }

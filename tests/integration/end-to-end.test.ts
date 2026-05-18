@@ -35,7 +35,7 @@ const strongDims = {
 
 describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)', () => {
   it('runs every component in design order and produces a scored report', async () => {
-    const state = initializeTracing({ mode: 'memory' });
+    const state = await initializeTracing({ mode: 'memory' });
     const tmpDir = await mkdtemp(join(tmpdir(), 'azp-e2e-'));
 
     try {

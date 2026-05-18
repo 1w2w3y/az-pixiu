@@ -5,23 +5,25 @@ import {
 } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { trace, type Tracer } from '@opentelemetry/api';
+import { LangfuseSpanProcessor } from '@langfuse/otel';
 
 /**
  * Observability setup (design §4.9). Initializes a single OTEL tracer
  * provider for the run. Three modes:
  *
- *   - 'langfuse' — register LangfuseSpanProcessor (requires
- *     LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASEURL env
- *     vars or explicit options). LLM spans auto-emitted via
- *     observeOpenAI; manual §14 spans emitted via startActiveSpan.
- *   - 'memory' — InMemorySpanExporter, useful for tests and the local
+ *   - 'langfuse' — registers a LangfuseSpanProcessor. The processor's
+ *     constructor validates LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY /
+ *     LANGFUSE_BASEURL at call time, so callers should only select this
+ *     mode when those are set (or supply explicit options).
+ *   - 'memory' — InMemorySpanExporter, used by tests and by the local
  *     trace-artifact mode when Langfuse is disabled.
  *   - 'noop' — no exporter; spans created but never shipped. Default
  *     when no configuration is supplied.
  *
- * The function is idempotent within a process — subsequent calls return
- * the same tracer provider. Use shutdownTracing() between runs in tests
- * to reset.
+ * Idempotent within a process: subsequent calls return the existing
+ * state when the requested mode matches. A mode switch fully awaits the
+ * previous provider's shutdown before installing the new one — earlier
+ * fire-and-forget behavior could drop in-flight spans.
  */
 
 const TRACER_NAME = 'az-pixiu';
@@ -35,6 +37,11 @@ export interface ObservabilityConfig {
 
 export interface ObservabilityState {
   mode: ObservabilityMode;
+  /**
+   * Tracer obtained directly from the run-specific provider. Used as
+   * the fast path in currentTracer() — bypasses the global registry,
+   * which can return a no-op tracer when vitest workers share state.
+   */
   tracer: Tracer;
   inMemoryExporter?: InMemorySpanExporter;
   shutdown: () => Promise<void>;
@@ -42,11 +49,14 @@ export interface ObservabilityState {
 
 let activeState: ObservabilityState | undefined;
 
-export function initializeTracing(config: ObservabilityConfig = { mode: 'noop' }): ObservabilityState {
+export async function initializeTracing(
+  config: ObservabilityConfig = { mode: 'noop' },
+): Promise<ObservabilityState> {
   if (activeState && activeState.mode === config.mode) return activeState;
   if (activeState) {
-    // Different mode requested — shut the previous one down.
-    void activeState.shutdown();
+    // Different mode requested — wait for the previous one to flush
+    // before installing the new provider, so spans don't get dropped.
+    await activeState.shutdown();
   }
 
   let processor: SpanProcessor | undefined;
@@ -59,10 +69,6 @@ export function initializeTracing(config: ObservabilityConfig = { mode: 'noop' }
       break;
     }
     case 'langfuse': {
-      // Lazy-require so test runs without Langfuse env don't pay the
-      // initialization cost or risk env-validation throws.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { LangfuseSpanProcessor } = require('@langfuse/otel') as typeof import('@langfuse/otel');
       processor = new LangfuseSpanProcessor();
       break;
     }
@@ -80,11 +86,9 @@ export function initializeTracing(config: ObservabilityConfig = { mode: 'noop' }
   // other code path nuked it (vitest workers tend to share globals).
   trace.setGlobalTracerProvider(provider);
 
-  const tracer = provider.getTracer(TRACER_NAME, TRACER_VERSION);
-
   const state: ObservabilityState = {
     mode: config.mode,
-    tracer,
+    tracer: provider.getTracer(TRACER_NAME, TRACER_VERSION),
     ...(inMemoryExporter ? { inMemoryExporter } : {}),
     shutdown: async () => {
       await provider.forceFlush();

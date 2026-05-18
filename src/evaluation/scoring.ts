@@ -1,6 +1,7 @@
 import type { ReasoningOutput } from '../schemas/index.js';
 import { ReasoningOutputSchema } from '../schemas/index.js';
 import { deriveConfidenceLevel } from '../confidence.js';
+import { detectImperativeRemediation } from '../lint/imperative.js';
 
 /**
  * Phase 1 minimal scoring rubric (design §22 step 12, §17 verification).
@@ -86,19 +87,14 @@ export function scoreConfidenceConsistency(output: ReasoningOutput): ScoringResu
     : { rubric: 'confidence_consistency', passed: false, details: failures.join('; ') };
 }
 
-const IMPERATIVE = /\b(delete|drop|terminate|kill|destroy|scale (?:down|up)|resize|restart|stop|reboot)\b/i;
-const SOFTENING = /\b(consider|review|investigate|examine|evaluate|assess|compare|whether)\b/i;
-
 export function scoreReadOnlyAdherence(output: ReasoningOutput): ScoringResult {
   const failures: string[] = [];
   for (const rec of output.recommendations) {
     const texts = [rec.statement, ...rec.suggested_human_actions, ...rec.validation_steps];
     for (const text of texts) {
-      const match = text.match(IMPERATIVE);
-      if (!match) continue;
-      // Allow when softening framing is present in the same sentence
-      if (SOFTENING.test(text)) continue;
-      failures.push(`recommendation ${rec.recommendation_id} contains imperative phrase: "${match[0]}"`);
+      const result = detectImperativeRemediation(text);
+      if (!result.matched) continue;
+      failures.push(`recommendation ${rec.recommendation_id} contains imperative phrase: "${result.phrase}"`);
       break;
     }
   }

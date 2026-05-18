@@ -7,6 +7,7 @@ import type {
   EvidenceRecord,
 } from '../schemas/index.js';
 import { deriveConfidenceLevel } from '../confidence.js';
+import { detectImperativeRemediation } from '../lint/imperative.js';
 
 /**
  * Deterministic post-LLM enforcement (design §7.5). Runs after the
@@ -50,15 +51,6 @@ export interface PostProcessResult {
 export interface PostProcessContext {
   evidence: EvidenceRecord[];
 }
-
-const IMPERATIVE_PATTERNS: readonly RegExp[] = [
-  /\b(delete|drop|terminate|kill|destroy)\b/i,
-  /\b(scale (?:down|up)|resize)\s+\w/i,
-  /\b(restart|stop|reboot)\b/i,
-  /\b(run|execute|invoke|apply)\s+(?:kubectl|az|terraform|the\s+command)/i,
-];
-
-const SOFTENING_TERMS = ['consider', 'review', 'investigate', 'examine', 'evaluate', 'assess', 'compare'];
 
 export function postProcessReasoning(
   output: ReasoningOutput,
@@ -260,16 +252,5 @@ function round(n: number): number {
 }
 
 function hasImperativeRemediation(text: string): boolean {
-  // Pattern match for imperative-mode remediation verbs, but skip if the
-  // surrounding text uses softening framing ("consider...", "investigate
-  // whether...", "review the").
-  for (const pattern of IMPERATIVE_PATTERNS) {
-    const match = text.match(pattern);
-    if (!match) continue;
-    const idx = match.index ?? 0;
-    const before = text.slice(Math.max(0, idx - 40), idx).toLowerCase();
-    if (SOFTENING_TERMS.some((term) => before.includes(term))) continue;
-    return true;
-  }
-  return false;
+  return detectImperativeRemediation(text).matched;
 }

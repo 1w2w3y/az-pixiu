@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { initializeTracing, shutdownTracing } from '../../src/observability/setup.js';
 import { withSpan, emitEvent, SpanNames, ATTR } from '../../src/observability/spans.js';
 
-let state: ReturnType<typeof initializeTracing>;
+let state: Awaited<ReturnType<typeof initializeTracing>>;
 
-beforeEach(() => {
-  state = initializeTracing({ mode: 'memory' });
+beforeEach(async () => {
+  state = await initializeTracing({ mode: 'memory' });
 });
 
 afterEach(async () => {

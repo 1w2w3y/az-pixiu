@@ -13,17 +13,17 @@ import {
  * Live MCP transport for AMG-MCP (design §4.3, §15.4, §15.9).
  *
  * Status: written, **not yet smoke-tested against a real AMG-MCP
- * instance**. Lands as the sequencing-step-11 deliverable. The runtime
- * contract follows the MCP TS SDK: a Client wrapping a
- * StreamableHTTPClientTransport, with the Entra ID bearer token attached
- * as an Authorization header on every request.
+ * instance**. Lands as the sequencing-step-11 deliverable.
  *
  * Auth handshake:
  *   - Az-Pixiu mints a bearer token via the supplied TokenCredential
- *     with the Azure Managed Grafana resource scope.
- *   - The token is attached to every outbound HTTP request via the
- *     transport's requestInit headers (refresh-aware via the credential
- *     cache).
+ *     with the Azure Managed Grafana resource scope **on every request**
+ *     (via a custom fetch). The @azure/identity credential cache handles
+ *     short-circuiting repeated mints within token lifetime.
+ *   - Building the header once at connect time (as an earlier draft did)
+ *     would freeze the token for the lifetime of the transport — long
+ *     runs would 401 after ~1h when the token expired. Per-request
+ *     acquisition makes the run idle-tolerant.
  *   - Downstream Azure data-plane auth (Cost Management, ARG, Azure
  *     Monitor) is handled inside the AMG-MCP server.
  *
@@ -43,6 +43,8 @@ export interface LiveMCPTransportOptions {
   /** Client identification reported to the server. */
   clientName?: string;
   clientVersion?: string;
+  /** Optional fetch override, primarily for tests. Defaults to global fetch. */
+  fetchImpl?: typeof fetch;
 }
 
 export class LiveMCPTransport implements MCPTransport {
@@ -51,6 +53,7 @@ export class LiveMCPTransport implements MCPTransport {
   private readonly credential: TokenCredential;
   private readonly clientName: string;
   private readonly clientVersion: string;
+  private readonly fetchImpl: typeof fetch;
   private client: Client | undefined;
   private transport: StreamableHTTPClientTransport | undefined;
 
@@ -60,6 +63,7 @@ export class LiveMCPTransport implements MCPTransport {
     this.credential = options.credential;
     this.clientName = options.clientName ?? 'az-pixiu';
     this.clientVersion = options.clientVersion ?? '0.1.0';
+    this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
   private async ensureConnected(): Promise<Client> {
@@ -67,9 +71,7 @@ export class LiveMCPTransport implements MCPTransport {
 
     const url = new URL(this.mcpPath, this.endpoint + '/');
     const transport = new StreamableHTTPClientTransport(url, {
-      requestInit: {
-        headers: await this.authHeaders(),
-      },
+      fetch: this.buildAuthenticatedFetch(),
     });
 
     const client = new Client({
@@ -83,14 +85,23 @@ export class LiveMCPTransport implements MCPTransport {
     return client;
   }
 
-  private async authHeaders(): Promise<Record<string, string>> {
-    const token = await this.credential.getToken(AMG_RESOURCE_SCOPE);
-    if (!token) {
-      throw new Error(
-        `Could not acquire AMG-MCP token from credential. Run \`az login\` if using AzureCliCredential.`,
-      );
-    }
-    return { Authorization: `Bearer ${token.token}` };
+  /**
+   * Build a fetch that mints a fresh Entra ID token per request. The
+   * @azure/identity credential caches tokens until ~5 minutes before
+   * expiry, so this is cheap in steady state but never holds a stale token.
+   */
+  private buildAuthenticatedFetch(): (url: string | URL, init?: RequestInit) => Promise<Response> {
+    return async (url, init) => {
+      const token = await this.credential.getToken(AMG_RESOURCE_SCOPE);
+      if (!token) {
+        throw new Error(
+          `Could not acquire AMG-MCP token from credential. Run \`az login\` if using AzureCliCredential.`,
+        );
+      }
+      const headers = new Headers(init?.headers);
+      headers.set('Authorization', `Bearer ${token.token}`);
+      return this.fetchImpl(url, { ...init, headers });
+    };
   }
 
   async listCapabilities(): Promise<CapabilityCatalog> {
