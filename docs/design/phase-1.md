@@ -309,7 +309,7 @@ Each phase is either deterministic code or an LLM call; the boundary is intentio
 | 1 | Scope intake | det. | CLI args + env + config | `Scope` |
 | 2 | Scope confirmation | det. | `Scope` | printed effective-scope line + trace event ([core agent PRD](../prd/core-agent.md) FR-2) |
 | 3 | Capability discovery | det. + MCP | `RunConfiguration` | `CapabilityCatalog`; **fail fast if required capabilities missing** |
-| 4 | Evidence planning | LLM #1 | `Scope` + relevant subset of `CapabilityCatalog` (no `user_context`) | `EvidencePlan` (structured output, Pydantic-validated against `CapabilityCatalog`) |
+| 4 | Evidence planning | LLM #1 | `Scope` + relevant subset of `CapabilityCatalog` (no `user_context`) | `EvidencePlan` (structured output, Zod-validated against `CapabilityCatalog`) |
 | 5 | Evidence retrieval | det. | validated `EvidencePlan` + transport | `RawEvidence[]` + classified failures |
 | 6 | Evidence normalization | det. | `RawEvidence[]` | `EvidenceRecord[]` with caveats |
 | 7 | Reasoning | LLM #2 | `Scope`, `EvidenceRecord[]`, `user_context` (labeled), DQ observations | facts/hypotheses/recommendations/DQ (structured) |
@@ -365,7 +365,7 @@ Options:
 
 - **A.** Freeform text + parser. Brittle. Rejected.
 - **B.** JSON mode + manual schema check. Workable but lets shape drift.
-- **C. (recommended)** Provider strict-JSON-Schema mode (`response_format: json_schema` with `strict: true` on Foundry-hosted GPT-5 family) + Pydantic validation. Belt-and-braces. Microsoft's documented Foundry pattern is Pydantic-native, so the validation layer is the same shape on either side of the boundary. Anthropic tool-use schema is the equivalent if the provider is swapped.
+- **C. (recommended)** Provider strict-JSON-Schema mode (`response_format: json_schema` with `strict: true` on Foundry-hosted GPT-5 family) + Zod validation. Belt-and-braces. The OpenAI SDK's `zodResponseFormat` helper accepts a Zod schema directly and emits the JSON Schema Foundry expects; the same Zod schema then validates the response client-side and produces a compile-time-typed value via `z.infer<>`. Anthropic tool-use schema is the equivalent if the provider is swapped.
 - **D.** Function calling as schema carrier. Equivalent to C in practice.
 
 **Phase 1 default: C.** Validation failure triggers one repair round; a second failure is captured as a first-class finding.
@@ -587,20 +587,22 @@ For each, 2–3 realistic options with trade-offs and a recommended Phase 1 defa
 
 ### 15.1 Language
 
+Neither AMG-MCP nor Microsoft Foundry constrains client language — both are language-agnostic over HTTP. The choice rests on client-side ecosystem fit against this design's specific shape.
+
 | Option | Trade-offs |
 |---|---|
-| **Python** ✅ | Neither AMG-MCP nor Microsoft Foundry constrains client language — both are language-agnostic over HTTP. Choice rests on client-side ecosystem: mature MCP Python SDK; most feature-complete Langfuse SDK for the datasets/evals/experiments that are load-bearing per [Langfuse observability PRD](../prd/langfuse-observability.md); Microsoft's documented Foundry pattern for strict-JSON-Schema outputs is Pydantic-native and aligns directly with the §8.3 validation layer; broadest agent-framework ecosystem. `uv` resolves historical packaging friction. |
-| TypeScript / Node | Strong typing; first-class MCP SDK. Trade-off: Langfuse TS SDK slightly behind on evaluations/datasets; less data-wrangling ecosystem. |
+| **TypeScript / Node** ✅ | Compile-time typing across §5's many data-shape contracts and the strictly-typed LLM IO boundaries in §7.4 / §7.5; Zod provides the runtime validation layer and the OpenAI SDK accepts Zod schemas directly for strict-JSON-Schema responses (`zodResponseFormat`), with `z.infer<>` yielding the compile-time type from the same source of truth; first-class MCP and OpenAI SDKs; `@azure/identity` handles Entra ID identically to Python's `azure-identity`. Trade-off: Langfuse TS SDK lags Python on day-to-day tracing ergonomics (`@observe`-style decorators, broader auto-instrumentation wrappers) — but for the evaluation surface that matters in Phase 2, most of Langfuse's value (LLM-as-judge templates, online evaluators, human annotation, score aggregation) lives server-side and is language-neutral. The tracing-ergonomics gap closes with one well-written tracing helper. |
+| Python | Most feature-complete Langfuse SDK; Microsoft's documented Foundry pattern for strict-JSON-Schema outputs is Pydantic-native; broadest agent-framework ecosystem; `@observe` decorator gives nicer day-to-day tracing ergonomics. Trade-off: no compile-time typing on the structured-output and component-boundary contracts that dominate this design; relies entirely on runtime validation for safety. |
 | .NET | Native Azure tooling fit. Trade-off: smallest MCP/Langfuse ecosystem in early 2026. |
 
-**Phase 1 default: Python.** Component boundaries in §4 are functional; the language choice affects implementation only.
+**Phase 1 default: TypeScript.** The design has 10+ data-shape contracts (§5), two strictly-typed LLM IO boundaries (§7.4 planner output, §7.5 reasoner output), and many cross-component handoffs — compile-time typing pays for itself across that surface. The Langfuse SDK gap is real but concentrated in tracing ergonomics, not evaluation capability; closing it is straightforward glue work. Pydantic's asymmetric advantage on Foundry strict-JSON-Schema shrinks once Zod is the validation layer, since the OpenAI SDK accepts Zod schemas natively.
 
 ### 15.2 Agent framework / orchestration
 
 | Option | Trade-offs |
 |---|---|
 | **Raw model SDK + manual orchestration** ✅ | Smallest dependency surface; exact control over spans, retries, schema. The two-LLM-call loop in §7 is small enough to write directly. Maximally reversible. |
-| Pydantic AI | Pythonic, type-safe, lightweight; built-in MCP client; OTEL-native (Langfuse compatible). Trade-off: younger; opinionated around Pydantic. |
+| Mastra / OpenAI Agents SDK (TS) | TypeScript-native agent frameworks with tool-use, state, and OTEL hooks. Trade-off: opinionated abstractions for a two-LLM-call loop that's small enough to write directly; couples component shape to a framework before the loop has proved itself. |
 | LangGraph | State machine; community examples. Trade-off: opinionated abstractions; risks coupling architecture to LangGraph idioms before Phase 1 has proved the loop shape. |
 | Foundry Agents Service | Hosted agent runtime in the same Azure tenant; capability discovery, state, and tool wiring are server-side. Trade-off: orchestration moves out of the agent, which is incompatible with the §7.5 deterministic enforcement and the fixture-replay seam (§13); also not local-first in the strict sense. |
 
@@ -610,7 +612,7 @@ For each, 2–3 realistic options with trade-offs and a recommended Phase 1 defa
 
 | Option | Trade-offs |
 |---|---|
-| **Microsoft Foundry — OpenAI gpt-5.4** ✅ | Same Azure tenant as AMG-MCP and the source data; one Entra ID identity covers both boundaries; first-class strict JSON Schema (`response_format: json_schema`, `strict: true`) for the §8.3 structured-output pipeline, with Pydantic-native documented patterns; operator already has access through their Azure environment. Trade-off: data-residency depends on the deployment SKU — `GlobalStandard` may process anywhere, `DataZoneStandard` stays in US or EU, regional pins to one location ([Foundry deployment types](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/deployment-types)). The chosen SKU must be surfaced through `config` (§4.1) and recorded in `RunMetadata.model_deployment_sku` (§5.7) before each run. |
+| **Microsoft Foundry — OpenAI gpt-5.4** ✅ | Same Azure tenant as AMG-MCP and the source data; one Entra ID identity covers both boundaries; first-class strict JSON Schema (`response_format: json_schema`, `strict: true`) for the §8.3 structured-output pipeline, accepting Zod schemas directly through the OpenAI SDK; operator already has access through their Azure environment. Trade-off: data-residency depends on the deployment SKU — `GlobalStandard` may process anywhere, `DataZoneStandard` stays in US or EU, regional pins to one location ([Foundry deployment types](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/deployment-types)). The chosen SKU must be surfaced through `config` (§4.1) and recorded in `RunMetadata.model_deployment_sku` (§5.7) before each run. |
 | Claude via Anthropic API | Strong tool-use and calibration-on-uncertainty behavior; established Langfuse integration. Trade-off: genuinely external — sensitive Azure telemetry summaries cross a tenant boundary; operator opt-in required and surfaced in CLI before each run. |
 | Local model (Ollama / llama.cpp) | Strict-local — no model call leaves the workstation. Trade-off: Phase 1 quality on strict JSON Schema adherence and FinOps-domain reasoning is meaningfully below frontier; risks missing the "useful enough to act on" bar ([goals](../goals.md)). |
 
@@ -657,11 +659,11 @@ AMG-MCP is a remote MCP server hosted by Azure Managed Grafana. Az-Pixiu connect
 
 | Option | Trade-offs |
 |---|---|
-| **Repo-clone-and-run + `uv`** ✅ | Phase 1 audience is the project authors and AI-observability-learner persona ([use cases](../use-cases.md)) — both will clone the repo. CLI entry point ships as a console script. |
-| Python package (PyPI) | Standard distribution. Trade-off: distribution-readiness adds work without Phase 1 audience demand. |
+| **Repo-clone-and-run + `pnpm`** ✅ | Phase 1 audience is the project authors and AI-observability-learner persona ([use cases](../use-cases.md)) — both will clone the repo. CLI entry point ships as a `package.json` `bin`. |
+| npm package (npm registry) | Standard distribution. Trade-off: distribution-readiness adds work without Phase 1 audience demand. |
 | Container image | Reproducibility; isolates dependencies. Trade-off: heavier; adds packaging overhead before the Phase 1 audience needs it. Phase 3+. |
 
-**Phase 1 default: repo-clone-and-run with `uv`.**
+**Phase 1 default: repo-clone-and-run with `pnpm`.**
 
 ### 15.8 Configuration
 
@@ -696,12 +698,12 @@ AMG-MCP is a remote MCP server hosted by Azure Managed Grafana. Az-Pixiu connect
 
 Defensible build order; each step independently testable. Stages 1–6 require no live Azure dependency, honoring local-first / observable-by-construction from day one.
 
-1. Pydantic models for `Scope`, `EvidencePlan`, `EvidenceRecord`, `ReasoningOutput`, `DataQualityFinding`, `RunMetadata`. No logic.
+1. Zod schemas for `Scope`, `EvidencePlan`, `EvidenceRecord`, `ReasoningOutput`, `DataQualityFinding`, `RunMetadata`, with TypeScript types derived via `z.infer<>`. No logic.
 2. `MCPTransport` interface + `FixtureMCPTransport`. Hand-author 1–2 fixtures from real AMG-MCP responses (sanitized).
 3. Capability discovery + the static required-capability map for `cost_surprise`. `mcp_client` skeleton.
 4. Deterministic executor (`evidence`) against fixtures; full failure classification (`failure_taxonomy`).
 5. Evidence normalizer with caveats.
-6. Reasoner prompt v1 + structured-output call + Pydantic validation + citation enforcement; runs end-to-end against normalized fixture evidence with a **hardcoded plan** (isolates reasoner quality from planner quality).
+6. Reasoner prompt v1 + structured-output call + Zod validation + citation enforcement; runs end-to-end against normalized fixture evidence with a **hardcoded plan** (isolates reasoner quality from planner quality).
 7. Planner prompt v1; replace the hardcoded plan with planner output; planner-output validation against capability catalog; one repair pass.
 8. Confidence derivation + DQ post-processing + output linter for read-only enforcement.
 9. Jinja markdown templating; `run.json` sidecar; trace_id in report footer.
@@ -750,9 +752,10 @@ There is no source code yet. Implementation begins from these documentation anch
 
 New files Phase 1 will create (proposed; subject to language/packaging choice in §15.1, §15.7):
 
-- `src/az_pixiu/config.py`, `scope.py`, `mcp_client.py`, `failure_taxonomy.py`, `fixtures.py`, `evidence.py`, `reasoning.py`, `report.py`, `observability.py`, `cli.py`
+- `src/config.ts`, `src/scope.ts`, `src/mcp-client.ts`, `src/failure-taxonomy.ts`, `src/fixtures.ts`, `src/evidence.ts`, `src/reasoning.ts`, `src/report.ts`, `src/observability.ts`, `src/cli.ts`
+- `src/schemas.ts` (Zod schemas for §5 data shapes, with `z.infer<>` type exports)
 - `prompts/planner.v1.md`, `prompts/reasoner.v1.md`
-- `playbooks/cost_surprise.py` (the capability-to-EvidenceRequest mapping)
+- `playbooks/cost-surprise.ts` (the capability-to-EvidenceRequest mapping)
 - `fixtures/` (sanitized AMG-MCP responses, one folder per fixture id)
 - `runs/` (per-run output directory; gitignored)
-- `pyproject.toml`, `az-pixiu.toml` (default operator config), `README.md` updates
+- `package.json`, `tsconfig.json`, `pnpm-lock.yaml`, `az-pixiu.toml` (default operator config), `README.md` updates
