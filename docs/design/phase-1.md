@@ -18,7 +18,7 @@ Phase 2+ (Langfuse depth, broader analyses, multi-agent reuse) is explicitly **o
 
 From [architecture principles](../architecture-principles.md), [goals](../goals.md), and the PRDs. The design honors each one:
 
-- **Local-first.** No hosted Az-Pixiu service. Sensitive cloud telemetry stays in the operator's environment. Any external dependency (Anthropic API, Langfuse Cloud) is operator-opt-in.
+- **Local-first.** No hosted Az-Pixiu service. The agent runs on the operator's workstation. Sensitive cloud telemetry stays in the operator's environment, including when it transits AMG-MCP and Microsoft Foundry — both are Azure-resident under the operator's Entra ID identity. The Foundry deployment SKU controls model-inference data residency and must be surfaced before each run. Any genuinely external dependency (e.g., Langfuse Cloud) is operator-opt-in.
 - **Read-only against Azure.** No delete/scale/modify/restart, ever. Enforced in defense-in-depth (§12).
 - **AMG-MCP is the Azure boundary.** No direct Azure SDK calls inside the agent for cost/resource/telemetry data.
 - **Evidence over assertion.** Every recommendation cites resources, time windows, and metrics. Uncited = defect.
@@ -70,7 +70,7 @@ Ten components, each owning one architectural concern from the [architecture pri
 - **Purpose.** The only component that knows the MCP transport. Opens the AMG-MCP session, discovers capabilities, dispatches tool calls, enforces a static read-only allowlist of capabilities.
 - **Inputs / outputs.** Transport config → `CapabilityCatalog` + invocation function.
 - **Hard constraints.** AMG-MCP is the sole boundary ([AMG-MCP integration PRD](../prd/amg-mcp-integration.md) FR-1); discovery before reliance (FR-2, FR-11); explicit read-only (FR-8 — `dashboard_update` denied; any future mutating tool denied by default); every call wrapped in a trace span (FR-7).
-- **Swappable.** Transport (stdio / streamable HTTP / SSE) without touching upstream components.
+- **Swappable.** Transport (streamable HTTP / SSE) without touching upstream components.
 
 ### 4.4 `failure_taxonomy` — failure classifier
 
@@ -275,9 +275,10 @@ Durable shapes across component boundaries. Types of values shown; serialization
 | `run_id` | UUID |
 | `trace_id` | Langfuse trace or local-equivalent path |
 | `prompt_versions` | `{planner: vN, reasoner: vM}` |
-| `model_provider` / `model_name` / `model_config_hash` | strings/hash |
+| `model_provider` / `model_name` / `model_config_hash` | strings/hash (e.g., provider=`foundry`, name=`gpt-5.4`) |
+| `model_deployment_sku` | Foundry deployment type (`GlobalStandard` / `DataZoneStandard` / regional). Determines where prompts and responses are processed; required for the data-residency record. |
 | `experiment_variant` | optional string |
-| `amg_mcp_endpoint` | URL or stdio command |
+| `amg_mcp_endpoint` | URL of the remote AMG-MCP server |
 | `capability_versions` | map of capability → version snapshot |
 | `fixture_id` | when replaying |
 | `started_at` / `ended_at` | timestamps |
@@ -364,7 +365,7 @@ Options:
 
 - **A.** Freeform text + parser. Brittle. Rejected.
 - **B.** JSON mode + manual schema check. Workable but lets shape drift.
-- **C. (recommended)** Provider structured-output (Anthropic tool-use schema / OpenAI structured outputs) + Pydantic validation. Belt-and-braces.
+- **C. (recommended)** Provider strict-JSON-Schema mode (`response_format: json_schema` with `strict: true` on Foundry-hosted GPT-5 family) + Pydantic validation. Belt-and-braces. Microsoft's documented Foundry pattern is Pydantic-native, so the validation layer is the same shape on either side of the boundary. Anthropic tool-use schema is the equivalent if the provider is swapped.
 - **D.** Function calling as schema carrier. Equivalent to C in practice.
 
 **Phase 1 default: C.** Validation failure triggers one repair round; a second failure is captured as a first-class finding.
@@ -549,7 +550,7 @@ run.root                                  [trace]
     scope.time_window
     scope.baseline_window
     prompt.versions = {planner: vN, reasoner: vM}
-    model.provider, model.name, model.config_hash
+    model.provider, model.name, model.config_hash, model.deployment_sku
     experiment.variant (optional)
     fixture.id (optional)
     capability.versions (object)
@@ -588,9 +589,9 @@ For each, 2–3 realistic options with trade-offs and a recommended Phase 1 defa
 
 | Option | Trade-offs |
 |---|---|
-| **Python** ✅ | AMG-MCP is Python-based; Python MCP SDK is mature; Langfuse Python SDK is most feature-complete (datasets/evals/experiments are load-bearing per [Langfuse observability PRD](../prd/langfuse-observability.md)); broadest agent-framework ecosystem. `uv` resolves historical packaging friction. |
+| **Python** ✅ | Neither AMG-MCP nor Microsoft Foundry constrains client language — both are language-agnostic over HTTP. Choice rests on client-side ecosystem: mature MCP Python SDK; most feature-complete Langfuse SDK for the datasets/evals/experiments that are load-bearing per [Langfuse observability PRD](../prd/langfuse-observability.md); Microsoft's documented Foundry pattern for strict-JSON-Schema outputs is Pydantic-native and aligns directly with the §8.3 validation layer; broadest agent-framework ecosystem. `uv` resolves historical packaging friction. |
 | TypeScript / Node | Strong typing; first-class MCP SDK. Trade-off: Langfuse TS SDK slightly behind on evaluations/datasets; less data-wrangling ecosystem. |
-| .NET | Native Azure tooling fit. Trade-off: smallest MCP/Langfuse ecosystem in early 2026; risks diverging from AMG-MCP's own conventions. |
+| .NET | Native Azure tooling fit. Trade-off: smallest MCP/Langfuse ecosystem in early 2026. |
 
 **Phase 1 default: Python.** Component boundaries in §4 are functional; the language choice affects implementation only.
 
@@ -601,7 +602,7 @@ For each, 2–3 realistic options with trade-offs and a recommended Phase 1 defa
 | **Raw model SDK + manual orchestration** ✅ | Smallest dependency surface; exact control over spans, retries, schema. The two-LLM-call loop in §7 is small enough to write directly. Maximally reversible. |
 | Pydantic AI | Pythonic, type-safe, lightweight; built-in MCP client; OTEL-native (Langfuse compatible). Trade-off: younger; opinionated around Pydantic. |
 | LangGraph | State machine; community examples. Trade-off: opinionated abstractions; risks coupling architecture to LangGraph idioms before Phase 1 has proved the loop shape. |
-| Claude Agent SDK | High-quality tool-use orchestration if the model is Claude. Trade-off: ties orchestration to one provider's SDK shape. |
+| Foundry Agents Service | Hosted agent runtime in the same Azure tenant; capability discovery, state, and tool wiring are server-side. Trade-off: orchestration moves out of the agent, which is incompatible with the §7.5 deterministic enforcement and the fixture-replay seam (§13); also not local-first in the strict sense. |
 
 **Phase 1 default: raw model SDK.** Framework lock-in this early is a premature commitment ([architecture principles](../architecture-principles.md) *reversible decisions*). Affects only the `reasoning` component (§4.7).
 
@@ -609,21 +610,28 @@ For each, 2–3 realistic options with trade-offs and a recommended Phase 1 defa
 
 | Option | Trade-offs |
 |---|---|
-| **Claude via Anthropic API** ✅ | Strong tool-use; strong calibration-on-uncertainty behavior (matches the *calibrated uncertainty* principle); good Langfuse integration. Trade-off: external service — operator opt-in required and surfaced in CLI before each run. |
-| Azure OpenAI | Same Azure tenant as the data; AAD identity; cleaner residency story. Trade-off: still external; capability gap on tool-use quality. |
-| Local model (Ollama / llama.cpp) | Most aligned with local-first; sensitive cost data never leaves the operator's environment. Trade-off: Phase 1 quality on structured tool-use is meaningfully below frontier; risks missing "useful enough to act on" bar ([goals](../goals.md)). |
+| **Microsoft Foundry — OpenAI gpt-5.4** ✅ | Same Azure tenant as AMG-MCP and the source data; one Entra ID identity covers both boundaries; first-class strict JSON Schema (`response_format: json_schema`, `strict: true`) for the §8.3 structured-output pipeline, with Pydantic-native documented patterns; operator already has access through their Azure environment. Trade-off: data-residency depends on the deployment SKU — `GlobalStandard` may process anywhere, `DataZoneStandard` stays in US or EU, regional pins to one location ([Foundry deployment types](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/deployment-types)). The chosen SKU must be surfaced through `config` (§4.1) and recorded in `RunMetadata.model_deployment_sku` (§5.7) before each run. |
+| Claude via Anthropic API | Strong tool-use and calibration-on-uncertainty behavior; established Langfuse integration. Trade-off: genuinely external — sensitive Azure telemetry summaries cross a tenant boundary; operator opt-in required and surfaced in CLI before each run. |
+| Local model (Ollama / llama.cpp) | Strict-local — no model call leaves the workstation. Trade-off: Phase 1 quality on strict JSON Schema adherence and FinOps-domain reasoning is meaningfully below frontier; risks missing the "useful enough to act on" bar ([goals](../goals.md)). |
 
-**Phase 1 default: Claude via Anthropic API as the primary, with explicit operator opt-in shown in CLI before each run.** Reasoning quality is the gating factor for the "engineers would act on it" success criterion. The `ModelClient` interface (§13) means swapping to Azure OpenAI or local is a single-component change; the local-first principle is honored by making the choice explicit ([Langfuse observability PRD](../prd/langfuse-observability.md) non-goals).
+**Phase 1 default: Foundry-hosted gpt-5.4.** The combination of (a) the inference path staying in the operator's Azure tenant, (b) one Entra ID identity covering both AMG-MCP and the model endpoint, and (c) first-class strict-JSON-Schema support for the §8.3 enforcement layer is materially aligned with this project's constraints — meaningfully more so than the previous Anthropic-default recommendation. The `ModelClient` interface (§13) keeps the choice swappable; Claude or local is a single-component change.
+
+**Do not use Foundry's built-in MCP tool plumbing.** Foundry's Responses API can call MCP servers as model-driven tools, but that is the tool-using agent loop (Option C in §7.1) — the loop this design explicitly rejected for Phase 1. In this architecture the model receives a `CapabilityCatalog` slice as **data** and emits an `EvidencePlan`; the agent dispatches MCP calls in deterministic code. That separation is what enables citation enforcement (§7.5), back-pressure (§4.6), fixture replay (§13), and the planner-validation read-only allowlist (§12 layer 2). Re-introducing model-driven MCP tool calls would erode all four.
 
 ### 15.4 MCP transport
 
+AMG-MCP is a remote MCP server hosted by Azure Managed Grafana. Az-Pixiu connects to it over the network; there is no local subprocess to launch. The transport choice is therefore among the HTTP-based MCP transports the server exposes, not whether to run the server locally.
+
 | Option | Trade-offs |
 |---|---|
-| **stdio (launch AMG-MCP as subprocess)** ✅ | Cleanest local-first story; no network exposure; deterministic for fixtures; minimum operator setup. |
-| Streamable HTTP | Decouples lifecycle; multi-client; matches current MCP spec direction. Trade-off: operator must run AMG-MCP as a service. |
-| SSE | Historical option; superseded by streamable HTTP. |
+| **Streamable HTTP** ✅ | Current MCP spec direction; single endpoint; bidirectional. The expected primary transport for new remote MCP servers. |
+| SSE | Earlier remote MCP transport. May remain available as a compatibility option but is superseded for new clients. |
 
-**Phase 1 default: stdio.** Switching transport is a single-component change in `mcp_client` (§4.3).
+**Phase 1 default: streamable HTTP**, falling back to whatever transport AMG-MCP currently exposes as primary. The choice is constrained by the server, not by Az-Pixiu. Swap is a single-component change in `mcp_client` (§4.3).
+
+**Auth handoff.** Because AMG-MCP is remote, Az-Pixiu authenticates *to* the MCP server (token-based, per the server's auth model — likely Entra ID; supplied via `config` per §4.1). The server holds the Azure credentials it uses to reach Cost Management, Resource Graph, and Azure Monitor. This narrows the agent's credential surface: the agent never holds Azure subscription credentials directly. The `auth` failure class in §11 covers failures at the agent→AMG-MCP boundary; downstream Azure auth issues surface as `authz_gap` or `unsupported_capability` from the server.
+
+**Local-first implication.** AMG-MCP is a managed Azure resource that operators already own in their own tenant. The agent runs on the operator's workstation; sensitive cloud telemetry flows operator-tenant → operator-workstation, not through any Az-Pixiu-operated service. The local-first principle is preserved even though the MCP server is remote.
 
 ### 15.5 Prompt storage
 
@@ -651,7 +659,7 @@ For each, 2–3 realistic options with trade-offs and a recommended Phase 1 defa
 |---|---|
 | **Repo-clone-and-run + `uv`** ✅ | Phase 1 audience is the project authors and AI-observability-learner persona ([use cases](../use-cases.md)) — both will clone the repo. CLI entry point ships as a console script. |
 | Python package (PyPI) | Standard distribution. Trade-off: distribution-readiness adds work without Phase 1 audience demand. |
-| Container image | Reproducibility. Trade-off: heavier; awkward with stdio MCP transport (container would need AMG-MCP too). Phase 3+. |
+| Container image | Reproducibility; isolates dependencies. Trade-off: heavier; adds packaging overhead before the Phase 1 audience needs it. Phase 3+. |
 
 **Phase 1 default: repo-clone-and-run with `uv`.**
 
