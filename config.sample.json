@@ -1,0 +1,9 @@
+{
+  "foundry": {
+    "endpoint": "https://<your-foundry-resource>.openai.azure.com",
+    "deployment": "<your-deployment-name>"
+  },
+  "amg": {
+    "endpoint": "https://<your-amg-instance>.grafana.azure.com"
+  }
+}

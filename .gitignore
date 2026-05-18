@@ -1,0 +1,3 @@
+# Operator-local config (per design doc §15.8). Use config.sample.json
+# as the checked-in template; this file holds the operator's real endpoints.
+config.json

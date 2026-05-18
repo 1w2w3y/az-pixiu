@@ -674,13 +674,13 @@ AMG-MCP is a remote MCP server hosted by Azure Managed Grafana. Az-Pixiu connect
 
 | Option | Trade-offs |
 |---|---|
-| **Layered: flags > env > JSON > defaults** ✅ | Secrets in env; non-secret defaults in `az-pixiu.json`; per-run scope on flags. Matches [CLI experience PRD](../prd/cli-experience.md) FR-2 + FR-14. |
+| **Layered: flags > env > JSON > defaults** ✅ | Secrets in env; non-secret defaults in `config.json` (gitignored, operator-local); per-run scope on flags. Matches [CLI experience PRD](../prd/cli-experience.md) FR-2 + FR-14. |
 | Env vars only | Twelve-factor; poor for layered settings. |
 | CLI flags only | Most explicit; noisy for common case. |
 
 **Phase 1 default: layered.**
 
-**File format: JSON.** Symmetric with the rest of the on-disk surface (`run.json`, `package.json`, fixture files) and zero-dependency in Node. The same Zod schema (§8.3, §15.1) that validates other structured shapes validates `az-pixiu.json` directly, with `z.infer<>` producing the typed `RunConfiguration`. A `$schema` pointer at the top of the file gives operators editor autocomplete and inline validation with no extension installed. The cost is the lack of inline comments — mitigated by a documented `az-pixiu.example.json` and per-field prose in the README. TOML was considered for the comment affordance but rejected because it adds a parser dependency, breaks the JSON-everywhere symmetry, and duplicates documentation that the example file and README already carry. If hand-edit comments later prove load-bearing, JSONC is a single-component swap in `config` (§4.1).
+**File format: JSON.** Symmetric with the rest of the on-disk surface (`run.json`, `package.json`, fixture files) and zero-dependency in Node. The same Zod schema (§8.3, §15.1) that validates other structured shapes validates `config.json` directly, with `z.infer<>` producing the typed `RunConfiguration`. A `$schema` pointer at the top of the file gives operators editor autocomplete and inline validation with no extension installed. The cost is the lack of inline comments — mitigated by a checked-in `config.sample.json` template and per-field prose in the README; `config.json` itself is gitignored so each operator's endpoints stay local. TOML was considered for the comment affordance but rejected because it adds a parser dependency, breaks the JSON-everywhere symmetry, and duplicates documentation that the sample file and README already carry. If hand-edit comments later prove load-bearing, JSONC is a single-component swap in `config` (§4.1).
 
 ### 15.9 Azure credential and token acquisition
 
@@ -789,4 +789,4 @@ New files Phase 1 will create (proposed; subject to language/packaging choice in
 - `playbooks/cost-surprise.ts` (the capability-to-EvidenceRequest mapping)
 - `fixtures/` (sanitized AMG-MCP responses, one folder per fixture id)
 - `runs/` (per-run output directory; gitignored)
-- `package.json`, `tsconfig.json`, `pnpm-lock.yaml`, `az-pixiu.json` (default operator config) + `az-pixiu.example.json` (annotated example referenced from the README), `README.md` updates
+- `package.json`, `tsconfig.json`, `pnpm-lock.yaml`, `config.sample.json` (checked-in template) + `config.json` (operator-local, gitignored), `README.md` updates, `.gitignore`
