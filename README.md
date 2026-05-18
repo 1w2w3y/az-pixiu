@@ -38,6 +38,16 @@ Az-Pixiu is in its earliest stage. This repository currently contains foundation
 - [Langfuse learning goals](docs/langfuse-learning-goals.md) — the Langfuse capabilities the project intends to demonstrate.
 - [AMG-MCP positioning](docs/amg-mcp-positioning.md) — why AMG-MCP sits at the boundary between the agent and Azure.
 
+## Product requirements
+
+- [Core agent PRD](docs/prd/core-agent.md) — the core Azure cost analysis AI agent.
+- [Langfuse observability PRD](docs/prd/langfuse-observability.md) — telemetry, tracing, evaluations, experiments, and observability requirements.
+- [AMG-MCP integration PRD](docs/prd/amg-mcp-integration.md) — requirements for the MCP integration boundary.
+- [Reporting and recommendations PRD](docs/prd/reporting-and-recommendations.md) — requirements for reports and optimization suggestions.
+- [Evaluation framework PRD](docs/prd/evaluation-framework.md) — requirements for evaluation datasets and quality measurement.
+- [CLI experience PRD](docs/prd/cli-experience.md) — command-line and local developer experience requirements.
+- [Future multi-agent platform PRD](docs/prd/future-multi-agent-platform.md) — long-term vision for multiple Azure operational agents.
+
 ## Audience
 
 The project is written for two audiences at once. The first is engineers and operators who would use a local Azure FinOps agent to understand their own subscription spending. The second is engineers learning how to build, instrument, and evaluate AI systems in a disciplined way. The documentation, the codebase, and the evaluation artifacts are intended to serve both.
