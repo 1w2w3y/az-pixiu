@@ -1,0 +1,16 @@
+{
+  "fixture_id": "cost-surprise-001",
+  "description": "Synthetic 7-day cost-surprise fixture for Phase 1 development. Not from a real Azure environment.",
+  "analysis_type": "cost_surprise",
+  "recorded_at": "2026-05-18T00:00:00Z",
+  "sanitized_at": "2026-05-18T00:00:00Z",
+  "recorded_from": "synthetic",
+  "time_window": {
+    "start": "2026-05-01T00:00:00Z",
+    "end": "2026-05-08T00:00:00Z"
+  },
+  "baseline_window": {
+    "start": "2026-04-24T00:00:00Z",
+    "end": "2026-05-01T00:00:00Z"
+  }
+}
