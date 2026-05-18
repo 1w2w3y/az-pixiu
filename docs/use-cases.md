@@ -44,7 +44,7 @@ Az-Pixiu is intended to be that project. The codebase, the Langfuse configuratio
 
 An engineer evaluating the Model Context Protocol wants to see what a non-trivial agent looks like when built on top of an MCP server rather than directly against vendor SDKs. They are interested in the trade-offs and in how MCP shapes the design of the surrounding agent.
 
-Az-Pixiu's use of AMG-MCP is intended to make these trade-offs visible in practice. The [AMG-MCP positioning](amg-mcp-positioning.md) document complements this use case.
+Az-Pixiu's use of AMG-MCP is intended to make these trade-offs visible in practice. The [AMG-MCP positioning](amg-mcp-positioning.md) document complements this use case. The [AMG-MCP capabilities](amg-mcp-capabilities.md) document records which capabilities the agent is expected to draw on for each scenario above.
 
 ## Out of scope
 

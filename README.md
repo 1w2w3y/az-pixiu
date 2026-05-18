@@ -37,6 +37,7 @@ Az-Pixiu is in its earliest stage. This repository currently contains foundation
 - [Roadmap](docs/roadmap.md) — the phased plan for the project.
 - [Langfuse learning goals](docs/langfuse-learning-goals.md) — the Langfuse capabilities the project intends to demonstrate.
 - [AMG-MCP positioning](docs/amg-mcp-positioning.md) — why AMG-MCP sits at the boundary between the agent and Azure.
+- [AMG-MCP capabilities](docs/amg-mcp-capabilities.md) — a snapshot of what AMG-MCP exposes to the agent today and how it maps to project use cases.
 
 ## Product requirements
 

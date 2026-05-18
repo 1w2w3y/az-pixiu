@@ -4,7 +4,7 @@
 
 AMG-MCP is the primary protocol boundary between Az-Pixiu and Azure operational data. The integration must allow the agent to discover and use Azure cost, resource, and telemetry capabilities through a Model Context Protocol server rather than building a bespoke Azure SDK surface inside the agent.
 
-This PRD defines the product requirements for that boundary. It focuses on capability expectations, trust, error handling, evidence provenance, and enterprise review concerns. It does not prescribe client libraries, transports, or implementation structure.
+This PRD defines the product requirements for that boundary. It focuses on capability expectations, trust, error handling, evidence provenance, and enterprise review concerns. It does not prescribe client libraries, transports, or implementation structure. A snapshot of the capabilities AMG-MCP currently exposes — and how they map to Az-Pixiu's use cases — lives separately in [AMG-MCP capabilities](../amg-mcp-capabilities.md).
 
 The integration should make Az-Pixiu a strong example of an MCP-based operational agent: the agent asks for the right evidence, the server exposes data access capabilities in a controlled shape, and every interaction is traceable.
 
@@ -66,11 +66,11 @@ AMG-MCP adds a new capability or changes a schema version. Az-Pixiu detects the 
 - FR-1: Az-Pixiu must use AMG-MCP as the default and preferred boundary for Azure cost, resource, and telemetry retrieval.
 - FR-2: The agent must discover available AMG-MCP capabilities before relying on them for an analysis.
 - FR-3: The integration must expose whether required capabilities for a requested analysis are available, unavailable, partially available, or failed.
-- FR-4: The integration must support evidence retrieval for core scenarios: cost trend analysis, service and resource breakdowns, resource metadata, tagging information, utilization telemetry, and operational metrics needed for cost correlation.
+- FR-4: The integration must support evidence retrieval for core scenarios: cost trend analysis, service and resource breakdowns, resource metadata, tagging information, utilization telemetry, operational metrics needed for cost correlation, management-plane history (such as Activity Log events) used to explain what changed, and resource availability transitions where they affect cost interpretation.
 - FR-5: Every result used by the agent must carry provenance sufficient to identify source capability, query intent, scope, time window, and data freshness.
 - FR-6: The integration must classify failures in user-meaningful terms, such as authentication failure, authorization gap, unsupported capability, invalid scope, timeout, rate limit, schema mismatch, and empty result.
 - FR-7: The agent must include MCP interaction summaries in observability traces, including capability names, request purpose, status, latency, and data volume indicators.
-- FR-8: The integration must make read-only assumptions explicit. Any capability that could mutate Azure state must be rejected or excluded from the agent's allowed operating set.
+- FR-8: The integration must make read-only assumptions explicit. Any capability that could mutate Azure state — or modify the broader operational environment that the MCP server controls, such as Grafana dashboards — must be rejected or excluded from the agent's allowed operating set.
 - FR-9: The integration must support bounded analysis when some data is unavailable, provided the output clearly reflects reduced confidence.
 - FR-10: The integration must avoid treating stale, partial, or aggregated data as exact without caveats.
 - FR-11: The agent must not infer unsupported server capabilities from natural-language descriptions alone; capability use must be grounded in discovered MCP metadata or documented contracts.
@@ -85,6 +85,7 @@ AMG-MCP adds a new capability or changes a schema version. Az-Pixiu detects the 
 - Resilience: Timeouts, rate limits, and partial responses must degrade into clear output rather than incorrect recommendations.
 - Compatibility: The integration should tolerate additive server capabilities and clearly report incompatible changes.
 - Performance: The agent should minimize unnecessary data retrieval and communicate when broad scopes may produce long-running analysis.
+- Back-pressure awareness: AMG-MCP and the Azure APIs it fronts apply their own rate limits — for example, the Cost Management QPU budget and the ARM token bucket throttling documented in the server's built-in scanner. The agent should plan query patterns that respect these limits, such as serializing across subscriptions where the budget is uncertain, batching metric queries when the underlying tool supports it, and scoping scans deliberately, rather than fanning out blindly and relying on retries to recover.
 - Privacy: Retrieved evidence should be minimized to what the analysis requires and handled according to the local-first product posture.
 - Testability: Representative MCP responses should be usable in datasets and evaluation fixtures without requiring live Azure access.
 - Legibility: Operators should understand what Azure data categories are accessed for each analysis type.
@@ -98,6 +99,7 @@ AMG-MCP adds a new capability or changes a schema version. Az-Pixiu detects the 
 - The agent may accidentally become coupled to a specific server behavior rather than the protocol contract.
 - Users may expect AMG-MCP to imply data completeness when the server only exposes a subset of Azure signals.
 - Pressure to bypass AMG-MCP could weaken the architectural boundary if not governed carefully.
+- Built-in MCP capabilities — such as the server's `pulse_check` health scanner — may duplicate or compete with agent-side reasoning for the same scenarios. Choosing the wrong boundary could either leak server-side logic into the agent or fragment what should be a coherent analysis.
 
 ## Open Questions
 
@@ -108,6 +110,7 @@ AMG-MCP adds a new capability or changes a schema version. Az-Pixiu detects the 
 - How should fixture data be sanitized while preserving realistic failure modes?
 - What process should be used to propose upstream AMG-MCP enhancements discovered through Az-Pixiu?
 - Are there specific categories of data that should never be captured in Langfuse traces even if returned by AMG-MCP?
+- How should Az-Pixiu relate to AMG-MCP's built-in operational scanner (`pulse_check`), which already implements multi-resource health scenarios that overlap with the core agent's idle and underused resource review? The agent could wrap it, compose around it, or duplicate it; each option carries different implications for evidence shape, observability, and the boundary between MCP-server logic and agent logic.
 
 ## Future Considerations
 
