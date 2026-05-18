@@ -1,12 +1,42 @@
+import { z } from 'zod';
 import {
   EvidencePlanSchema,
+  QueryIntentSchema,
   type EvidencePlan,
+  type EvidenceRequest,
   type Scope,
   type CapabilityCatalog,
 } from '../schemas/index.js';
 import type { DiscoveredCatalog } from '../mcp/client.js';
 import type { ModelClient } from '../model/client.js';
 import { isAllowedCapability } from '../mcp/allowlist.js';
+
+/**
+ * Wire schema the planner LLM emits. Differs from EvidencePlanSchema in
+ * two ways forced by OpenAI strict-mode structured outputs:
+ *   - `parameters` is a JSON-encoded string instead of an open record,
+ *     because strict mode rejects `additionalProperties` without a `type`
+ *     (and per-capability param shapes vary).
+ *   - `expected_role` is `.nullable().optional()`.
+ * After the LLM call we JSON.parse `parameters` and hand the result to
+ * EvidencePlanSchema for normal validation.
+ */
+const PlannerLLMRequestSchema = z
+  .object({
+    capability: z.string().min(1),
+    parameters: z
+      .string()
+      .describe('A JSON-encoded object of parameters matching the capability inputSchema.'),
+    intent: QueryIntentSchema,
+    expected_role: z.string().min(1).nullable().optional(),
+  })
+  .strict();
+
+const PlannerLLMOutputSchema = z
+  .object({
+    requests: z.array(PlannerLLMRequestSchema).min(1),
+  })
+  .strict();
 
 /**
  * Planner (design §4.7 / §7.2 step 4). Emits an EvidencePlan from the
@@ -72,10 +102,10 @@ export class Planner {
   }
 
   private async callModel(userPrompt: string): Promise<EvidencePlan> {
-    return this.options.model.generateStructured({
+    const wire = await this.options.model.generateStructured({
       systemPrompt: this.options.systemPrompt,
       userPrompt,
-      schema: EvidencePlanSchema,
+      schema: PlannerLLMOutputSchema,
       schemaName: this.options.schemaName ?? 'planner_output',
       temperature: this.options.temperature ?? 0,
       ...(this.options.seed !== undefined ? { seed: this.options.seed } : {}),
@@ -83,6 +113,30 @@ export class Planner {
         ? { maxOutputTokens: this.options.maxOutputTokens }
         : {}),
     });
+
+    const requests: EvidenceRequest[] = wire.requests.map((r, i) => {
+      let parameters: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(r.parameters);
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          throw new Error('parameters must JSON-decode to an object');
+        }
+        parameters = parsed as Record<string, unknown>;
+      } catch (err) {
+        throw new Error(
+          `Planner emitted invalid JSON for request[${i}].parameters: ${(err as Error).message}. Raw: ${r.parameters}`,
+        );
+      }
+      const req: EvidenceRequest = {
+        capability: r.capability,
+        parameters,
+        intent: r.intent,
+        ...(r.expected_role ? { expected_role: r.expected_role } : {}),
+      };
+      return req;
+    });
+
+    return EvidencePlanSchema.parse({ requests });
   }
 }
 

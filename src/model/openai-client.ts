@@ -42,13 +42,20 @@ export class OpenAIModelClient implements ModelClient {
   async generateStructured<TSchema extends z.ZodTypeAny>(
     args: GenerateStructuredArgs<TSchema>,
   ): Promise<z.infer<TSchema>> {
+    const responseFormat = zodResponseFormat(args.schema, args.schemaName);
+    // TEMP DEBUG: dump the JSON schema being sent to identify strict-mode rejects.
+    if (process.env.PIXIU_DEBUG_SCHEMA === '1') {
+      process.stderr.write(
+        `[debug] ${args.schemaName} JSON schema: ${JSON.stringify(responseFormat, null, 2)}\n`,
+      );
+    }
     const response = await this.client.chat.completions.parse({
       model: this.deployment,
       messages: [
         { role: 'system', content: args.systemPrompt },
         { role: 'user', content: args.userPrompt },
       ],
-      response_format: zodResponseFormat(args.schema, args.schemaName),
+      response_format: responseFormat,
       temperature: args.temperature ?? 0,
       ...(args.seed !== undefined ? { seed: args.seed } : {}),
       ...(args.maxOutputTokens !== undefined ? { max_completion_tokens: args.maxOutputTokens } : {}),

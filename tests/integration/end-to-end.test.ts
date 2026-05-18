@@ -94,8 +94,20 @@ describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)',
           },
         ],
       };
+      // Re-encode parameters as JSON strings to match the planner's LLM
+      // wire format (OpenAI strict-mode requirement; see planner.ts).
+      const cannedLLMPlan = {
+        requests: cannedPlan.requests.map((r) => ({
+          capability: r.capability,
+          parameters: JSON.stringify(r.parameters),
+          intent: r.intent,
+          ...(r.expected_role !== undefined && r.expected_role !== null
+            ? { expected_role: r.expected_role }
+            : {}),
+        })),
+      };
       const planner = new Planner({
-        model: new MockModelClient({ responses: cannedPlan }),
+        model: new MockModelClient({ responses: cannedLLMPlan }),
         systemPrompt: plannerPrompt.content,
       });
       const plan = await withSpan(SpanNames.EvidencePlanning, async () => planner.plan(item.scope, catalog));

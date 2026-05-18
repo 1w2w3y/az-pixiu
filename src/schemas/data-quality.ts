@@ -32,11 +32,14 @@ export const DataQualityFindingSchema = z
   .object({
     dq_id: DqIdSchema,
     category: DataQualityCategorySchema,
-    affected_capability: z.string().min(1).optional(),
-    affected_scope_subset: ScopeSubsetSchema.optional(),
+    // .nullable().optional() — DataQualityFinding is part of the reasoner's
+    // structured output, so optional fields must also be nullable to satisfy
+    // OpenAI strict-mode (see EvidenceRequestSchema for the rationale).
+    affected_capability: z.string().min(1).nullable().optional(),
+    affected_scope_subset: ScopeSubsetSchema.nullable().optional(),
     consequence_for_analysis: z.string().min(1),
     impact_on_recommendations: z.array(RecommendationIdSchema),
-    actionable_hint: z.string().min(1).optional(),
+    actionable_hint: z.string().min(1).nullable().optional(),
   })
   .strict();
 

@@ -5,6 +5,34 @@ import { MCPClient } from '../../src/mcp/client.js';
 import type { CapabilityCatalog, EvidencePlan, Scope, ToolCallResult } from '../../src/schemas/index.js';
 import type { MCPTransport } from '../../src/mcp/transport.js';
 
+/**
+ * The planner's LLM wire format encodes `parameters` as a JSON string
+ * (OpenAI strict-mode rejects open `additionalProperties`). The Planner
+ * JSON-parses on the way out. Tests build canned responses in the
+ * convenient EvidencePlan object form and then encode parameters before
+ * handing them to MockModelClient.
+ */
+type LLMRequest = {
+  capability: string;
+  parameters: string;
+  intent: string;
+  expected_role?: string;
+};
+type LLMPlan = { requests: LLMRequest[] };
+
+function encodePlan(plan: EvidencePlan): LLMPlan {
+  return {
+    requests: plan.requests.map((r) => ({
+      capability: r.capability,
+      parameters: JSON.stringify(r.parameters),
+      intent: r.intent,
+      ...(r.expected_role !== undefined && r.expected_role !== null
+        ? { expected_role: r.expected_role }
+        : {}),
+    })),
+  };
+}
+
 const subId = '11111111-1111-1111-1111-111111111111';
 
 const scope: Scope = {
@@ -63,7 +91,7 @@ async function getCatalog() {
 describe('Planner — happy path', () => {
   it('returns the plan when valid against the catalog', async () => {
     const planner = new Planner({
-      model: new MockModelClient({ responses: validPlan }),
+      model: new MockModelClient({ responses: encodePlan(validPlan) }),
       systemPrompt: 'planner',
     });
     const plan = await planner.plan(scope, await getCatalog());
@@ -71,7 +99,7 @@ describe('Planner — happy path', () => {
   });
 
   it('does not include user_context in the user prompt (§7.3 boundary)', async () => {
-    const mock = new MockModelClient({ responses: validPlan });
+    const mock = new MockModelClient({ responses: encodePlan(validPlan) });
     const planner = new Planner({ model: mock, systemPrompt: 'planner' });
     await planner.plan(scope, await getCatalog());
     expect(mock.calls[0]?.userPrompt).not.toContain('user_context');
@@ -86,7 +114,7 @@ describe('Planner — validation', () => {
         { capability: 'kusto_query', parameters: {}, intent: 'cost_breakdown' },
       ],
     };
-    const mock = new MockModelClient({ responses: [badPlan, validPlan] });
+    const mock = new MockModelClient({ responses: [encodePlan(badPlan), encodePlan(validPlan)] });
     const planner = new Planner({ model: mock, systemPrompt: 'planner' });
     const plan = await planner.plan(scope, await getCatalog());
     expect(plan.requests).toHaveLength(2);
@@ -100,7 +128,7 @@ describe('Planner — validation', () => {
         { capability: 'kusto_query', parameters: {}, intent: 'cost_breakdown' },
       ],
     };
-    const mock = new MockModelClient({ responses: [badPlan, badPlan] });
+    const mock = new MockModelClient({ responses: [encodePlan(badPlan), encodePlan(badPlan)] });
     const planner = new Planner({ model: mock, systemPrompt: 'planner' });
     await expect(planner.plan(scope, await getCatalog())).rejects.toBeInstanceOf(
       PlannerValidationError,
@@ -129,7 +157,7 @@ describe('Planner — validation', () => {
     const mutatingPlan: EvidencePlan = {
       requests: [{ capability: 'dashboard_update', parameters: {}, intent: 'cost_breakdown' }],
     };
-    const mock = new MockModelClient({ responses: [mutatingPlan, mutatingPlan] });
+    const mock = new MockModelClient({ responses: [encodePlan(mutatingPlan), encodePlan(mutatingPlan)] });
     const planner = new Planner({ model: mock, systemPrompt: 'planner' });
     await expect(planner.plan(scope, wideDiscovered)).rejects.toBeInstanceOf(
       PlannerValidationError,
@@ -143,7 +171,7 @@ describe('Planner — validation', () => {
         { capability: 'amgmcp_cost_analysis', parameters: { sub: 'a' }, intent: 'cost_breakdown' },
       ],
     };
-    const mock = new MockModelClient({ responses: [duplicatePlan, duplicatePlan] });
+    const mock = new MockModelClient({ responses: [encodePlan(duplicatePlan), encodePlan(duplicatePlan)] });
     const planner = new Planner({ model: mock, systemPrompt: 'planner' });
     await expect(planner.plan(scope, await getCatalog())).rejects.toBeInstanceOf(
       PlannerValidationError,

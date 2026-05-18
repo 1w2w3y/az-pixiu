@@ -1,14 +1,18 @@
 import { z } from 'zod';
 
-// ---------- Branded ID types (§5) ----------
-// Branded strings prevent passing a FactId where an EvidenceId is expected.
+// ---------- ID types (§5) ----------
+// These used to be Zod-branded strings for TS-level nominal typing, but
+// OpenAI's vendored zod-to-json-schema emits self-referencing `$ref`
+// definitions for branded types, which OpenAI strict-mode rejects as
+// "Invalid schema for response_format". We accept the loss of nominal
+// typing — call sites already use these names structurally, not nominally.
 
-export const RunIdSchema = z.string().uuid().brand<'RunId'>();
-export const EvidenceIdSchema = z.string().min(1).brand<'EvidenceId'>();
-export const FactIdSchema = z.string().min(1).brand<'FactId'>();
-export const HypothesisIdSchema = z.string().min(1).brand<'HypothesisId'>();
-export const RecommendationIdSchema = z.string().min(1).brand<'RecommendationId'>();
-export const DqIdSchema = z.string().min(1).brand<'DqId'>();
+export const RunIdSchema = z.string().uuid();
+export const EvidenceIdSchema = z.string().min(1);
+export const FactIdSchema = z.string().min(1);
+export const HypothesisIdSchema = z.string().min(1);
+export const RecommendationIdSchema = z.string().min(1);
+export const DqIdSchema = z.string().min(1);
 
 export type RunId = z.infer<typeof RunIdSchema>;
 export type EvidenceId = z.infer<typeof EvidenceIdSchema>;
@@ -42,11 +46,16 @@ export type TimeWindow = z.infer<typeof TimeWindowSchema>;
 // A loose sub-scope referenced by EvidenceRecord and DataQualityFinding to
 // describe which slice was covered or blocked.
 
+// .nullable().optional() — same OpenAI strict-mode constraint as
+// EvidenceRequestSchema.expected_role: optional fields surfaced via
+// zodResponseFormat must also be nullable. ScopeSubset rides inside
+// FactSchema and DataQualityFindingSchema, both of which the reasoner LLM
+// emits, so this schema crosses the strict-mode boundary.
 export const ScopeSubsetSchema = z
   .object({
-    subscription_ids: z.array(AzureSubscriptionIdSchema).optional(),
-    resource_group_names: z.array(z.string().min(1)).optional(),
-    resource_ids: z.array(z.string().min(1)).optional(),
+    subscription_ids: z.array(AzureSubscriptionIdSchema).nullable().optional(),
+    resource_group_names: z.array(z.string().min(1)).nullable().optional(),
+    resource_ids: z.array(z.string().min(1)).nullable().optional(),
   })
   .strict();
 

@@ -69,6 +69,10 @@ const WRAPPED_ERROR_PATTERNS: readonly RegExp[] = [
   /invalid_grant/i,
   /not authenticated/i,
   /access denied/i,
+  // AMG-MCP wraps tool-input validation rejections as a 200 OK plain-text
+  // body, e.g. "Unknown argument(s) on 'amgmcp_query_resource_graph':
+  // 'subscription_ids'. Allowed: azureMonitorDatasourceUid, query."
+  /^Unknown argument\(s\) on/i,
 ];
 
 export function isWrappedError(text: string): boolean {

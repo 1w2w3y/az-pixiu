@@ -15,7 +15,10 @@ export const EvidenceRequestSchema = z
     capability: z.string().min(1),
     parameters: z.record(z.string(), z.unknown()),
     intent: QueryIntentSchema,
-    expected_role: z.string().min(1).optional(),
+    // .nullable().optional() — OpenAI strict-mode structured outputs reject
+    // .optional() fields that aren't also .nullable(); see the
+    // zod-to-json-schema check at object.ts:50–60 in the OpenAI SDK.
+    expected_role: z.string().min(1).nullable().optional(),
   })
   .strict();
 

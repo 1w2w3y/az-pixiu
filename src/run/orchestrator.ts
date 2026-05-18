@@ -168,6 +168,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
 
   const client = ctx.client;
 
+  process.stdout.write(`→ discovering AMG-MCP capabilities...\n`);
   const catalog = await withSpan(SpanNames.CapabilityDiscovery, async (span) => {
     const c = await client.discover();
     if (c.mutating_denied.length > 0) {
@@ -179,8 +180,16 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     return c;
   });
   assertRequiredCapabilities(catalog, ctx.scope.analysis_type);
+  process.stdout.write(
+    `  ${catalog.allowed.length} capability/ies allowed, ${catalog.mutating_denied.length} mutating excluded\n`,
+  );
+  process.stdout.write(
+    `  analyzing ${ctx.scope.subscription_ids.length} subscription(s): ${ctx.scope.subscription_ids.join(', ')}\n`,
+  );
 
   // Plan
+  const planSource = ctx.usePlaybook ?? false ? 'playbook' : 'planner_llm';
+  process.stdout.write(`→ building evidence plan (source: ${planSource})...\n`);
   let plan: EvidencePlan;
   if (ctx.usePlaybook ?? false) {
     plan = await withSpan(SpanNames.EvidencePlanning, async (span) => {
@@ -198,8 +207,10 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       return p;
     });
   }
+  process.stdout.write(`  ${plan.requests.length} evidence request(s) planned\n`);
 
   // Execute
+  process.stdout.write(`→ retrieving evidence from AMG-MCP...\n`);
   const executor = new EvidenceExecutor({ client, catalog });
   const { raw_evidence, failures } = await withSpan(
     SpanNames.EvidenceRetrieval,
@@ -209,6 +220,9 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       span.setAttribute(ATTR.evidenceFailuresClassified, r.failures.length);
       return r;
     },
+  );
+  process.stdout.write(
+    `  retrieved ${raw_evidence.length} record(s), ${failures.length} failure(s) classified\n`,
   );
 
   // Normalize
@@ -220,8 +234,12 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   // Merge failure-classified DQs alongside normalizer DQs
   const failureDqs = failures.map((f, i) => failureToDq(f, i));
   const allDq = [...normalizerDq, ...failureDqs];
+  process.stdout.write(
+    `  normalized ${records.length} evidence record(s); ${allDq.length} data-quality finding(s) so far\n`,
+  );
 
   // Reason
+  process.stdout.write(`→ reasoning over evidence...\n`);
   const reasoner = new Reasoner({ model: ctx.model, systemPrompt: reasonerPrompt.content });
   const { output: reasoning, issues } = await withSpan(SpanNames.Reasoning, async (span) => {
     const r = await reasoner.reason({ scope: ctx.scope, evidence: records, data_quality: allDq });
@@ -232,6 +250,9 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     span.setAttribute(ATTR.reasoningIssuesEmitted, r.issues.length);
     return r;
   });
+  process.stdout.write(
+    `  reasoning produced ${reasoning.facts.length} fact(s), ${reasoning.hypotheses.length} hypothesis/es, ${reasoning.recommendations.length} recommendation(s)\n`,
+  );
 
   const score = scoreAll(reasoning);
 
@@ -257,6 +278,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     status: 'success',
   };
 
+  process.stdout.write(`→ writing report to ${ctx.runDir}/\n`);
   await withSpan(SpanNames.ReportAssembly, async () => {
     const md = renderMarkdownReport({ scope: ctx.scope, reasoning, evidence: records, metadata });
     await mkdir(ctx.runDir, { recursive: true });
