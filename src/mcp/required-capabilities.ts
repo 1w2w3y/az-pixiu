@@ -42,6 +42,12 @@ export const REQUIRED_CAPABILITY_MAP: Partial<Record<AnalysisType, RequiredCapab
       'amgmcp_query_resource_health',
     ],
   },
+  cost_summary: {
+    // Just-the-bill mode: no baseline comparison, no anomaly hunt.
+    // Resource graph is optional context for the reasoner narrative.
+    required: ['amgmcp_query_azure_subscriptions', 'amgmcp_cost_analysis'],
+    optional: ['amgmcp_query_resource_graph'],
+  },
   // Phase 2+ analysis types are reserved in the enum but not yet mapped;
   // attempting to discover for one throws (see getRequiredCapabilities).
 };
@@ -51,7 +57,7 @@ export function getRequiredCapabilities(analysisType: AnalysisType): RequiredCap
   if (!map) {
     throw new Error(
       `No required-capability map for analysis type "${analysisType}". ` +
-        `Phase 1 supports cost_surprise only.`,
+        `Phase 1 supports cost_surprise and cost_summary.`,
     );
   }
   return map;

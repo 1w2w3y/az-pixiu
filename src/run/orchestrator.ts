@@ -23,6 +23,7 @@ import {
   ATTR,
 } from '../observability/spans.js';
 import { costSurprisePlaybook } from '../playbooks/cost-surprise.js';
+import { costSummaryPlaybook } from '../playbooks/cost-summary.js';
 import { loadPrompt, type LoadedPrompt } from '../prompts/loader.js';
 import { scoreAll, type AggregateScore } from '../evaluation/scoring.js';
 import type {
@@ -183,7 +184,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   let plan: EvidencePlan;
   if (ctx.usePlaybook ?? false) {
     plan = await withSpan(SpanNames.EvidencePlanning, async (span) => {
-      const p = costSurprisePlaybook(ctx.scope);
+      const p = selectPlaybook(ctx.scope);
       span.setAttribute(ATTR.evidencePlanRequests, p.requests.length);
       span.setAttribute('az_pixiu.plan.source', 'playbook');
       return p;
@@ -302,6 +303,19 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
 function runIdAsBranded(id: string): RunMetadata['run_id'] {
   // randomUUID is RFC 4122 v4 so it satisfies the RunIdSchema brand.
   return id as unknown as RunMetadata['run_id'];
+}
+
+function selectPlaybook(scope: import('../schemas/index.js').Scope): EvidencePlan {
+  switch (scope.analysis_type) {
+    case 'cost_surprise':
+      return costSurprisePlaybook(scope);
+    case 'cost_summary':
+      return costSummaryPlaybook(scope);
+    default:
+      throw new Error(
+        `No playbook defined for analysis_type "${scope.analysis_type}". Phase 1 supports cost_surprise and cost_summary.`,
+      );
+  }
 }
 
 function failureToDq(failure: ClassifiedFailure, index: number): DataQualityFinding {

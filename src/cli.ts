@@ -21,7 +21,8 @@ import { MockModelClient } from './model/mock-client.js';
 import type { ModelClient } from './model/client.js';
 
 const USAGE = `Usage:
-  pixiu analyze cost-surprise --subscription <id> [flags]
+  pixiu analyze cost-surprise [flags]   compare analysis window vs baseline; surface anomalies
+  pixiu analyze cost-summary [flags]    single-window cost breakdown; no baseline comparison
   pixiu diagnose [flags]
 
 analyze flags:
@@ -112,10 +113,11 @@ async function runAnalyzeCommand(
   values: Record<string, unknown>,
   positionals: string[],
 ): Promise<number> {
-  const analysisType = positionals[1];
-  if (analysisType !== 'cost-surprise') {
+  const analysisTypeArg = positionals[1];
+  const analysisType = cliAnalysisType(analysisTypeArg);
+  if (!analysisType) {
     process.stderr.write(
-      `analyze: unknown analysis type "${analysisType ?? '(missing)'}". Phase 1 supports: cost-surprise\n`,
+      `analyze: unknown analysis type "${analysisTypeArg ?? '(missing)'}". Phase 1 supports: cost-surprise, cost-summary\n`,
     );
     return 2;
   }
@@ -178,6 +180,7 @@ async function runAnalyzeCommand(
 
     const scope = intakeScope({
       subscription_ids: subscriptionIds,
+      analysis_type: analysisType,
       ...(args.resourceGroups ? { resource_group_names: args.resourceGroups } : {}),
       ...(args.resourceTypeFilter ? { resource_type_filter: args.resourceTypeFilter } : {}),
       ...(args.from ? { time_window_start: args.from } : {}),
@@ -296,6 +299,12 @@ function parsePositiveInt(v: unknown, fallback: number): number {
   if (typeof v !== 'string') return fallback;
   const n = Number.parseInt(v, 10);
   return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+function cliAnalysisType(v: unknown): 'cost_surprise' | 'cost_summary' | undefined {
+  if (v === 'cost-surprise') return 'cost_surprise';
+  if (v === 'cost-summary') return 'cost_summary';
+  return undefined;
 }
 
 function describe(err: unknown): string {

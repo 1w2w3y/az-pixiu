@@ -57,6 +57,7 @@ export type ScopeSubset = z.infer<typeof ScopeSubsetSchema>;
 
 export const AnalysisTypeSchema = z.enum([
   'cost_surprise',
+  'cost_summary',
   'idle_underused',
   'quarterly_review',
   'cost_telemetry_correlation',

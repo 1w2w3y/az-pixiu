@@ -15,16 +15,22 @@ export const ScopeSchema = z
     subscription_ids: z.array(AzureSubscriptionIdSchema).min(1),
     resource_group_names: z.array(z.string().min(1)).optional(),
     time_window: TimeWindowSchema,
-    // baseline_window is required for cost_surprise (Phase 1's only
-    // analysis type). When future analysis types relax this, the
-    // requirement moves into the scope-intake component, keyed off
-    // analysis_type, rather than weakening the schema globally.
-    baseline_window: TimeWindowSchema,
+    // baseline_window is required for cost_surprise but not for
+    // cost_summary (single-window cost dump, no anomaly comparison).
+    // The refinement below keeps the requirement keyed off analysis_type.
+    baseline_window: TimeWindowSchema.optional(),
     analysis_type: AnalysisTypeSchema,
     resource_type_filter: z.array(z.string().min(1)).optional(),
     user_context: z.string().optional(),
     effective_scope_summary: z.string().min(1),
   })
-  .strict();
+  .strict()
+  .refine(
+    (scope) => scope.analysis_type !== 'cost_surprise' || scope.baseline_window !== undefined,
+    {
+      message: 'cost_surprise analysis requires a baseline_window',
+      path: ['baseline_window'],
+    },
+  );
 
 export type Scope = z.infer<typeof ScopeSchema>;

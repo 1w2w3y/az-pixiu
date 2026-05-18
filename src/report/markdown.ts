@@ -42,6 +42,7 @@ export function renderMarkdownReport(input: RenderReportInput): string {
 function title(scope: Scope): string {
   const display: Record<typeof scope.analysis_type, string> = {
     cost_surprise: 'Cost-Surprise',
+    cost_summary: 'Cost Summary',
     idle_underused: 'Idle / Underused',
     quarterly_review: 'Quarterly Review',
     cost_telemetry_correlation: 'Cost-Telemetry Correlation',
@@ -52,21 +53,20 @@ function title(scope: Scope): string {
 
 function scopeAndDataSources(scope: Scope, evidence: EvidenceRecord[], metadata: RunMetadata): string {
   const capabilities = Array.from(new Set(evidence.map((e) => e.source_capability))).sort();
-  return [
-    '## Scope & Data Sources',
-    '',
-    bullets({
-      Subscriptions: scope.subscription_ids.join(', '),
-      'Resource groups': scope.resource_group_names?.join(', ') ?? '(all in scope)',
-      'Analysis window': fmtWindow(scope.time_window),
-      'Baseline window': fmtWindow(scope.baseline_window),
-      'Analysis type': scope.analysis_type,
-      'Resource type filter': scope.resource_type_filter?.join(', ') ?? '(none)',
-      'Effective scope': scope.effective_scope_summary,
-      'Capabilities used': capabilities.length > 0 ? capabilities.join(', ') : '(none)',
-      'AMG-MCP endpoint': metadata.amg_mcp_endpoint,
-    }),
-  ].join('\n');
+  const items: Record<string, string> = {
+    Subscriptions: scope.subscription_ids.join(', '),
+    'Resource groups': scope.resource_group_names?.join(', ') ?? '(all in scope)',
+    'Analysis window': fmtWindow(scope.time_window),
+  };
+  if (scope.baseline_window) {
+    items['Baseline window'] = fmtWindow(scope.baseline_window);
+  }
+  items['Analysis type'] = scope.analysis_type;
+  items['Resource type filter'] = scope.resource_type_filter?.join(', ') ?? '(none)';
+  items['Effective scope'] = scope.effective_scope_summary;
+  items['Capabilities used'] = capabilities.length > 0 ? capabilities.join(', ') : '(none)';
+  items['AMG-MCP endpoint'] = metadata.amg_mcp_endpoint;
+  return ['## Scope & Data Sources', '', bullets(items)].join('\n');
 }
 
 function executiveSummary(reasoning: ReasoningOutput): string {

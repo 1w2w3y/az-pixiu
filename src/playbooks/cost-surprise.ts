@@ -18,6 +18,12 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
   if (scope.subscription_ids.length === 0) {
     throw new Error('cost-surprise playbook requires at least one subscription_id');
   }
+  if (!scope.baseline_window) {
+    // Belt-and-braces: ScopeSchema's refinement enforces this for the
+    // cost_surprise analysis type, so we should never get here.
+    throw new Error('cost-surprise playbook requires baseline_window');
+  }
+  const baselineWindow = scope.baseline_window;
 
   const requests: EvidenceRequest[] = [
     {
@@ -45,7 +51,7 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
       capability: 'amgmcp_cost_analysis',
       parameters: {
         subscription_id: subId,
-        time_window: scope.baseline_window,
+        time_window: baselineWindow,
         granularity: 'Daily',
         grouping: ['ServiceName'],
       },
