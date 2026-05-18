@@ -6,6 +6,11 @@ export const FoundryConfigSchema = z
   .object({
     endpoint: z.string().url(),
     deployment: z.string().min(1),
+    deployment_sku: z
+      .enum(['GlobalStandard', 'DataZoneStandard', 'regional'])
+      .optional()
+      .default('GlobalStandard'),
+    api_version: z.string().min(1).optional().default('2024-10-21'),
   })
   .strict();
 

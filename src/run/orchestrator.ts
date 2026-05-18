@@ -1,0 +1,310 @@
+import { randomUUID } from 'node:crypto';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { MCPClient, assertRequiredCapabilities } from '../mcp/client.js';
+import type { MCPTransport } from '../mcp/transport.js';
+import { EvidenceExecutor } from '../evidence/executor.js';
+import { EvidenceNormalizer } from '../evidence/normalizer.js';
+import { Planner } from '../reasoning/planner.js';
+import { Reasoner } from '../reasoning/reasoner.js';
+import type { ModelClient } from '../model/client.js';
+import { modelConfigHash } from '../model/client.js';
+import { renderMarkdownReport } from '../report/markdown.js';
+import { buildRunArtifact, writeRunArtifact } from '../report/runjson.js';
+import {
+  initializeTracing,
+  shutdownTracing,
+  type ObservabilityMode,
+} from '../observability/setup.js';
+import {
+  withSpan,
+  emitEvent,
+  SpanNames,
+  ATTR,
+} from '../observability/spans.js';
+import { costSurprisePlaybook } from '../playbooks/cost-surprise.js';
+import { loadPrompt, type LoadedPrompt } from '../prompts/loader.js';
+import { scoreAll, type AggregateScore } from '../evaluation/scoring.js';
+import type {
+  Config,
+  Scope,
+  EvidencePlan,
+  RunMetadata,
+  ReasoningOutput,
+  DataQualityFinding,
+} from '../schemas/index.js';
+import { DataQualityFindingSchema } from '../schemas/index.js';
+import type { ClassifiedFailure } from '../failure/taxonomy.js';
+import type { CredentialIdentity } from './credential-factory.js';
+
+export interface RunOptions {
+  config: Config;
+  scope: Scope;
+  transport: MCPTransport;
+  model: ModelClient;
+  modelProvider: string;
+  credentialIdentity: CredentialIdentity;
+  /** Use the deterministic playbook instead of the planner LLM. */
+  usePlaybook?: boolean;
+  /** Custom prompts directory for tests; defaults to the repo `prompts/`. */
+  promptsCwd?: string;
+  /** Output directory for `<run_id>/` subdir; defaults to `runs/`. */
+  runsDir?: string;
+  /** Observability mode; defaults to 'memory' (no external export). */
+  observabilityMode?: ObservabilityMode;
+  /** Fixture id if running against a fixture transport. */
+  fixtureId?: string;
+}
+
+export interface RunResult {
+  run_id: string;
+  run_dir: string;
+  report_path: string;
+  run_json_path: string;
+  trace_id: string;
+  metadata: RunMetadata;
+  reasoning: ReasoningOutput;
+  score: AggregateScore;
+  failures_classified: number;
+  /** Whether any §7.5 post-process issues were synthesized. */
+  post_process_issues: number;
+}
+
+/**
+ * The runtime entry point that wires every Phase 1 component together
+ * (design §7). Mirrors the §22 end-to-end sequencing:
+ *   config → scope intake → tracing → mcp discovery → plan
+ *   → execute → normalize → reason → score → render → write artifacts.
+ *
+ * Each subspan emits the §14 vocabulary. `mutating_capabilities_excluded`
+ * is emitted as a span event on the discovery span when AMG-MCP
+ * advertises any capability matching the deny patterns.
+ */
+export async function runAnalysis(options: RunOptions): Promise<RunResult> {
+  const runId = randomUUID();
+  const startedAt = new Date().toISOString();
+  const runsDir = options.runsDir ?? 'runs';
+  const runDir = join(runsDir, runId);
+  const reportPath = join(runDir, 'report.md');
+  const runJsonPath = join(runDir, 'run.json');
+
+  const observabilityMode = options.observabilityMode ?? 'memory';
+  await initializeTracing({ mode: observabilityMode });
+
+  // Operator transparency (design §4.2): echo what is about to happen.
+  process.stdout.write(`Az-Pixiu run ${runId}\n`);
+  process.stdout.write(`  scope: ${options.scope.effective_scope_summary}\n`);
+  process.stdout.write(`  amg_mcp_endpoint: ${options.config.amg.endpoint}\n`);
+  process.stdout.write(
+    `  foundry: ${options.config.foundry.endpoint} (${options.config.foundry.deployment}, sku=${options.config.foundry.deployment_sku})\n`,
+  );
+  process.stdout.write(
+    `  credential: ${options.credentialIdentity.implementation} (${options.credentialIdentity.identity})\n`,
+  );
+  process.stdout.write(`  observability: ${observabilityMode}\n`);
+
+  const traceId = `run-${runId}`;
+
+  try {
+    const result = await withSpan(
+      SpanNames.RunRoot,
+      async () => doRun({ ...options, runId, startedAt, runDir, reportPath, runJsonPath, traceId }),
+      {
+        [ATTR.agentName]: 'az-pixiu',
+        [ATTR.agentDomain]: 'finops',
+        [ATTR.analysisType]: options.scope.analysis_type,
+        [ATTR.modelProvider]: options.modelProvider,
+        [ATTR.modelName]: options.config.foundry.deployment,
+        [ATTR.modelDeploymentSku]: options.config.foundry.deployment_sku,
+        [ATTR.credentialSource]: options.credentialIdentity.implementation,
+        [ATTR.credentialIdentity]: options.credentialIdentity.identity,
+        ...(options.fixtureId ? { [ATTR.fixtureId]: options.fixtureId } : {}),
+      },
+    );
+
+    process.stdout.write(`\nDone. ${result.reasoning.recommendations.length} recommendation(s).\n`);
+    process.stdout.write(`  report: ${result.report_path}\n`);
+    process.stdout.write(`  run.json: ${result.run_json_path}\n`);
+    process.stdout.write(`  trace_id: ${result.trace_id}\n`);
+    if (!result.score.passed_all) {
+      process.stdout.write(`  ⚠ scoring: ${result.score.fail_count} rubric(s) failed\n`);
+      for (const r of result.score.results) {
+        if (!r.passed) process.stdout.write(`    - ${r.rubric}: ${r.details ?? ''}\n`);
+      }
+    }
+
+    return result;
+  } finally {
+    await shutdownTracing();
+  }
+}
+
+interface RunCtx extends RunOptions {
+  runId: string;
+  startedAt: string;
+  runDir: string;
+  reportPath: string;
+  runJsonPath: string;
+  traceId: string;
+}
+
+async function doRun(ctx: RunCtx): Promise<RunResult> {
+  const plannerPrompt = await loadPrompt({
+    filename: 'planner.v1.md',
+    ...(ctx.promptsCwd ? { cwd: ctx.promptsCwd } : {}),
+  });
+  const reasonerPrompt = await loadPrompt({
+    filename: 'reasoner.v1.md',
+    ...(ctx.promptsCwd ? { cwd: ctx.promptsCwd } : {}),
+  });
+
+  const client = new MCPClient({ transport: ctx.transport });
+
+  const catalog = await withSpan(SpanNames.CapabilityDiscovery, async (span) => {
+    const c = await client.discover();
+    if (c.mutating_denied.length > 0) {
+      emitEvent(span, 'mutating_capabilities_excluded', {
+        count: c.mutating_denied.length,
+        names: c.mutating_denied.map((cap) => cap.name).join(','),
+      });
+    }
+    return c;
+  });
+  assertRequiredCapabilities(catalog, ctx.scope.analysis_type);
+
+  // Plan
+  let plan: EvidencePlan;
+  if (ctx.usePlaybook ?? false) {
+    plan = await withSpan(SpanNames.EvidencePlanning, async (span) => {
+      const p = costSurprisePlaybook(ctx.scope);
+      span.setAttribute(ATTR.evidencePlanRequests, p.requests.length);
+      span.setAttribute('az_pixiu.plan.source', 'playbook');
+      return p;
+    });
+  } else {
+    const planner = new Planner({ model: ctx.model, systemPrompt: plannerPrompt.content });
+    plan = await withSpan(SpanNames.EvidencePlanning, async (span) => {
+      const p = await planner.plan(ctx.scope, catalog);
+      span.setAttribute(ATTR.evidencePlanRequests, p.requests.length);
+      span.setAttribute('az_pixiu.plan.source', 'planner_llm');
+      return p;
+    });
+  }
+
+  // Execute
+  const executor = new EvidenceExecutor({ client, catalog });
+  const { raw_evidence, failures } = await withSpan(
+    SpanNames.EvidenceRetrieval,
+    async (span) => {
+      const r = await executor.execute(plan);
+      span.setAttribute(ATTR.evidenceRecordsProduced, r.raw_evidence.length);
+      span.setAttribute(ATTR.evidenceFailuresClassified, r.failures.length);
+      return r;
+    },
+  );
+
+  // Normalize
+  const normalizer = new EvidenceNormalizer();
+  const { records, data_quality: normalizerDq } = normalizer.normalize(raw_evidence, {
+    defaultTimeWindow: ctx.scope.time_window,
+  });
+
+  // Merge failure-classified DQs alongside normalizer DQs
+  const failureDqs = failures.map((f, i) => failureToDq(f, i));
+  const allDq = [...normalizerDq, ...failureDqs];
+
+  // Reason
+  const reasoner = new Reasoner({ model: ctx.model, systemPrompt: reasonerPrompt.content });
+  const { output: reasoning, issues } = await withSpan(SpanNames.Reasoning, async (span) => {
+    const r = await reasoner.reason({ scope: ctx.scope, evidence: records, data_quality: allDq });
+    span.setAttribute(ATTR.reasoningFactsProduced, r.output.facts.length);
+    span.setAttribute(ATTR.reasoningHypothesesProduced, r.output.hypotheses.length);
+    span.setAttribute(ATTR.reasoningRecommendationsProduced, r.output.recommendations.length);
+    span.setAttribute(ATTR.reasoningDqProduced, r.output.data_quality.length);
+    span.setAttribute(ATTR.reasoningIssuesEmitted, r.issues.length);
+    return r;
+  });
+
+  const score = scoreAll(reasoning);
+
+  const endedAt = new Date().toISOString();
+  const metadata: RunMetadata = {
+    run_id: runIdAsBranded(ctx.runId),
+    trace_id: ctx.traceId,
+    prompt_versions: { planner: plannerPrompt.version, reasoner: reasonerPrompt.version },
+    model_provider: ctx.modelProvider,
+    model_name: ctx.config.foundry.deployment,
+    model_config_hash: modelConfigHash({
+      provider: ctx.modelProvider,
+      name: ctx.config.foundry.deployment,
+      temperature: 0,
+    }),
+    model_deployment_sku: ctx.config.foundry.deployment_sku,
+    credential_source: ctx.credentialIdentity,
+    amg_mcp_endpoint: ctx.config.amg.endpoint,
+    capability_versions: { ...catalog.capability_versions },
+    ...(ctx.fixtureId ? { fixture_id: ctx.fixtureId } : {}),
+    started_at: ctx.startedAt,
+    ended_at: endedAt,
+    status: 'success',
+  };
+
+  await withSpan(SpanNames.ReportAssembly, async () => {
+    const md = renderMarkdownReport({ scope: ctx.scope, reasoning, evidence: records, metadata });
+    await mkdir(ctx.runDir, { recursive: true });
+    await writeFile(ctx.reportPath, md, 'utf8');
+    await writeRunArtifact({
+      path: ctx.runJsonPath,
+      artifact: buildRunArtifact(metadata, ctx.scope, records, reasoning),
+    });
+  });
+
+  await withSpan(SpanNames.Finalize, async (span) => {
+    span.setAttribute(ATTR.status, metadata.status);
+    emitEvent(span, 'recommendations_evidence_links', {
+      links: reasoning.recommendations
+        .map(
+          (r) =>
+            `${r.recommendation_id}->[${[
+              ...r.supported_by_hypothesis_ids,
+              ...r.supported_by_fact_ids,
+            ].join(',')}]`,
+        )
+        .join(';'),
+    });
+  });
+
+  await client.close();
+
+  return {
+    run_id: ctx.runId,
+    run_dir: ctx.runDir,
+    report_path: ctx.reportPath,
+    run_json_path: ctx.runJsonPath,
+    trace_id: ctx.traceId,
+    metadata,
+    reasoning,
+    score,
+    failures_classified: failures.length,
+    post_process_issues: issues.length,
+  };
+}
+
+// --- helpers ---
+
+function runIdAsBranded(id: string): RunMetadata['run_id'] {
+  // randomUUID is RFC 4122 v4 so it satisfies the RunIdSchema brand.
+  return id as unknown as RunMetadata['run_id'];
+}
+
+function failureToDq(failure: ClassifiedFailure, index: number): DataQualityFinding {
+  return DataQualityFindingSchema.parse({
+    dq_id: `dq-failure-${index + 1}`,
+    category: failure.category,
+    affected_capability: failure.capability,
+    consequence_for_analysis: failure.message,
+    impact_on_recommendations: [],
+    ...(failure.actionable_hint ? { actionable_hint: failure.actionable_hint } : {}),
+  });
+}
