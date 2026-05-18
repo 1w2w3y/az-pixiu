@@ -8,6 +8,7 @@ import { runAnalysis } from '../../src/run/orchestrator.js';
 import { intakeScope } from '../../src/run/scope-intake.js';
 import { describeCredential } from '../../src/run/credential-factory.js';
 import { FixtureMCPTransport } from '../../src/mcp/fixture.js';
+import { MCPClient } from '../../src/mcp/client.js';
 import { MockModelClient } from '../../src/model/mock-client.js';
 import type { Config, ReasoningOutput } from '../../src/schemas/index.js';
 
@@ -36,7 +37,7 @@ describe('runAnalysis — fixture transport + mock model + playbook', () => {
     const tmp = await mkdtemp(join(tmpdir(), 'azp-orc-'));
     try {
       const scope = intakeScope({
-        subscription_id: subId,
+        subscription_ids: [subId],
         resource_group_names: ['rg-db-prod'],
         time_window_start: '2026-05-01T00:00:00Z',
         time_window_end: '2026-05-08T00:00:00Z',
@@ -87,7 +88,9 @@ describe('runAnalysis — fixture transport + mock model + playbook', () => {
       const result = await runAnalysis({
         config,
         scope,
-        transport: new FixtureMCPTransport({ fixturePath: 'fixtures/cost-surprise-001' }),
+        client: new MCPClient({
+          transport: new FixtureMCPTransport({ fixturePath: 'fixtures/cost-surprise-001' }),
+        }),
         model: new MockModelClient({ responses: reasoningResponse }),
         modelProvider: 'mock',
         credentialIdentity: describeCredential('mock'),
@@ -119,7 +122,7 @@ describe('runAnalysis — fixture transport + mock model + playbook', () => {
     const tmp = await mkdtemp(join(tmpdir(), 'azp-orc-'));
     try {
       const scope = intakeScope({
-        subscription_id: subId,
+        subscription_ids: [subId],
         time_window_start: '2026-05-01T00:00:00Z',
         time_window_end: '2026-05-08T00:00:00Z',
         baseline_window_start: '2026-04-24T00:00:00Z',
@@ -137,7 +140,9 @@ describe('runAnalysis — fixture transport + mock model + playbook', () => {
       const result = await runAnalysis({
         config,
         scope,
-        transport: new FixtureMCPTransport({ fixturePath: 'fixtures/cost-surprise-001' }),
+        client: new MCPClient({
+          transport: new FixtureMCPTransport({ fixturePath: 'fixtures/cost-surprise-001' }),
+        }),
         model: new MockModelClient({ responses: reasoningResponse }),
         modelProvider: 'mock',
         credentialIdentity: describeCredential('mock'),

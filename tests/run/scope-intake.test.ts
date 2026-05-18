@@ -6,7 +6,7 @@ const subId = '11111111-1111-1111-1111-111111111111';
 describe('intakeScope — happy path', () => {
   it('produces a valid Scope from a minimal subscription id', () => {
     const scope = intakeScope({
-      subscription_id: subId,
+      subscription_ids: [subId],
       now: new Date('2026-05-18T00:00:00Z'),
     });
     expect(scope.subscription_ids).toEqual([subId]);
@@ -20,7 +20,7 @@ describe('intakeScope — happy path', () => {
 
   it('echoes the scope summary with subscription, RGs, and windows', () => {
     const scope = intakeScope({
-      subscription_id: subId,
+      subscription_ids: [subId],
       resource_group_names: ['rg-a', 'rg-b'],
       now: new Date('2026-05-18T00:00:00Z'),
     });
@@ -31,7 +31,7 @@ describe('intakeScope — happy path', () => {
 
   it('respects explicit time windows', () => {
     const scope = intakeScope({
-      subscription_id: subId,
+      subscription_ids: [subId],
       time_window_start: '2026-04-01T00:00:00Z',
       time_window_end: '2026-04-08T00:00:00Z',
       baseline_window_start: '2026-03-25T00:00:00Z',
@@ -49,7 +49,7 @@ describe('intakeScope — happy path', () => {
 
   it('threads user_context through unchanged', () => {
     const scope = intakeScope({
-      subscription_id: subId,
+      subscription_ids: [subId],
       user_context: 'we deployed a caching layer last week',
     });
     expect(scope.user_context).toBe('we deployed a caching layer last week');
@@ -58,13 +58,13 @@ describe('intakeScope — happy path', () => {
 
 describe('intakeScope — validation', () => {
   it('throws when subscription is not a UUID (caught by ScopeSchema)', () => {
-    expect(() => intakeScope({ subscription_id: 'not-a-uuid' })).toThrow();
+    expect(() => intakeScope({ subscription_ids: ['not-a-uuid'] })).toThrow();
   });
 
   it('throws when time_window.end <= time_window.start', () => {
     expect(() =>
       intakeScope({
-        subscription_id: subId,
+        subscription_ids: [subId],
         time_window_start: '2026-05-08T00:00:00Z',
         time_window_end: '2026-05-01T00:00:00Z',
       }),

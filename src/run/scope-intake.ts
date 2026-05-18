@@ -8,7 +8,8 @@ import { ScopeSchema, type Scope } from '../schemas/index.js';
  */
 
 export interface ScopeIntakeInput {
-  subscription_id: string;
+  /** One or more Azure subscription UUIDs to analyze. */
+  subscription_ids: string[];
   resource_group_names?: string[];
   time_window_start?: string;
   time_window_end?: string;
@@ -21,6 +22,10 @@ export interface ScopeIntakeInput {
 }
 
 export function intakeScope(input: ScopeIntakeInput): Scope {
+  if (input.subscription_ids.length === 0) {
+    throw new Error('intakeScope: subscription_ids must contain at least one subscription.');
+  }
+
   const now = input.now ?? new Date();
   const day = 86_400_000;
 
@@ -46,18 +51,23 @@ export function intakeScope(input: ScopeIntakeInput): Scope {
     );
   }
 
+  const subPart =
+    input.subscription_ids.length === 1
+      ? `subscription ${input.subscription_ids[0]}`
+      : `${input.subscription_ids.length} subscriptions: ${input.subscription_ids.join(', ')}`;
+
   const rgPart =
     input.resource_group_names && input.resource_group_names.length > 0
       ? `${input.resource_group_names.length} resource group(s): ${input.resource_group_names.join(', ')}`
       : 'no resource-group filter';
 
   const summary =
-    `subscription ${input.subscription_id}, ${rgPart}, ` +
+    `${subPart}, ${rgPart}, ` +
     `analysis ${startIso} → ${endIso}, baseline ${baselineStartIso} → ${baselineEndIso}, ` +
     `analysis_type=cost_surprise`;
 
   return ScopeSchema.parse({
-    subscription_ids: [input.subscription_id],
+    subscription_ids: input.subscription_ids,
     resource_group_names: input.resource_group_names,
     time_window: { start: startIso, end: endIso },
     baseline_window: { start: baselineStartIso, end: baselineEndIso },

@@ -3,7 +3,6 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { MCPClient, assertRequiredCapabilities } from '../mcp/client.js';
-import type { MCPTransport } from '../mcp/transport.js';
 import { EvidenceExecutor } from '../evidence/executor.js';
 import { EvidenceNormalizer } from '../evidence/normalizer.js';
 import { Planner } from '../reasoning/planner.js';
@@ -41,7 +40,14 @@ import type { CredentialIdentity } from './credential-factory.js';
 export interface RunOptions {
   config: Config;
   scope: Scope;
-  transport: MCPTransport;
+  /**
+   * MCPClient with its transport already constructed. The orchestrator
+   * calls .discover() on it (idempotent — caches), so callers may call
+   * discover() ahead of time (e.g., for subscription auto-discovery)
+   * and pass the same client through; the second discover() returns the
+   * cached catalog without a network round trip.
+   */
+  client: MCPClient;
   model: ModelClient;
   modelProvider: string;
   credentialIdentity: CredentialIdentity;
@@ -159,7 +165,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     ...(ctx.promptsCwd ? { cwd: ctx.promptsCwd } : {}),
   });
 
-  const client = new MCPClient({ transport: ctx.transport });
+  const client = ctx.client;
 
   const catalog = await withSpan(SpanNames.CapabilityDiscovery, async (span) => {
     const c = await client.discover();

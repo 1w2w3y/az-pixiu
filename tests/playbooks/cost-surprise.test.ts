@@ -6,7 +6,7 @@ import { PHASE_1_READ_ONLY_ALLOWLIST } from '../../src/mcp/allowlist.js';
 const subId = '11111111-1111-1111-1111-111111111111';
 
 const baseScope = intakeScope({
-  subscription_id: subId,
+  subscription_ids: [subId],
   time_window_start: '2026-05-01T00:00:00Z',
   time_window_end: '2026-05-08T00:00:00Z',
   baseline_window_start: '2026-04-24T00:00:00Z',
@@ -37,7 +37,7 @@ describe('costSurprisePlaybook', () => {
 
   it('emits per-RG activity_log + resource_graph when resource groups are scoped', () => {
     const scoped = intakeScope({
-      subscription_id: subId,
+      subscription_ids: [subId],
       resource_group_names: ['rg-a', 'rg-b'],
       time_window_start: '2026-05-01T00:00:00Z',
       time_window_end: '2026-05-08T00:00:00Z',

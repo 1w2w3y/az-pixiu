@@ -4,6 +4,10 @@ import { intakeScope } from './run/scope-intake.js';
 import { runAnalysis } from './run/orchestrator.js';
 import { diagnose, type DiagnoseResult } from './run/diagnose.js';
 import {
+  discoverTopSubscriptions,
+  SubscriptionDiscoveryError,
+} from './run/subscription-discovery.js';
+import {
   buildCredential,
   describeCredential,
   type CredentialMode,
@@ -11,6 +15,7 @@ import {
 import { FixtureMCPTransport } from './mcp/fixture.js';
 import { LiveMCPTransport } from './mcp/live.js';
 import type { MCPTransport } from './mcp/transport.js';
+import { MCPClient } from './mcp/client.js';
 import { OpenAIModelClient } from './model/openai-client.js';
 import { MockModelClient } from './model/mock-client.js';
 import type { ModelClient } from './model/client.js';
@@ -20,7 +25,8 @@ const USAGE = `Usage:
   pixiu diagnose [flags]
 
 analyze flags:
-  --subscription <id>              Azure subscription GUID (required)
+  --subscription <id>              Azure subscription GUID. May be repeated. If omitted, the agent auto-discovers the top 3 subscriptions by resource count via AMG-MCP.
+  --max-subscriptions <n>          When auto-discovering, how many top subscriptions to analyze (default: 3)
   --resource-group <name>          May be repeated
   --from <iso>                     time_window start (default: now − 7d)
   --to <iso>                       time_window end (default: now)
@@ -42,7 +48,9 @@ shared flags:
 
 interface AnalyzeArgs {
   configPath?: string;
-  subscription: string;
+  /** Explicit subscriptions; if empty, the CLI auto-discovers. */
+  subscriptions: string[];
+  maxSubscriptions: number;
   resourceGroups?: string[];
   resourceTypeFilter?: string[];
   from?: string;
@@ -65,7 +73,8 @@ async function main(): Promise<number> {
     options: {
       help: { type: 'boolean', short: 'h' },
       config: { type: 'string' },
-      subscription: { type: 'string' },
+      subscription: { type: 'string', multiple: true },
+      'max-subscriptions': { type: 'string' },
       'resource-group': { type: 'string', multiple: true },
       'resource-type': { type: 'string', multiple: true },
       from: { type: 'string' },
@@ -110,14 +119,13 @@ async function runAnalyzeCommand(
     );
     return 2;
   }
-  if (!values.subscription || typeof values.subscription !== 'string') {
-    process.stderr.write('analyze cost-surprise: --subscription is required.\n');
-    return 2;
-  }
+  const explicitSubs = stringArrayOrUndefined(values.subscription) ?? [];
+  const maxSubs = parsePositiveInt(values['max-subscriptions'], 3);
 
   const args: AnalyzeArgs = {
     configPath: stringOrUndefined(values.config),
-    subscription: values.subscription,
+    subscriptions: explicitSubs,
+    maxSubscriptions: maxSubs,
     resourceGroups: stringArrayOrUndefined(values['resource-group']),
     resourceTypeFilter: stringArrayOrUndefined(values['resource-type']),
     from: stringOrUndefined(values.from),
@@ -133,18 +141,9 @@ async function runAnalyzeCommand(
     credentialMode: parseCredential(values.credential),
   };
 
+  let client: MCPClient | undefined;
   try {
     const config = await loadConfig(args.configPath ? { path: args.configPath } : {});
-    const scope = intakeScope({
-      subscription_id: args.subscription,
-      ...(args.resourceGroups ? { resource_group_names: args.resourceGroups } : {}),
-      ...(args.resourceTypeFilter ? { resource_type_filter: args.resourceTypeFilter } : {}),
-      ...(args.from ? { time_window_start: args.from } : {}),
-      ...(args.to ? { time_window_end: args.to } : {}),
-      ...(args.baselineFrom ? { baseline_window_start: args.baselineFrom } : {}),
-      ...(args.baselineTo ? { baseline_window_end: args.baselineTo } : {}),
-      ...(args.userContext ? { user_context: args.userContext } : {}),
-    });
 
     const credentialIdentity = describeCredential(args.credentialMode);
     const credential = buildCredential(args.credentialMode);
@@ -155,6 +154,38 @@ async function runAnalyzeCommand(
     } else {
       transport = new LiveMCPTransport({ endpoint: config.amg.endpoint, credential });
     }
+
+    client = new MCPClient({ transport });
+    await client.discover();
+
+    // Resolve subscriptions: explicit > auto-discover > fail.
+    let subscriptionIds = args.subscriptions;
+    if (subscriptionIds.length === 0) {
+      process.stdout.write(
+        `No --subscription given; discovering top ${args.maxSubscriptions} subscription(s) by resource count via AMG-MCP...\n`,
+      );
+      const discovered = await discoverTopSubscriptions(client, args.maxSubscriptions);
+      subscriptionIds = discovered.selected_subscription_ids;
+      process.stdout.write(
+        `Discovered ${subscriptionIds.length} subscription(s): ${subscriptionIds.join(', ')}\n`,
+      );
+      if (discovered.diagnostics.length > 0) {
+        for (const d of discovered.diagnostics) {
+          process.stdout.write(`  note: ${d}\n`);
+        }
+      }
+    }
+
+    const scope = intakeScope({
+      subscription_ids: subscriptionIds,
+      ...(args.resourceGroups ? { resource_group_names: args.resourceGroups } : {}),
+      ...(args.resourceTypeFilter ? { resource_type_filter: args.resourceTypeFilter } : {}),
+      ...(args.from ? { time_window_start: args.from } : {}),
+      ...(args.to ? { time_window_end: args.to } : {}),
+      ...(args.baselineFrom ? { baseline_window_start: args.baselineFrom } : {}),
+      ...(args.baselineTo ? { baseline_window_end: args.baselineTo } : {}),
+      ...(args.userContext ? { user_context: args.userContext } : {}),
+    });
 
     let model: ModelClient;
     let modelProvider: string;
@@ -181,7 +212,7 @@ async function runAnalyzeCommand(
     const result = await runAnalysis({
       config,
       scope,
-      transport,
+      client,
       model,
       modelProvider,
       credentialIdentity,
@@ -197,11 +228,17 @@ async function runAnalyzeCommand(
       process.stderr.write(`Config error: ${err.message}\n`);
       return 1;
     }
+    if (err instanceof SubscriptionDiscoveryError) {
+      process.stderr.write(`Subscription discovery: ${err.message}\n`);
+      return 5;
+    }
     process.stderr.write(`Run failed: ${describe(err)}\n`);
     if (err instanceof Error && err.stack) {
       process.stderr.write(err.stack + '\n');
     }
     return 4;
+  } finally {
+    if (client) await client.close().catch(() => undefined);
   }
 }
 
@@ -253,6 +290,12 @@ function parseObservability(v: unknown): 'noop' | 'memory' | 'langfuse' {
 function parseCredential(v: unknown): CredentialMode {
   if (v === 'azure-cli' || v === 'default' || v === 'mock') return v;
   return 'azure-cli';
+}
+
+function parsePositiveInt(v: unknown, fallback: number): number {
+  if (typeof v !== 'string') return fallback;
+  const n = Number.parseInt(v, 10);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
 function describe(err: unknown): string {

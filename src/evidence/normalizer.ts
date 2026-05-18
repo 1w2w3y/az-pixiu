@@ -9,6 +9,7 @@ import {
 import type { RawEvidence } from './executor.js';
 import { isEmptyResult } from '../failure/taxonomy.js';
 import { shortDigest } from '../mcp/digest.js';
+import { extractText, tryParseJson, isWrappedError, classifyWrappedError } from '../mcp/content.js';
 
 export interface NormalizationContext {
   /**
@@ -49,9 +50,36 @@ export class EvidenceNormalizer {
       const time_window = extractTimeWindow(raw.request.parameters) ?? context.defaultTimeWindow;
       const caveats: string[] = [];
 
-      const content = raw.result.content;
+      // Decode MCP-standard content: typically `content: [{type:"text", text:"..."}]`.
+      // The text may be a JSON-stringified payload, plain text, or an
+      // AMG-MCP wrapped error envelope (e.g., Grafana data-source auth
+      // failure surfaced as a successful tool result).
+      const rawContent = raw.result.content;
+      const text = extractText(raw.result);
+      const wrapped = isWrappedError(text);
+      const parsed = wrapped ? undefined : tryParseJson(text);
+      const decoded: unknown = parsed ?? (text.length > 0 ? text : rawContent);
 
-      if (isEmptyResult(content)) {
+      if (wrapped) {
+        const category = classifyWrappedError(text);
+        caveats.push(`upstream wrapped error: ${text.slice(0, 120)}`);
+        data_quality.push(
+          DataQualityFindingSchema.parse({
+            dq_id: `dq-${++dqCounter}`,
+            category,
+            affected_capability: raw.request.capability,
+            affected_scope_subset: scope_subset,
+            consequence_for_analysis: `${raw.request.capability} returned a wrapped error (${category}) instead of data: ${text.slice(0, 240)}`,
+            impact_on_recommendations: [],
+            actionable_hint:
+              category === 'auth'
+                ? 'Re-authenticate (e.g., `az login`) and check that the Grafana Azure Monitor data source can authenticate to Azure on behalf of your identity.'
+                : category === 'authz_gap'
+                  ? 'Ensure your identity (or the Grafana data source service principal) holds Reader on the target scope.'
+                  : 'Inspect the raw payload — the response did not match a known data shape.',
+          }),
+        );
+      } else if (isEmptyResult(decoded)) {
         caveats.push('empty payload from upstream');
         data_quality.push(
           DataQualityFindingSchema.parse({
@@ -65,7 +93,7 @@ export class EvidenceNormalizer {
           }),
         );
       } else if (raw.request.capability === 'amgmcp_query_resource_graph') {
-        const tagging = inspectTagging(content);
+        const tagging = inspectTagging(decoded);
         if (tagging.total > 0 && tagging.untagged / tagging.total >= 0.5) {
           caveats.push(`${tagging.untagged}/${tagging.total} resources untagged`);
           data_quality.push(
@@ -91,8 +119,8 @@ export class EvidenceNormalizer {
         query_intent: raw.request.intent,
         scope_subset,
         time_window,
-        payload_ref: { kind: 'inline', data: content },
-        payload_summary: summarize(raw.request.capability, content),
+        payload_ref: { kind: 'inline', data: decoded },
+        payload_summary: summarize(raw.request.capability, decoded),
         caveats,
       });
 
