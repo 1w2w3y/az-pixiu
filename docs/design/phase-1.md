@@ -110,6 +110,7 @@ Ten components, each owning one architectural concern from the [architecture pri
 - **Purpose.** Build, populate, and finalize the Langfuse trace for each run. Manage prompt fetch and versioning. Tag every span with the shared vocabulary (§14).
 - **Inputs / outputs.** Component-level events → Langfuse trace ID (or local JSON trace artifact when Langfuse is disabled).
 - **Hard constraints.** [Langfuse observability PRD](../prd/langfuse-observability.md) FR-1, FR-2, FR-3, FR-5, FR-6, FR-15. Phase 1 default: local-only Langfuse + summarized tool outputs in spans; full payloads referenced by hash in the local `run.json` artifact.
+- **Implementation.** OTEL-based via the Langfuse TS SDK. LLM spans (`reasoning.model_call`) are auto-emitted by wrapping the Foundry OpenAI client with `observeOpenAI` from `@langfuse/openai` (§15.2); every other span in the §14 vocabulary is emitted manually via `startActiveObservation()`. Both flow through the same `LangfuseSpanProcessor` and compose via OTEL context propagation, so the run produces a single trace tree.
 
 ### 4.10 `cli` — task-oriented CLI
 
@@ -366,7 +367,7 @@ Options:
 
 - **A.** Freeform text + parser. Brittle. Rejected.
 - **B.** JSON mode + manual schema check. Workable but lets shape drift.
-- **C. (recommended)** Provider strict-JSON-Schema mode (`response_format: json_schema` with `strict: true` on Foundry-hosted GPT-5 family) + Zod validation. Belt-and-braces. The OpenAI SDK's `zodResponseFormat` helper accepts a Zod schema directly and emits the JSON Schema Foundry expects; the same Zod schema then validates the response client-side and produces a compile-time-typed value via `z.infer<>`. Anthropic tool-use schema is the equivalent if the provider is swapped.
+- **C. (recommended)** Provider strict-JSON-Schema mode (`response_format: json_schema` with `strict: true` on Foundry-hosted GPT-5 family) + Zod validation. Belt-and-braces. The OpenAI SDK's `zodResponseFormat` helper accepts a Zod schema directly and emits the JSON Schema Foundry expects; the same Zod schema then validates the response client-side and produces a compile-time-typed value via `z.infer<>`. The helper composes transparently with the `@langfuse/openai` wrapper (§15.2) — the wrapped client preserves the OpenAI SDK call shape unchanged. Anthropic tool-use schema is the equivalent if the provider is swapped.
 - **D.** Function calling as schema carrier. Equivalent to C in practice.
 
 **Phase 1 default: C.** Validation failure triggers one repair round; a second failure is captured as a first-class finding.
@@ -603,12 +604,14 @@ Neither AMG-MCP nor Microsoft Foundry constrains client language — both are la
 
 | Option | Trade-offs |
 |---|---|
-| **Raw model SDK + manual orchestration** ✅ | Smallest dependency surface; exact control over spans, retries, schema. The two-LLM-call loop in §7 is small enough to write directly. Maximally reversible. |
-| Mastra / OpenAI Agents SDK (TS) | TypeScript-native agent frameworks with tool-use, state, and OTEL hooks. Trade-off: opinionated abstractions for a two-LLM-call loop that's small enough to write directly; couples component shape to a framework before the loop has proved itself. |
-| LangGraph | State machine; community examples. Trade-off: opinionated abstractions; risks coupling architecture to LangGraph idioms before Phase 1 has proved the loop shape. |
-| Foundry Agents Service | Hosted agent runtime in the same Azure tenant; capability discovery, state, and tool wiring are server-side. Trade-off: orchestration moves out of the agent, which is incompatible with the §7.5 deterministic enforcement and the fixture-replay seam (§13); also not local-first in the strict sense. |
+| **OpenAI SDK + `@langfuse/openai` + manual orchestration** ✅ | Smallest dependency surface that still earns OTEL-native LLM telemetry. `observeOpenAI(new AzureOpenAI(...))` wraps the Foundry client (§15.3) and auto-emits prompts, completions, token usage, USD cost, latency, and errors as OTEL spans routed by Langfuse's `LangfuseSpanProcessor`. The §14 vocabulary outside `reasoning.model_call` is emitted manually via `startActiveObservation()`, composing with the auto-spans through OTEL context propagation. Structured outputs continue to use the OpenAI SDK's `zodResponseFormat` (§8.3) on the wrapped client unchanged. Maximally reversible — the wrapper is a one-line swap; the provider itself stays swappable behind §13's `ModelClient`. |
+| Vercel AI SDK | Closest alternative — OTEL-native, Langfuse-supported via the same `LangfuseSpanProcessor`, TypeScript-first, ergonomic `generateObject({ schema })` for structured output. Trade-off: adds a `generateObject` / `generateText` abstraction over OpenAI SDK calls. Its other value-adds (multi-provider routing, agent loops, tool-use plumbing, streaming) are either already covered by §13's `ModelClient` interface or explicitly out of scope (§7.1, §15.3). Worth reconsidering if Phase 2 wants multi-provider routing as a first-class CLI feature. |
+| Agent frameworks (Mastra, OpenAI Agents SDK, LangGraph JS, Microsoft Agent Framework) | Each offers some combination of agent loops, workflows, state machines, and OTEL/Langfuse integration. Common rejection: this design has structurally excluded tool-using agent loops (§7.1, §15.3) and owns its own loop with deterministic enforcement between LLM calls (§7.5). Framework idioms invert control over orchestration; this design has too much determinism between LLM calls for inversion of control to be a win. Mastra additionally ships evals, prompt management, and observability surfaces that duplicate Langfuse choices already made. |
+| Foundry Agents Service | Hosted agent runtime; orchestration moves server-side. Incompatible with §7.5 deterministic enforcement, the §13 fixture-replay seam, and local-first in the strict sense. |
 
-**Phase 1 default: raw model SDK.** Framework lock-in this early is a premature commitment ([architecture principles](../architecture-principles.md) *reversible decisions*). Affects only the `reasoning` component (§4.7).
+**Phase 1 default: OpenAI SDK + `@langfuse/openai` + manual orchestration.** The architectural commitments elsewhere in this design — Foundry-only for Phase 1 (§15.3), no tool-using agent loops (§7.1), Zod via the OpenAI SDK's `zodResponseFormat` (§8.3), Langfuse-owned tracing through the §14 vocabulary (§4.9), `ModelClient` swap behind an interface (§13) — erase most agent-framework value-adds. What remains is auto-emission of LLM telemetry, which `@langfuse/openai` provides through the same OTEL pipeline that carries the manually-emitted §14 spans. Owning the main loop *is* the architectural choice, not just an implementation default.
+
+**Reconsider in Phase 2+ if:** resumability becomes a hard requirement (LangGraph checkpointing or a hand-rolled state machine), sub-agents become real (specialized analyzers per resource type), four-plus analysis types share complex scheduling that an internal mini-orchestrator can't carry, or streaming / cancellation / human-in-the-loop become first-class CLI features.
 
 ### 15.3 Model provider
 
@@ -735,7 +738,7 @@ Defensible build order; each step independently testable. Stages 1–6 require n
 7. Planner prompt v1; replace the hardcoded plan with planner output; planner-output validation against capability catalog; one repair pass.
 8. Confidence derivation + DQ post-processing + output linter for read-only enforcement.
 9. Jinja markdown templating; `run.json` sidecar; trace_id in report footer.
-10. Langfuse integration: spans (the §14 vocabulary), prompt sync, RunMetadata, redaction.
+10. Langfuse integration: wrap the OpenAI client with `observeOpenAI` from `@langfuse/openai` for auto-emitted LLM spans; emit the rest of the §14 vocabulary via `startActiveObservation()`; configure `LangfuseSpanProcessor`. Add prompt sync, RunMetadata, redaction.
 11. `LiveMCPTransport` against a real AMG-MCP instance. Smoke test on a controlled scope (single subscription, 7-day window, single RG).
 12. First eval dataset (3–5 fixture-based items) + a minimal scoring rubric: structural correctness, evidence-citation completeness, confidence-derivation consistency, read-only language adherence.
 
