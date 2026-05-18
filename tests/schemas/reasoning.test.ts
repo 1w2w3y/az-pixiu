@@ -20,7 +20,11 @@ const validFact = {
   fact_id: 'fact-1',
   statement: 'cost on Microsoft.DBforPostgreSQL rose 38% versus baseline',
   evidence_ids: ['ev-1', 'ev-2'],
-  scope_subset: { subscription_ids: ['11111111-1111-1111-1111-111111111111'] },
+  scope_subset: {
+    subscription_ids: ['11111111-1111-1111-1111-111111111111'],
+    resource_group_names: null,
+    resource_ids: null,
+  },
 };
 
 const validHypothesis = {

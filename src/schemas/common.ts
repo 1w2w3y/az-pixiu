@@ -45,21 +45,40 @@ export type TimeWindow = z.infer<typeof TimeWindowSchema>;
 // ---------- ScopeSubset (§5.2, §5.6) ----------
 // A loose sub-scope referenced by EvidenceRecord and DataQualityFinding to
 // describe which slice was covered or blocked.
-
-// .nullable().optional() — same OpenAI strict-mode constraint as
-// EvidenceRequestSchema.expected_role: optional fields surfaced via
-// zodResponseFormat must also be nullable. ScopeSubset rides inside
-// FactSchema and DataQualityFindingSchema, both of which the reasoner LLM
-// emits, so this schema crosses the strict-mode boundary.
+//
+// All fields are required-and-nullable (not `.optional()`). Two reasons:
+//   1. OpenAI strict-mode structured outputs require every property to
+//      appear in `required` anyway — `.optional()` is dead weight on
+//      LLM-output schemas. ScopeSubset rides inside FactSchema and
+//      DataQualityFindingSchema, both of which the reasoner LLM emits.
+//   2. When the same schema is referenced from multiple places (Fact +
+//      DataQualityFinding here), the vendored zod-to-json-schema extracts
+//      it to `definitions`. The combination of extraction + `.optional()`
+//      produces a broken self-referential `anyOf: [{not: {}}, {$ref: self}]`
+//      cycle that OpenAI's strict-schema validator rejects with 400
+//      "Invalid schema for response_format". `.nullable()` alone avoids it.
+//
+// TypeScript callers must pass explicit `null` for missing slices —
+// see `emptyScopeSubset()` for a convenience constructor.
 export const ScopeSubsetSchema = z
   .object({
-    subscription_ids: z.array(AzureSubscriptionIdSchema).nullable().optional(),
-    resource_group_names: z.array(z.string().min(1)).nullable().optional(),
-    resource_ids: z.array(z.string().min(1)).nullable().optional(),
+    subscription_ids: z.array(AzureSubscriptionIdSchema).nullable(),
+    resource_group_names: z.array(z.string().min(1)).nullable(),
+    resource_ids: z.array(z.string().min(1)).nullable(),
   })
   .strict();
 
 export type ScopeSubset = z.infer<typeof ScopeSubsetSchema>;
+
+/** Convenience: a fully-null ScopeSubset, optionally overridden. */
+export function emptyScopeSubset(overrides: Partial<ScopeSubset> = {}): ScopeSubset {
+  return {
+    subscription_ids: null,
+    resource_group_names: null,
+    resource_ids: null,
+    ...overrides,
+  };
+}
 
 // ---------- Analysis types (§5.1) ----------
 // Phase 1 implements cost_surprise only; remaining names are reserved.

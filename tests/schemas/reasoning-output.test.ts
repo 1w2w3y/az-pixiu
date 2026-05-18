@@ -17,7 +17,7 @@ const minimalOutput = {
       fact_id: 'fact-1',
       statement: 'cost rose 38%',
       evidence_ids: ['ev-1'],
-      scope_subset: {},
+      scope_subset: { subscription_ids: null, resource_group_names: null, resource_ids: null },
     },
   ],
   hypotheses: [

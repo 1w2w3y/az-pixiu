@@ -414,8 +414,9 @@ function failureToDq(failure: ClassifiedFailure, index: number): DataQualityFind
     dq_id: `dq-failure-${index + 1}`,
     category: failure.category,
     affected_capability: failure.capability,
+    affected_scope_subset: null,
     consequence_for_analysis: failure.message,
     impact_on_recommendations: [],
-    ...(failure.actionable_hint ? { actionable_hint: failure.actionable_hint } : {}),
+    actionable_hint: failure.actionable_hint ?? null,
   });
 }

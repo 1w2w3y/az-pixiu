@@ -17,7 +17,11 @@ const validRecord = {
   source_capability: 'cost_analysis',
   capability_version: '1.0.0',
   query_intent: 'cost_breakdown',
-  scope_subset: { subscription_ids: ['11111111-1111-1111-1111-111111111111'] },
+  scope_subset: {
+    subscription_ids: ['11111111-1111-1111-1111-111111111111'],
+    resource_group_names: null,
+    resource_ids: null,
+  },
   time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
   payload_ref: { kind: 'inline', data: { total: 1234.56 } },
   payload_summary: { total: 1234.56 },

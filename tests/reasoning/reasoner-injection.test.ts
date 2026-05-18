@@ -31,7 +31,7 @@ const evidence: EvidenceRecord[] = [
     source_capability: 'cost_analysis',
     capability_version: '1.0.0',
     query_intent: 'cost_breakdown',
-    scope_subset: { subscription_ids: [subId] },
+    scope_subset: { subscription_ids: [subId], resource_group_names: null, resource_ids: null },
     time_window: baseScope.time_window,
     payload_ref: {
       kind: 'inline',
@@ -53,7 +53,7 @@ const canned: ReasoningOutput = {
       fact_id: 'fact-1',
       statement: 'cost was 617.58',
       evidence_ids: ['ev-1'],
-      scope_subset: { subscription_ids: [subId] },
+      scope_subset: { subscription_ids: [subId], resource_group_names: null, resource_ids: null },
     },
   ],
   hypotheses: [],

@@ -138,7 +138,11 @@ describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)',
             fact_id: factId,
             statement: 'PostgreSQL cost rose from 446.91 to 617.58 USD over the analysis window',
             evidence_ids: [records[0]!.evidence_id, records[1]!.evidence_id],
-            scope_subset: { subscription_ids: [subId] },
+            scope_subset: {
+              subscription_ids: [subId],
+              resource_group_names: null,
+              resource_ids: null,
+            },
           },
         ],
         hypotheses: [

@@ -20,7 +20,7 @@ const evidence: EvidenceRecord[] = [
     source_capability: 'cost_analysis',
     capability_version: '1.0.0',
     query_intent: 'cost_breakdown',
-    scope_subset: { subscription_ids: [subId] },
+    scope_subset: { subscription_ids: [subId], resource_group_names: null, resource_ids: null },
     time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
     payload_ref: { kind: 'inline', data: { total: { cost: 617.58 } } },
     payload_summary: {},
@@ -40,7 +40,7 @@ const cannedOutput: ReasoningOutput = {
       fact_id: 'fact-1',
       statement: 'cost was 617.58',
       evidence_ids: ['ev-cost-1'],
-      scope_subset: { subscription_ids: [subId] },
+      scope_subset: { subscription_ids: [subId], resource_group_names: null, resource_ids: null },
     },
   ],
   hypotheses: [

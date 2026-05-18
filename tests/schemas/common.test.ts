@@ -61,8 +61,18 @@ describe('TimeWindowSchema', () => {
 });
 
 describe('ScopeSubsetSchema', () => {
-  it('accepts an empty object (everything optional)', () => {
-    expect(ScopeSubsetSchema.safeParse({}).success).toBe(true);
+  it('accepts an all-null subset (no slice specified)', () => {
+    expect(
+      ScopeSubsetSchema.safeParse({
+        subscription_ids: null,
+        resource_group_names: null,
+        resource_ids: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects an empty object — all fields are required-and-nullable, not optional', () => {
+    expect(ScopeSubsetSchema.safeParse({}).success).toBe(false);
   });
 
   it('accepts a fully-populated subset', () => {
@@ -75,12 +85,21 @@ describe('ScopeSubsetSchema', () => {
   });
 
   it('rejects a non-UUID subscription id', () => {
-    const result = ScopeSubsetSchema.safeParse({ subscription_ids: ['not-a-uuid'] });
+    const result = ScopeSubsetSchema.safeParse({
+      subscription_ids: ['not-a-uuid'],
+      resource_group_names: null,
+      resource_ids: null,
+    });
     expect(result.success).toBe(false);
   });
 
   it('rejects unknown keys', () => {
-    const result = ScopeSubsetSchema.safeParse({ regions: ['eastus'] });
+    const result = ScopeSubsetSchema.safeParse({
+      subscription_ids: null,
+      resource_group_names: null,
+      resource_ids: null,
+      regions: ['eastus'],
+    });
     expect(result.success).toBe(false);
   });
 });

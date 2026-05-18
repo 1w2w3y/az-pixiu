@@ -134,25 +134,26 @@ export class EvidenceNormalizer {
 // --- helpers ---
 
 function extractScopeSubset(params: Record<string, unknown>): ScopeSubset {
-  const subset: ScopeSubset = {};
+  let subscription_ids: string[] | null = null;
+  let resource_group_names: string[] | null = null;
+  let resource_ids: string[] | null = null;
+
   if (typeof params.subscription_id === 'string') {
-    subset.subscription_ids = [params.subscription_id];
+    subscription_ids = [params.subscription_id];
   } else if (Array.isArray(params.subscription_ids)) {
-    subset.subscription_ids = params.subscription_ids.filter(
-      (s): s is string => typeof s === 'string',
-    );
+    subscription_ids = params.subscription_ids.filter((s): s is string => typeof s === 'string');
   }
   if (typeof params.resource_group_name === 'string') {
-    subset.resource_group_names = [params.resource_group_name];
+    resource_group_names = [params.resource_group_name];
   } else if (Array.isArray(params.resource_group_names)) {
-    subset.resource_group_names = params.resource_group_names.filter(
+    resource_group_names = params.resource_group_names.filter(
       (s): s is string => typeof s === 'string',
     );
   }
   if (Array.isArray(params.resource_ids)) {
-    subset.resource_ids = params.resource_ids.filter((s): s is string => typeof s === 'string');
+    resource_ids = params.resource_ids.filter((s): s is string => typeof s === 'string');
   }
-  return subset;
+  return { subscription_ids, resource_group_names, resource_ids };
 }
 
 function extractTimeWindow(params: Record<string, unknown>): TimeWindow | undefined {

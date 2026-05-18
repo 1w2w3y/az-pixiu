@@ -5,7 +5,11 @@ const validFinding = {
   dq_id: 'dq-1',
   category: 'missing_telemetry',
   affected_capability: 'query_resource_metric',
-  affected_scope_subset: { resource_group_names: ['rg-db-prod'] },
+  affected_scope_subset: {
+    subscription_ids: null,
+    resource_group_names: ['rg-db-prod'],
+    resource_ids: null,
+  },
   consequence_for_analysis:
     'utilization signal is unavailable for 2 PostgreSQL servers; cost-only recommendations are bounded',
   impact_on_recommendations: ['rec-1'],
@@ -17,9 +21,14 @@ describe('DataQualityFindingSchema', () => {
     expect(DataQualityFindingSchema.safeParse(validFinding).success).toBe(true);
   });
 
-  it('accepts a finding without an actionable_hint or affected_capability', () => {
-    const { actionable_hint: _h, affected_capability: _c, ...minimal } = validFinding;
-    expect(DataQualityFindingSchema.safeParse(minimal).success).toBe(true);
+  it('accepts a finding with null actionable_hint and affected_capability', () => {
+    expect(
+      DataQualityFindingSchema.safeParse({
+        ...validFinding,
+        actionable_hint: null,
+        affected_capability: null,
+      }).success,
+    ).toBe(true);
   });
 
   it('rejects an unknown category', () => {

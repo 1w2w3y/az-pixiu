@@ -199,8 +199,11 @@ function syntheticDq(counter: number, category: DataQualityFinding['category'], 
   return {
     dq_id: `dq-synth-${counter}` as DataQualityFinding['dq_id'],
     category,
+    affected_capability: null,
+    affected_scope_subset: null,
     consequence_for_analysis: consequence,
     impact_on_recommendations: [],
+    actionable_hint: null,
   };
 }
 
