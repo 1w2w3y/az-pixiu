@@ -49,6 +49,10 @@ Az-Pixiu is in its earliest stage. This repository currently contains foundation
 - [CLI experience PRD](docs/prd/cli-experience.md) — command-line and local developer experience requirements.
 - [Future multi-agent platform PRD](docs/prd/future-multi-agent-platform.md) — long-term vision for multiple Azure operational agents.
 
+## Design
+
+- [Phase 1 design](docs/design/phase-1.md) — the minimum viable agent: component decomposition, data shapes, reasoning loop, trace vocabulary, and option sets for deliberately-open tech decisions.
+
 ## Audience
 
 The project is written for two audiences at once. The first is engineers and operators who would use a local Azure FinOps agent to understand their own subscription spending. The second is engineers learning how to build, instrument, and evaluate AI systems in a disciplined way. The documentation, the codebase, and the evaluation artifacts are intended to serve both.
