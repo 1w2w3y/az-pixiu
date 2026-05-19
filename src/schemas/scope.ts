@@ -23,6 +23,11 @@ export const ScopeSchema = z
     resource_type_filter: z.array(z.string().min(1)).optional(),
     user_context: z.string().optional(),
     effective_scope_summary: z.string().min(1),
+    // Human-readable name per subscription id, when known up front
+    // (e.g. populated from the auto-discovery result). Absent for
+    // explicit-id runs; renderers should fall back to looking up names
+    // from the `amgmcp_query_azure_subscriptions` evidence record.
+    subscription_display_names: z.record(z.string().min(1)).optional(),
   })
   .strict()
   .refine(

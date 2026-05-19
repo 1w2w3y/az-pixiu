@@ -156,4 +156,49 @@ describe('renderMarkdownReport', () => {
     const b = renderMarkdownReport({ scope, reasoning, evidence, metadata });
     expect(a).toBe(b);
   });
+
+  it('renders subscription names from scope.subscription_display_names when present', () => {
+    const named: Scope = {
+      ...scope,
+      subscription_display_names: { [subId]: 'prod-billing' },
+    };
+    const md = renderMarkdownReport({ scope: named, reasoning, evidence, metadata });
+    expect(md).toMatch(/Subscriptions:\*\*\s+"prod-billing"\s+\(11111111-/);
+  });
+
+  it('falls back to amgmcp_query_azure_subscriptions evidence when scope has no names', () => {
+    const evWithNames: EvidenceRecord[] = [
+      ...evidence,
+      {
+        evidence_id: 'ev-azure-subscriptions-aaa',
+        source_capability: 'amgmcp_query_azure_subscriptions',
+        capability_version: '1.0.0',
+        query_intent: 'inventory',
+        scope_subset: {},
+        time_window: scope.time_window,
+        payload_ref: {
+          kind: 'inline',
+          data: {
+            data: [
+              {
+                subscriptionId: subId,
+                subscriptionName: 'evidence-derived-name',
+              },
+            ],
+          },
+        },
+        payload_summary: {},
+        caveats: [],
+      },
+    ];
+    const md = renderMarkdownReport({ scope, reasoning, evidence: evWithNames, metadata });
+    expect(md).toMatch(/Subscriptions:\*\*\s+"evidence-derived-name"\s+\(11111111-/);
+  });
+
+  it('renders bare id when neither scope nor evidence carries a name', () => {
+    const md = renderMarkdownReport({ scope, reasoning, evidence, metadata });
+    expect(md).toMatch(/Subscriptions:\*\*\s+11111111-1111-1111-1111-111111111111/);
+    // and not the quoted name form
+    expect(md).not.toMatch(/Subscriptions:\*\*\s+"/);
+  });
 });

@@ -215,7 +215,7 @@ export function formatSubscription(s: { subscription_id: string; display_name?: 
   return s.display_name ? `"${s.display_name}" (${s.subscription_id})` : s.subscription_id;
 }
 
-interface ParsedSubscription {
+export interface ParsedSubscription {
   subscription_id: string;
   display_name?: string;
 }
@@ -225,7 +225,16 @@ function parseSubscriptionList(text: string): ParsedSubscription[] {
   return extractSubscriptions(parsed);
 }
 
-function extractSubscriptions(value: unknown): ParsedSubscription[] {
+/**
+ * Pull the (subscription_id, display_name?) pairs out of any of the
+ * shapes the AMG-MCP `amgmcp_query_azure_subscriptions` capability
+ * has been observed to return — live `{data:[{subscriptionName,...}]}`,
+ * legacy `{subscriptions:[{displayName,...}]}`, ARM-style `{value:[...]}`,
+ * Resource-Graph `{rows:[...]}`, or a bare array. Used by discovery
+ * and by report rendering (to look up names when Scope didn't carry
+ * them).
+ */
+export function extractSubscriptions(value: unknown): ParsedSubscription[] {
   if (Array.isArray(value)) {
     return value
       .map((item): ParsedSubscription | undefined => {

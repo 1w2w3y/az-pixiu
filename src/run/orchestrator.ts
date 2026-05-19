@@ -408,9 +408,20 @@ async function runSubscriptionDiscovery(
     }
   }
 
+  // Carry the discovered display names through to the Scope. The
+  // markdown report and effective_scope_summary will render
+  // `"<name>" (<id>)` wherever a subscription appears.
+  const displayNames: Record<string, string> = {};
+  for (const c of discovered.selected) {
+    if (c.display_name) displayNames[c.subscription_id] = c.display_name;
+  }
+
   return intakeScope({
     ...option.scopeIntake,
     subscription_ids: discovered.selected_subscription_ids,
+    ...(Object.keys(displayNames).length > 0
+      ? { subscription_display_names: displayNames }
+      : {}),
   });
 }
 
@@ -451,8 +462,14 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   process.stdout.write(
     `  ${catalog.allowed.length} capability/ies allowed, ${catalog.mutating_denied.length} mutating excluded\n`,
   );
+  const subDisplay = ctx.scope.subscription_ids
+    .map((id) => {
+      const name = ctx.scope.subscription_display_names?.[id];
+      return name ? `"${name}" (${id})` : id;
+    })
+    .join(', ');
   process.stdout.write(
-    `  analyzing ${ctx.scope.subscription_ids.length} subscription(s): ${ctx.scope.subscription_ids.join(', ')}\n`,
+    `  analyzing ${ctx.scope.subscription_ids.length} subscription(s): ${subDisplay}\n`,
   );
 
   // Plan

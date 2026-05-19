@@ -54,6 +54,43 @@ describe('intakeScope — happy path', () => {
     });
     expect(scope.user_context).toBe('we deployed a caching layer last week');
   });
+
+  it('embeds subscription_display_names and uses them in the summary', () => {
+    const scope = intakeScope({
+      subscription_ids: [subId],
+      subscription_display_names: { [subId]: 'prod-billing' },
+    });
+    expect(scope.subscription_display_names).toEqual({ [subId]: 'prod-billing' });
+    expect(scope.effective_scope_summary).toContain('"prod-billing"');
+    expect(scope.effective_scope_summary).toContain(subId);
+  });
+
+  it('uses names for multi-subscription summaries and drops names for out-of-scope ids', () => {
+    const otherSub = '22222222-2222-2222-2222-222222222222';
+    const strayId = '33333333-3333-3333-3333-333333333333';
+    const scope = intakeScope({
+      subscription_ids: [subId, otherSub],
+      subscription_display_names: {
+        [subId]: 'prod-billing',
+        [otherSub]: 'dev-sandbox',
+        [strayId]: 'unrelated',
+      },
+    });
+    expect(scope.subscription_display_names).toEqual({
+      [subId]: 'prod-billing',
+      [otherSub]: 'dev-sandbox',
+    });
+    expect(scope.effective_scope_summary).toContain('"prod-billing"');
+    expect(scope.effective_scope_summary).toContain('"dev-sandbox"');
+    expect(scope.effective_scope_summary).not.toContain('unrelated');
+  });
+
+  it('renders bare ids when no display names are supplied', () => {
+    const scope = intakeScope({ subscription_ids: [subId] });
+    expect(scope.subscription_display_names).toBeUndefined();
+    expect(scope.effective_scope_summary).toContain(`subscription ${subId}`);
+    expect(scope.effective_scope_summary).not.toContain('"');
+  });
 });
 
 describe('intakeScope — validation', () => {

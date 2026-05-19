@@ -15,6 +15,13 @@ import { ScopeSchema, type AnalysisType, type Scope } from '../schemas/index.js'
 export interface ScopeIntakeInput {
   /** One or more Azure subscription UUIDs to analyze. */
   subscription_ids: string[];
+  /**
+   * Optional human-readable name per subscription id. When provided
+   * (e.g. populated from auto-discovery), threads into the Scope and
+   * is used to build a more readable `effective_scope_summary` and
+   * report. Absent ids fall back to bare-id rendering.
+   */
+  subscription_display_names?: Record<string, string>;
   /** Which analysis to perform. Defaults to cost_surprise for backward compat. */
   analysis_type?: AnalysisType;
   resource_group_names?: string[];
@@ -26,6 +33,12 @@ export interface ScopeIntakeInput {
   user_context?: string;
   /** Override "now" for deterministic tests. */
   now?: Date;
+}
+
+/** Render an id as `"name" (id)` when a name is known, else the bare id. */
+function formatSubForSummary(id: string, names?: Record<string, string>): string {
+  const name = names?.[id];
+  return name ? `"${name}" (${id})` : id;
 }
 
 export function intakeScope(input: ScopeIntakeInput): Scope {
@@ -63,10 +76,13 @@ export function intakeScope(input: ScopeIntakeInput): Scope {
     baselineWindow = { start: baselineStartIso, end: baselineEndIso };
   }
 
+  const names = input.subscription_display_names;
   const subPart =
     input.subscription_ids.length === 1
-      ? `subscription ${input.subscription_ids[0]}`
-      : `${input.subscription_ids.length} subscriptions: ${input.subscription_ids.join(', ')}`;
+      ? `subscription ${formatSubForSummary(input.subscription_ids[0]!, names)}`
+      : `${input.subscription_ids.length} subscriptions: ${input.subscription_ids
+          .map((id) => formatSubForSummary(id, names))
+          .join(', ')}`;
 
   const rgPart =
     input.resource_group_names && input.resource_group_names.length > 0
@@ -82,6 +98,18 @@ export function intakeScope(input: ScopeIntakeInput): Scope {
     `analysis ${startIso} → ${endIso}, ${baselinePart}` +
     `analysis_type=${analysisType}`;
 
+  // Keep only the names that map to in-scope subscriptions, so the
+  // Scope object doesn't carry stray ids the rest of the pipeline
+  // doesn't know about.
+  const filteredNames =
+    names && Object.keys(names).length > 0
+      ? Object.fromEntries(
+          input.subscription_ids
+            .map((id) => [id, names[id]] as const)
+            .filter((p): p is [string, string] => typeof p[1] === 'string' && p[1].length > 0),
+        )
+      : undefined;
+
   return ScopeSchema.parse({
     subscription_ids: input.subscription_ids,
     resource_group_names: input.resource_group_names,
@@ -91,5 +119,8 @@ export function intakeScope(input: ScopeIntakeInput): Scope {
     resource_type_filter: input.resource_type_filter,
     user_context: input.user_context,
     effective_scope_summary: summary,
+    ...(filteredNames && Object.keys(filteredNames).length > 0
+      ? { subscription_display_names: filteredNames }
+      : {}),
   });
 }

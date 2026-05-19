@@ -8,6 +8,7 @@ import type {
   Recommendation,
   DataQualityFinding,
 } from '../schemas/index.js';
+import { extractSubscriptions } from '../run/subscription-discovery.js';
 
 /**
  * Markdown report assembler (design §4.8 / §10.2). Deterministic template
@@ -53,8 +54,9 @@ function title(scope: Scope): string {
 
 function scopeAndDataSources(scope: Scope, evidence: EvidenceRecord[], metadata: RunMetadata): string {
   const capabilities = Array.from(new Set(evidence.map((e) => e.source_capability))).sort();
+  const names = buildSubscriptionNameMap(scope, evidence);
   const items: Record<string, string> = {
-    Subscriptions: scope.subscription_ids.join(', '),
+    Subscriptions: scope.subscription_ids.map((id) => fmtSubscription(id, names)).join(', '),
     'Resource groups': scope.resource_group_names?.join(', ') ?? '(all in scope)',
     'Analysis window': fmtWindow(scope.time_window),
   };
@@ -220,6 +222,39 @@ function metadataFooter(metadata: RunMetadata): string {
 
 function fmtWindow(w: { start: string; end: string }): string {
   return `${w.start} → ${w.end}`;
+}
+
+/**
+ * Render a subscription id as `"<name>" (<id>)` when a name is known,
+ * otherwise the bare id.
+ */
+function fmtSubscription(id: string, names: Record<string, string>): string {
+  const name = names[id];
+  return name ? `"${name}" (${id})` : id;
+}
+
+/**
+ * Build a (subscription_id → display name) lookup. Prefers names that
+ * were carried on the Scope (e.g. populated by auto-discovery), and
+ * falls back to extracting them from the
+ * `amgmcp_query_azure_subscriptions` evidence record so explicit-id
+ * runs also get readable names.
+ */
+function buildSubscriptionNameMap(
+  scope: Scope,
+  evidence: EvidenceRecord[],
+): Record<string, string> {
+  const out: Record<string, string> = { ...(scope.subscription_display_names ?? {}) };
+  for (const ev of evidence) {
+    if (ev.source_capability !== 'amgmcp_query_azure_subscriptions') continue;
+    if (ev.payload_ref.kind !== 'inline') continue;
+    for (const sub of extractSubscriptions(ev.payload_ref.data)) {
+      if (sub.display_name && !out[sub.subscription_id]) {
+        out[sub.subscription_id] = sub.display_name;
+      }
+    }
+  }
+  return out;
 }
 
 function bullets(items: Record<string, string>): string {
