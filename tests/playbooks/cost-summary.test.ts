@@ -61,4 +61,41 @@ describe('costSummaryPlaybook', () => {
   it('throws when no subscription is in scope', () => {
     expect(() => costSummaryPlaybook({ ...makeScope(), subscription_ids: [] as never })).toThrow();
   });
+
+  it('includes a type × location cross-cut so regional cost can be tied to resource types', () => {
+    const plan = costSummaryPlaybook(makeScope());
+    const argCalls = plan.requests.filter((r) => r.capability === 'amgmcp_query_resource_graph');
+    expect(
+      argCalls.some((r) =>
+        typeof r.parameters.query === 'string' &&
+        r.parameters.query.includes('by type, location'),
+      ),
+    ).toBe(true);
+  });
+
+  it('includes a tag-coverage roll-up keyed by subscription', () => {
+    const plan = costSummaryPlaybook(makeScope());
+    const argCalls = plan.requests.filter((r) => r.capability === 'amgmcp_query_resource_graph');
+    expect(
+      argCalls.some((r) => {
+        const q = r.parameters.query;
+        return typeof q === 'string' && q.includes('no_owner') && q.includes('by subscriptionId');
+      }),
+    ).toBe(true);
+  });
+
+  it('emits one activity_log call per subscription scoped to the analysis window', () => {
+    const otherSub = '22222222-2222-2222-2222-222222222222';
+    const plan = costSummaryPlaybook(makeScope({ subscription_ids: [subId, otherSub] }));
+    const activityCalls = plan.requests.filter(
+      (r) => r.capability === 'amgmcp_query_activity_log',
+    );
+    expect(activityCalls).toHaveLength(2);
+    for (const c of activityCalls) {
+      expect((c.parameters.time_window as { start: string }).start).toBe('2026-05-01T00:00:00Z');
+      // activity_log scopes to a subscription; no RG filter for cost-summary's
+      // default sub-wide window.
+      expect(c.parameters.resource_group_name).toBeUndefined();
+    }
+  });
 });

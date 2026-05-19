@@ -118,15 +118,15 @@ const calls: FixtureCall[] = [
       isError: false,
     },
   },
-  // The cost-summary playbook closes with one inventory snapshot rather
-  // than a per-RG fan-out (src/playbooks/cost-summary.ts). The query
-  // string here matches what the playbook emits.
+  // Inventory snapshot — top resource types overall. Matches the
+  // first resource_graph query emitted by the cost-summary playbook
+  // (src/playbooks/cost-summary.ts).
   {
     capability: 'amgmcp_query_resource_graph',
     parameters: {
       subscription_ids: [SUBSCRIPTION_ID],
       query:
-        'Resources | summarize count_=count() by type | order by count_ desc | take 10',
+        'Resources | summarize count_=count() by type | order by count_ desc | take 15',
     },
     response: {
       content: {
@@ -136,6 +136,88 @@ const calls: FixtureCall[] = [
           { type: 'Microsoft.OperationalInsights/workspaces', count_: 2 },
         ],
         count: 3,
+      },
+      isError: false,
+    },
+  },
+  // Type × location cross-cut — lets the reasoner attribute regional
+  // spend concentrations to specific resource types in a single
+  // static-playbook pass.
+  {
+    capability: 'amgmcp_query_resource_graph',
+    parameters: {
+      subscription_ids: [SUBSCRIPTION_ID],
+      query:
+        'Resources | summarize count_=count() by type, location | order by count_ desc | take 15',
+    },
+    response: {
+      content: {
+        data: [
+          { type: 'Microsoft.Web/sites', location: 'westus2', count_: 9 },
+          { type: 'Microsoft.Storage/storageAccounts', location: 'westus2', count_: 4 },
+          { type: 'Microsoft.Web/sites', location: 'eastus', count_: 3 },
+          { type: 'Microsoft.Storage/storageAccounts', location: 'eastus', count_: 2 },
+          { type: 'Microsoft.OperationalInsights/workspaces', location: 'westus2', count_: 2 },
+        ],
+        count: 5,
+      },
+      isError: false,
+    },
+  },
+  // Tag-coverage roll-up — supports reporting FR-10 (grouping by
+  // owner / environment / cost-center) without requiring a fan-out.
+  {
+    capability: 'amgmcp_query_resource_graph',
+    parameters: {
+      subscription_ids: [SUBSCRIPTION_ID],
+      query:
+        "Resources | extend owner = tostring(tags['owner']), environment = tostring(tags['environment']), cost_center = tostring(tags['cost-center']) | summarize total=count(), no_owner=countif(owner == ''), no_environment=countif(environment == ''), no_cost_center=countif(cost_center == '') by subscriptionId",
+    },
+    response: {
+      content: {
+        data: [
+          {
+            subscriptionId: SUBSCRIPTION_ID,
+            total: 20,
+            no_owner: 7,
+            no_environment: 3,
+            no_cost_center: 12,
+          },
+        ],
+        count: 1,
+      },
+      isError: false,
+    },
+  },
+  // Management-plane activity for the analysis window. Empty-on-quiet
+  // is the realistic shape for a sandbox-style sub; the reasoner
+  // still gets the signal that no notable changes happened in-window.
+  {
+    capability: 'amgmcp_query_activity_log',
+    parameters: {
+      subscription_id: SUBSCRIPTION_ID,
+      time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
+    },
+    response: {
+      content: {
+        entries: [
+          {
+            operation: 'Microsoft.Web/sites/write',
+            resource_id:
+              '/subscriptions/33333333-3333-3333-3333-333333333333/resourceGroups/rg-app/providers/Microsoft.Web/sites/api-prod',
+            timestamp: '2026-05-03T14:22:00Z',
+            caller: 'deploy-pipeline@example.com',
+            status: 'Succeeded',
+          },
+          {
+            operation: 'Microsoft.Storage/storageAccounts/write',
+            resource_id:
+              '/subscriptions/33333333-3333-3333-3333-333333333333/resourceGroups/rg-storage/providers/Microsoft.Storage/storageAccounts/logsprod',
+            timestamp: '2026-05-05T09:11:00Z',
+            caller: 'platform-bot@example.com',
+            status: 'Succeeded',
+          },
+        ],
       },
       isError: false,
     },

@@ -4,9 +4,9 @@
     "subscription_ids": [
       "33333333-3333-3333-3333-333333333333"
     ],
-    "query": "Resources | summarize count_=count() by type | order by count_ desc | take 10"
+    "query": "Resources | summarize count_=count() by type | order by count_ desc | take 15"
   },
-  "parameters_digest": "8f98b0a0cb42442001893b7a7cc40a5fe178c8bdd2f22717750078046b9b496f",
+  "parameters_digest": "440509de179ec1ab7d27a1b14af77fe43ccc55f2a72bf4ee5f04c91223c4daff",
   "response": {
     "content": {
       "data": [

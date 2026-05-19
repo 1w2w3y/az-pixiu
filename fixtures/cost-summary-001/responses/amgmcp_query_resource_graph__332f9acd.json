@@ -1,0 +1,43 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "subscription_ids": [
+      "33333333-3333-3333-3333-333333333333"
+    ],
+    "query": "Resources | summarize count_=count() by type, location | order by count_ desc | take 15"
+  },
+  "parameters_digest": "332f9acdbb229e42bb011fb0844db3dfd14f525b30cac801fc44551c12edbc1a",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "type": "Microsoft.Web/sites",
+          "location": "westus2",
+          "count_": 9
+        },
+        {
+          "type": "Microsoft.Storage/storageAccounts",
+          "location": "westus2",
+          "count_": 4
+        },
+        {
+          "type": "Microsoft.Web/sites",
+          "location": "eastus",
+          "count_": 3
+        },
+        {
+          "type": "Microsoft.Storage/storageAccounts",
+          "location": "eastus",
+          "count_": 2
+        },
+        {
+          "type": "Microsoft.OperationalInsights/workspaces",
+          "location": "westus2",
+          "count_": 2
+        }
+      ],
+      "count": 5
+    },
+    "isError": false
+  }
+}
