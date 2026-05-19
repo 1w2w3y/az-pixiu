@@ -12,7 +12,8 @@
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "cost-summary": "tsx src/cli.ts analyze cost-summary --subscription-name-filter GrafanaDevRP"
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",
