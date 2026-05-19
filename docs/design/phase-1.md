@@ -712,11 +712,13 @@ The `AzureOpenAI` client takes the credential directly via `azureADTokenProvider
 
 ## What Phase 1 deliberately leaves to later
 
+The Langfuse-side items below are owned by the [Phase 2 design](phase-2.md); the analysis-breadth items move into Phase 3.
+
 - **Additional analysis types** (`idle_underused`, `quarterly_review`, `cost_telemetry_correlation`, `tagging_hygiene`). Wired up after Phase 1 validates the architecture.
 - **`pulse_check` overlap decision.** Resolved when `idle_underused` is added in Phase 2 — wrap, compose, or duplicate. Phase 1 sidesteps by picking cost-surprise.
-- **Evaluation datasets at scale.** Phase 1 produces fixtures from real runs ([AMG-MCP integration PRD](../prd/amg-mcp-integration.md) FR-12) so Phase 2 starts with material; curated datasets and human-review workflows wait.
-- **Prompt experiments at scale.** Phase 1 has one prompt version per role; experiments-as-development-practice is Phase 2.
-- **Cross-run comparison UI.** File-by-file diff in `runs/` suffices for Phase 1; SQLite-backed comparison is Phase 2.
+- **Evaluation datasets at scale.** Phase 1 produces fixtures from real runs ([AMG-MCP integration PRD](../prd/amg-mcp-integration.md) FR-12) so Phase 2 starts with material; curated datasets and human-review workflows are [Phase 2](phase-2.md).
+- **Prompt experiments at scale.** Phase 1 has one prompt version per role; experiments-as-development-practice is [Phase 2](phase-2.md).
+- **Cross-run comparison UI.** File-by-file diff in `runs/` suffices for Phase 1; experiment-driven comparison through Langfuse is [Phase 2](phase-2.md).
 - **Multiple report depths.** Engineering-detail only in Phase 1; executive and audit-appendix variants are Phase 2 ([reporting and recommendations PRD](../prd/reporting-and-recommendations.md) FR-15).
 - **Reservation, savings plan, budget, forecast, Advisor coverage.** Not exposed by AMG-MCP today ([AMG-MCP capabilities](../amg-mcp-capabilities.md)); capability-gap findings only.
 - **Interactive follow-up mode.** Out of scope for Phase 1 CLI.

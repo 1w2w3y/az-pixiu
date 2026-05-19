@@ -74,6 +74,7 @@ Run `npx pixiu --help` for the full flag set. Per-run artefacts land in `runs/<r
 ## Design
 
 - [Phase 1 design](docs/design/phase-1.md) — the minimum viable agent: component decomposition, data shapes, reasoning loop, trace vocabulary, and option sets for deliberately-open tech decisions.
+- [Phase 2 design](docs/design/phase-2.md) — Langfuse depth: scores, datasets, prompt management, experiments, LLM-as-judge, human review, and a calibration loop, with the eval architecture as the centerpiece.
 
 ## Audience
 

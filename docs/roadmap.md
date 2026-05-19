@@ -20,7 +20,7 @@ The full Phase 1 design lives in [phase-1 design](design/phase-1.md); its implem
 
 With a working agent in place, the focus shifts to exercising Langfuse capabilities in earnest. Eval rubric and expectation results move from local files to Langfuse Scores, attached to the trace each run produces. Prompts move from versioned files (`prompts/planner.v1.md`, `prompts/reasoner.v1.md`) into Langfuse-managed prompts. Datasets move from `eval/*.json` into Langfuse Datasets. Experiments compare alternative prompts, models, and analysis strategies against the same dataset. Human-review scoring sits alongside the automated rubrics for judgments the automated layer cannot make on its own.
 
-The aim is for the project's day-to-day work to genuinely depend on Langfuse rather than to demonstrate its features in isolation. The [Langfuse learning goals](langfuse-learning-goals.md) document describes what this looks like in more detail; the [Langfuse observability PRD](prd/langfuse-observability.md) FRs 6–12 are the concrete checklist.
+The aim is for the project's day-to-day work to genuinely depend on Langfuse rather than to demonstrate its features in isolation. The [Langfuse learning goals](langfuse-learning-goals.md) document describes what this looks like in more detail; the [Langfuse observability PRD](prd/langfuse-observability.md) FRs 6–12 are the concrete checklist; the [Phase 2 design](design/phase-2.md) records the design choices and sequencing.
 
 ## Phase 3 — Optimization breadth
 
