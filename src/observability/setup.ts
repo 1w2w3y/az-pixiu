@@ -93,7 +93,16 @@ export async function initializeTracing(
       break;
     }
     case 'langfuse': {
-      processor = new LangfuseSpanProcessor();
+      // By default LangfuseSpanProcessor only keeps spans from a small
+      // allowlist of LLM-flavored instrumentation scopes (langfuse-sdk,
+      // openinference, litellm, etc.) or spans carrying gen_ai.*
+      // attributes. That filter drops the az-pixiu trace tree —
+      // run.*, evidence.tool_call.*, and the Traceloop MCP spans —
+      // leaving only the OpenAI auto-instrumentation visible. Override
+      // with a permissive filter so the full §14 trace tree exports.
+      processor = new LangfuseSpanProcessor({
+        shouldExportSpan: () => true,
+      });
       break;
     }
     case 'noop':
