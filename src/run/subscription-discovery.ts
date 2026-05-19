@@ -58,6 +58,18 @@ export interface DiscoverTopSubscriptionsOptions {
    * when called without options).
    */
   onProgress?: DiscoveryProgress;
+  /**
+   * Case-insensitive substring filter on the subscription display name.
+   * When provided, only subscriptions whose name contains this text
+   * (case-insensitive) are eligible for selection. Subscriptions
+   * without a display name are excluded from the filtered set — they
+   * have no name to match against.
+   *
+   * Useful for cost-summary fan-outs scoped to a naming convention
+   * (e.g. "prod", "team-platform"). For an exact-id selection, use
+   * the CLI's --subscription instead and skip discovery.
+   */
+  nameFilter?: string;
 }
 
 const stdoutOnlyProgress: DiscoveryProgress = (line) => {
@@ -85,18 +97,38 @@ export async function discoverTopSubscriptions(
         `Pass --subscription explicitly to bypass auto-discovery.`,
     );
   }
-  const subscriptions = parseSubscriptionList(listText);
-  if (subscriptions.length === 0) {
+  const allSubscriptions = parseSubscriptionList(listText);
+  if (allSubscriptions.length === 0) {
     throw new SubscriptionDiscoveryError(
       'AMG-MCP returned no Azure subscriptions. Pass --subscription explicitly, or grant Grafana data-source access on your AMG instance.',
     );
   }
+
+  // Apply the case-insensitive name-substring filter, if set. Subs with
+  // no display name can't match, so they're dropped from the eligible
+  // set and reported as a diagnostic so the operator knows why.
+  const subscriptions = options.nameFilter
+    ? applyNameFilter(allSubscriptions, options.nameFilter, diagnostics, onProgress)
+    : allSubscriptions;
+  if (subscriptions.length === 0) {
+    throw new SubscriptionDiscoveryError(
+      `Subscription name filter "${options.nameFilter}" matched 0 of ${allSubscriptions.length} subscription(s). ` +
+        `Either widen the filter, or pass --subscription explicitly.`,
+    );
+  }
+
   const withNames = subscriptions.filter((s) => s.display_name !== undefined).length;
   onProgress(
-    `  AMG-MCP returned ${subscriptions.length} subscription(s) (${withNames} with display names); counting resources via a single Resource Graph query...`,
+    `  AMG-MCP returned ${allSubscriptions.length} subscription(s) (${withNames} with display names${options.nameFilter ? `, ${subscriptions.length} matching filter "${options.nameFilter}"` : ''}); counting resources via a single Resource Graph query...`,
     {
       name: 'discovery.subscriptions_listed',
-      attrs: { count: subscriptions.length, with_names: withNames },
+      attrs: {
+        count: allSubscriptions.length,
+        with_names: withNames,
+        ...(options.nameFilter
+          ? { name_filter: options.nameFilter, matched: subscriptions.length }
+          : {}),
+      },
     },
   );
   if (withNames === 0) {
@@ -213,6 +245,50 @@ export async function discoverTopSubscriptions(
  */
 export function formatSubscription(s: { subscription_id: string; display_name?: string }): string {
   return s.display_name ? `"${s.display_name}" (${s.subscription_id})` : s.subscription_id;
+}
+
+/**
+ * Filter the subscription list by a case-insensitive substring against
+ * the display name. Records a diagnostic counting unnamed subs that
+ * were excluded purely because they had no name to match against.
+ */
+function applyNameFilter(
+  subscriptions: ParsedSubscription[],
+  rawFilter: string,
+  diagnostics: string[],
+  onProgress: DiscoveryProgress,
+): ParsedSubscription[] {
+  const needle = rawFilter.toLowerCase();
+  const matched: ParsedSubscription[] = [];
+  let unnamedSkipped = 0;
+  for (const s of subscriptions) {
+    if (!s.display_name) {
+      unnamedSkipped += 1;
+      continue;
+    }
+    if (s.display_name.toLowerCase().includes(needle)) {
+      matched.push(s);
+    }
+  }
+  if (unnamedSkipped > 0) {
+    diagnostics.push(
+      `name filter "${rawFilter}" skipped ${unnamedSkipped} subscription(s) without a display name`,
+    );
+  }
+  onProgress(
+    `  name filter "${rawFilter}" matched ${matched.length}/${subscriptions.length} subscription(s)` +
+      (unnamedSkipped > 0 ? ` (${unnamedSkipped} skipped: no display name)` : ''),
+    {
+      name: 'discovery.name_filter_applied',
+      attrs: {
+        filter: rawFilter,
+        matched: matched.length,
+        of_total: subscriptions.length,
+        unnamed_skipped: unnamedSkipped,
+      },
+    },
+  );
+  return matched;
 }
 
 export interface ParsedSubscription {

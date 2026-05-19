@@ -96,6 +96,14 @@ export interface DiscoverSubscriptionsOption {
   /** Max top-N subscriptions to select by resource count. */
   maxSubscriptions: number;
   /**
+   * Optional case-insensitive substring filter applied to the
+   * subscription *display name* before the top-N-by-resource-count
+   * selection. When set, subscriptions without a display name are
+   * excluded (no name to match against). Most useful for the
+   * cost_summary fan-out workflow.
+   */
+  nameFilter?: string;
+  /**
    * Scope-intake input minus `subscription_ids`. The orchestrator fills
    * in `subscription_ids` from the discovery result and calls
    * `intakeScope` to build the final {@link Scope}.
@@ -370,15 +378,21 @@ async function runSubscriptionDiscovery(
   option: DiscoverSubscriptionsOption,
 ): Promise<Scope> {
   process.stdout.write(
-    `→ discovering top ${option.maxSubscriptions} subscription(s) by resource count via AMG-MCP...\n`,
+    `→ discovering top ${option.maxSubscriptions} subscription(s) by resource count via AMG-MCP${option.nameFilter ? ` (name filter: "${option.nameFilter}")` : ''}...\n`,
   );
   const discovered = await withSpan(SpanNames.SubscriptionDiscovery, async (span) => {
-    updateActiveObservation({ input: { limit: option.maxSubscriptions } });
+    updateActiveObservation({
+      input: {
+        limit: option.maxSubscriptions,
+        ...(option.nameFilter ? { name_filter: option.nameFilter } : {}),
+      },
+    });
     const result = await discoverTopSubscriptions(client, option.maxSubscriptions, {
       onProgress: (line, event) => {
         process.stdout.write(line + '\n');
         if (event) emitEvent(span, event.name, toOtelAttributes(event.attrs));
       },
+      ...(option.nameFilter ? { nameFilter: option.nameFilter } : {}),
     });
     const visibleCount = result.all_counts.length;
     const withNamesCount = result.all_counts.filter((c) => c.display_name).length;

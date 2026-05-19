@@ -29,6 +29,9 @@ const USAGE = `Usage:
 analyze flags:
   --subscription <id>              Azure subscription GUID. May be repeated. If omitted, the agent auto-discovers the top 3 subscriptions by resource count via AMG-MCP.
   --max-subscriptions <n>          When auto-discovering, how many top subscriptions to analyze (default: 3)
+  --subscription-name-filter <s>   cost-summary only: case-insensitive substring filter on subscription display names.
+                                   The agent discovers all visible subscriptions, keeps only those whose name contains
+                                   <s>, and analyzes the top N by resource count. Mutually exclusive with --subscription.
   --resource-group <name>          May be repeated
   --from <iso>                     time_window start (default: now − 7d)
   --to <iso>                       time_window end (default: now)
@@ -62,6 +65,11 @@ interface AnalyzeArgs {
   /** Explicit subscriptions; if empty, the CLI auto-discovers. */
   subscriptions: string[];
   maxSubscriptions: number;
+  /**
+   * Case-insensitive substring against the subscription display name.
+   * Applied at auto-discovery time. cost-summary only.
+   */
+  subscriptionNameFilter?: string;
   resourceGroups?: string[];
   resourceTypeFilter?: string[];
   from?: string;
@@ -86,6 +94,7 @@ async function main(): Promise<number> {
       config: { type: 'string' },
       subscription: { type: 'string', multiple: true },
       'max-subscriptions': { type: 'string' },
+      'subscription-name-filter': { type: 'string' },
       'resource-group': { type: 'string', multiple: true },
       'resource-type': { type: 'string', multiple: true },
       from: { type: 'string' },
@@ -137,11 +146,33 @@ async function runAnalyzeCommand(
   }
   const explicitSubs = stringArrayOrUndefined(values.subscription) ?? [];
   const maxSubs = parsePositiveInt(values['max-subscriptions'], 3);
+  const nameFilter = stringOrUndefined(values['subscription-name-filter']);
+
+  // --subscription-name-filter is a cost-summary-only flag in Phase 2.
+  // The discovery code itself is general, but the cost-summary fan-out
+  // is the use case the PRD scopes it to (see docs/prd/cli-experience.md
+  // FR-16). Reject it elsewhere so the surface stays honest until a
+  // second analysis type opts in.
+  if (nameFilter !== undefined && analysisType !== 'cost_summary') {
+    process.stderr.write(
+      `analyze: --subscription-name-filter is only supported for cost-summary in this phase ` +
+        `(passed with: ${analysisType.replace('_', '-')}).\n`,
+    );
+    return 2;
+  }
+  if (nameFilter !== undefined && explicitSubs.length > 0) {
+    process.stderr.write(
+      `analyze: --subscription-name-filter and --subscription are mutually exclusive. ` +
+        `The filter selects subscriptions by name from auto-discovery; --subscription supplies them directly.\n`,
+    );
+    return 2;
+  }
 
   const args: AnalyzeArgs = {
     configPath: stringOrUndefined(values.config),
     subscriptions: explicitSubs,
     maxSubscriptions: maxSubs,
+    ...(nameFilter !== undefined ? { subscriptionNameFilter: nameFilter } : {}),
     resourceGroups: stringArrayOrUndefined(values['resource-group']),
     resourceTypeFilter: stringArrayOrUndefined(values['resource-type']),
     from: stringOrUndefined(values.from),
@@ -224,6 +255,9 @@ async function runAnalyzeCommand(
             discoverSubscriptions: {
               maxSubscriptions: args.maxSubscriptions,
               scopeIntake,
+              ...(args.subscriptionNameFilter !== undefined
+                ? { nameFilter: args.subscriptionNameFilter }
+                : {}),
             },
           }),
       client,

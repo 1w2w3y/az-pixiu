@@ -22,6 +22,8 @@ An engineering manager prepares for a cross-team cost review and wants a structu
 
 Az-Pixiu should be able to produce a coherent report grounded in actual data, suitable as a starting point for a human-written narrative.
 
+The scope of a cost review is often defined by naming convention rather than by enumerating subscription identifiers — for example, every subscription belonging to a business unit, every production-tier subscription, or every subscription owned by a particular team. Az-Pixiu should support selecting the in-scope subscriptions by a case-insensitive name pattern at the cost summary entry point, so the operator does not have to look up identifiers before running the analysis. The matched subscriptions must be echoed back as part of the effective scope before analysis begins.
+
 ## Correlating cost with reliability and performance
 
 A site reliability engineer suspects that recent reliability work — added redundancy, larger SKUs, more aggressive autoscaling — has shifted the cost profile of a service. They want a view that places spend changes alongside telemetry changes for the same components.
