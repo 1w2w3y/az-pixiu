@@ -1,12 +1,13 @@
 /**
- * Seed the cost-surprise-001 fixture.
+ * Seed the cost-surprise-002 fixture.
  *
- * This fixture is hand-authored, synthetic, and sanitized — it does NOT
- * come from a real Azure environment. It exists to exercise the
- * fixture-replay seam (design §13) and provide a deterministic input set
- * for tests until LiveMCPTransport is wired (sequencing step 11).
+ * Failure-mode variant of cost-surprise-001: same shape, but the activity
+ * log call returns an AMG-MCP wrapped-error payload that the normalizer
+ * classifies as `authz_gap`. Exists so the eval framework can verify the
+ * runner produces a permission_gap-style DQ finding on partial-data
+ * scenarios (evaluation-framework PRD FR-3).
  *
- * Re-run with: npx tsx scripts/seed-cost-surprise-001.ts
+ * Re-run with: npx tsx scripts/seed-cost-surprise-002.ts
  * Idempotent — overwrites the same files each time.
  */
 
@@ -14,14 +15,14 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parameterDigest, shortDigest } from '../src/mcp/digest.js';
 
-const FIXTURE_ROOT = 'fixtures/cost-surprise-001';
+const FIXTURE_ROOT = 'fixtures/cost-surprise-002';
 
-const SUBSCRIPTION_ID = '11111111-1111-1111-1111-111111111111';
+const SUBSCRIPTION_ID = '22222222-2222-2222-2222-222222222222';
 
 const manifest = {
-  fixture_id: 'cost-surprise-001',
+  fixture_id: 'cost-surprise-002',
   description:
-    'Synthetic 7-day cost-surprise fixture for Phase 1 development. Not from a real Azure environment.',
+    'Synthetic cost-surprise fixture with a restricted activity log scope. The activity log call returns an AMG-MCP wrapped 403 (access denied) so the run surfaces an authz_gap data-quality finding alongside its recommendations.',
   analysis_type: 'cost_surprise',
   recorded_at: '2026-05-18T00:00:00Z',
   sanitized_at: '2026-05-18T00:00:00Z',
@@ -83,7 +84,7 @@ const calls: FixtureCall[] = [
     response: {
       content: {
         subscriptions: [
-          { subscriptionId: SUBSCRIPTION_ID, displayName: 'prod-platform', state: 'Enabled' },
+          { subscriptionId: SUBSCRIPTION_ID, displayName: 'restricted-scope', state: 'Enabled' },
         ],
       },
       isError: false,
@@ -106,13 +107,11 @@ const calls: FixtureCall[] = [
           { name: 'Currency', type: 'string' },
         ],
         rows: [
-          ['2026-05-01', 'Virtual Machines', 145.32, 'USD'],
-          ['2026-05-01', 'Azure Database for PostgreSQL flexible servers', 89.21, 'USD'],
-          ['2026-05-01', 'App Service', 62.14, 'USD'],
-          ['2026-05-04', 'Azure Database for PostgreSQL flexible servers', 158.87, 'USD'],
-          ['2026-05-07', 'Azure Database for PostgreSQL flexible servers', 162.04, 'USD'],
+          ['2026-05-01', 'Virtual Machines', 210.55, 'USD'],
+          ['2026-05-04', 'Virtual Machines', 295.18, 'USD'],
+          ['2026-05-07', 'Virtual Machines', 312.42, 'USD'],
         ],
-        total: { cost: 617.58, currency: 'USD' },
+        total: { cost: 818.15, currency: 'USD' },
       },
       isError: false,
     },
@@ -134,46 +133,11 @@ const calls: FixtureCall[] = [
           { name: 'Currency', type: 'string' },
         ],
         rows: [
-          ['2026-04-24', 'Virtual Machines', 144.18, 'USD'],
-          ['2026-04-24', 'Azure Database for PostgreSQL flexible servers', 64.55, 'USD'],
-          ['2026-04-24', 'App Service', 60.92, 'USD'],
+          ['2026-04-24', 'Virtual Machines', 198.04, 'USD'],
+          ['2026-04-27', 'Virtual Machines', 205.91, 'USD'],
+          ['2026-04-30', 'Virtual Machines', 211.66, 'USD'],
         ],
-        total: { cost: 446.91, currency: 'USD' },
-      },
-      isError: false,
-    },
-  },
-  // Two resource_graph fixtures so this fixture works both for a
-  // hand-crafted plan (the integration test in tests/integration/) and
-  // for the deterministic cost-surprise playbook (the eval runner). The
-  // playbook emits the rg-scoped query in src/playbooks/cost-surprise.ts
-  // when a resource group is supplied on the scope.
-  {
-    capability: 'amgmcp_query_resource_graph',
-    parameters: {
-      subscription_ids: [SUBSCRIPTION_ID],
-      query:
-        "Resources | where type =~ 'Microsoft.DBforPostgreSQL/flexibleServers' | project id, name, location, sku, tags",
-    },
-    response: {
-      content: {
-        data: [
-          {
-            id: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-db-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-prod-1`,
-            name: 'db-prod-1',
-            location: 'eastus',
-            sku: { name: 'Standard_D4ds_v5', tier: 'GeneralPurpose' },
-            tags: { owner: 'platform-team', env: 'prod' },
-          },
-          {
-            id: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-db-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-prod-2`,
-            name: 'db-prod-2',
-            location: 'eastus',
-            sku: { name: 'Standard_D8ds_v5', tier: 'GeneralPurpose' },
-            tags: {},
-          },
-        ],
-        count: 2,
+        total: { cost: 615.61, currency: 'USD' },
       },
       isError: false,
     },
@@ -183,53 +147,47 @@ const calls: FixtureCall[] = [
     parameters: {
       subscription_ids: [SUBSCRIPTION_ID],
       query:
-        "Resources | where resourceGroup =~ 'rg-db-prod' | project id, name, type, location, sku, tags",
+        "Resources | where resourceGroup =~ 'rg-locked-prod' | project id, name, type, location, sku, tags",
     },
     response: {
       content: {
         data: [
           {
-            id: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-db-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-prod-1`,
-            name: 'db-prod-1',
-            type: 'Microsoft.DBforPostgreSQL/flexibleServers',
-            location: 'eastus',
-            sku: { name: 'Standard_D4ds_v5', tier: 'GeneralPurpose' },
+            id: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-locked-prod/providers/Microsoft.Compute/virtualMachines/vm-prod-1`,
+            name: 'vm-prod-1',
+            type: 'Microsoft.Compute/virtualMachines',
+            location: 'westus2',
+            sku: { name: 'Standard_D8s_v5' },
             tags: { owner: 'platform-team', env: 'prod' },
           },
-          {
-            id: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-db-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-prod-2`,
-            name: 'db-prod-2',
-            type: 'Microsoft.DBforPostgreSQL/flexibleServers',
-            location: 'eastus',
-            sku: { name: 'Standard_D8ds_v5', tier: 'GeneralPurpose' },
-            tags: {},
-          },
         ],
-        count: 2,
+        count: 1,
       },
       isError: false,
     },
   },
+  // The activity log call is the deliberate failure point: AMG-MCP wraps
+  // the downstream 403 as a successful tool result whose text begins
+  // with "An error occurred invoking …" and contains "access denied".
+  // The normalizer's isWrappedError + classifyWrappedError path turns
+  // this into an authz_gap DQ finding (see src/mcp/content.ts).
   {
     capability: 'amgmcp_query_activity_log',
     parameters: {
       subscription_id: SUBSCRIPTION_ID,
       time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
-      resource_group_name: 'rg-db-prod',
+      resource_group_name: 'rg-locked-prod',
     },
     response: {
-      content: {
-        entries: [
-          {
-            timestamp: '2026-05-03T14:22:11Z',
-            operation: 'Microsoft.DBforPostgreSQL/flexibleServers/write',
-            resource_id: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-db-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-prod-2`,
-            caller: 'deploy@example.com',
-            properties: { from_sku: 'Standard_D4ds_v5', to_sku: 'Standard_D8ds_v5' },
-            status: 'Succeeded',
-          },
-        ],
-      },
+      content: [
+        {
+          type: 'text',
+          text:
+            'An error occurred invoking amgmcp_query_activity_log: 403 access denied — the calling identity is missing Reader on /subscriptions/' +
+            SUBSCRIPTION_ID +
+            '/resourceGroups/rg-locked-prod.',
+        },
+      ],
       isError: false,
     },
   },

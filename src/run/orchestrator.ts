@@ -40,9 +40,11 @@ import type {
   Config,
   Scope,
   EvidencePlan,
+  EvidenceRecord,
   RunMetadata,
   ReasoningOutput,
   DataQualityFinding,
+  DataQualityCategory,
   AnalysisType,
 } from '../schemas/index.js';
 import { DataQualityFindingSchema } from '../schemas/index.js';
@@ -109,6 +111,23 @@ export interface RunResult {
   trace_id: string;
   metadata: RunMetadata;
   reasoning: ReasoningOutput;
+  /**
+   * Normalized EvidenceRecords as they were handed to the reasoner. Useful
+   * to downstream consumers (eval runner) that need to inspect which
+   * capabilities actually produced evidence without round-tripping through
+   * run.json.
+   */
+  evidence: EvidenceRecord[];
+  /**
+   * DataQualityCategory values surfaced to the pipeline before the
+   * reasoner sees them (normalizer findings + failure-taxonomy findings).
+   * Distinct from {@link reasoning}.data_quality, which is what the
+   * reasoner chose to emit on its own output. The eval runner checks
+   * `expected_dq_categories` against this *plus* the reasoner output so
+   * the assertion holds whether or not the reasoner echoed the input
+   * findings forward.
+   */
+  input_dq_categories: DataQualityCategory[];
   score: AggregateScore;
   failures_classified: number;
   /** Whether any §7.5 post-process issues were synthesized. */
@@ -563,6 +582,8 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     trace_id: ctx.traceId,
     metadata,
     reasoning,
+    evidence: records,
+    input_dq_categories: allDq.map((d) => d.category),
     score,
     failures_classified: failures.length,
     post_process_issues: issues.length,

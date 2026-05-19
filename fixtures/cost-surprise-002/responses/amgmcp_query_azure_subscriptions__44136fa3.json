@@ -1,0 +1,17 @@
+{
+  "capability": "amgmcp_query_azure_subscriptions",
+  "parameters": {},
+  "parameters_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "response": {
+    "content": {
+      "subscriptions": [
+        {
+          "subscriptionId": "22222222-2222-2222-2222-222222222222",
+          "displayName": "restricted-scope",
+          "state": "Enabled"
+        }
+      ]
+    },
+    "isError": false
+  }
+}

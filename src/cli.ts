@@ -16,10 +16,14 @@ import { MCPClient } from './mcp/client.js';
 import { OpenAIModelClient } from './model/openai-client.js';
 import { MockModelClient } from './model/mock-client.js';
 import type { ModelClient } from './model/client.js';
+import { runEvaluationByPath, type EvalItemResult } from './evaluation/runner.js';
+import type { DatasetItem } from './evaluation/dataset.js';
+import { buildCannedMockModelClient } from './evaluation/canned-mock.js';
 
 const USAGE = `Usage:
   pixiu analyze cost-surprise [flags]   compare analysis window vs baseline; surface anomalies
   pixiu analyze cost-summary [flags]    single-window cost breakdown; no baseline comparison
+  pixiu eval <dataset.json> [flags]     replay each dataset item against its fixture and score
   pixiu diagnose [flags]
 
 analyze flags:
@@ -39,6 +43,14 @@ analyze flags:
   --observability <mode>           noop | memory | langfuse  (default: langfuse — requires
                                    LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL)
   --credential <mode>              azure-cli | default | mock  (default: azure-cli)
+
+eval flags:
+  --use-playbook                   skip the planner LLM; use the deterministic per-analysis playbook (recommended)
+  --mock-model                     skip Foundry; use a hard-coded mock reasoning response
+  --output-dir <path>              where to write per-item runs (default: runs/eval/)
+  --fixtures-root <path>           directory containing fixtures (default: fixtures/)
+  --observability <mode>           noop | memory | langfuse  (default: noop for eval runs)
+  --credential <mode>              azure-cli | default | mock  (default: mock — eval does not call Azure)
 
 shared flags:
   --config <path>                  path to config.json (default: ./config.json)
@@ -85,6 +97,7 @@ async function main(): Promise<number> {
       'use-playbook': { type: 'boolean' },
       'mock-model': { type: 'boolean' },
       'output-dir': { type: 'string' },
+      'fixtures-root': { type: 'string' },
       observability: { type: 'string' },
       credential: { type: 'string' },
     },
@@ -98,6 +111,9 @@ async function main(): Promise<number> {
   const subcommand = positionals[0];
   if (subcommand === 'analyze') {
     return runAnalyzeCommand(values, positionals);
+  }
+  if (subcommand === 'eval') {
+    return runEvalCommand(values, positionals);
   }
   if (subcommand === 'diagnose') {
     return runDiagnoseCommand(values);
@@ -238,6 +254,113 @@ async function runAnalyzeCommand(
   } finally {
     if (client) await client.close().catch(() => undefined);
   }
+}
+
+async function runEvalCommand(
+  values: Record<string, unknown>,
+  positionals: string[],
+): Promise<number> {
+  const datasetPath = positionals[1];
+  if (!datasetPath) {
+    process.stderr.write('eval: missing dataset path. Usage: pixiu eval <dataset.json>\n');
+    return 2;
+  }
+
+  const usePlaybook = Boolean(values['use-playbook']);
+  const mockModel = Boolean(values['mock-model']);
+  // Eval defaults differ from `analyze`: by default eval is fully offline
+  // (fixture transport, mock credential, noop observability) so that it
+  // can be run in CI without external dependencies. Operators who want a
+  // real-LLM eval pass `--credential azure-cli` and (optionally)
+  // `--observability langfuse`. The planner LLM is still optional;
+  // `--use-playbook` is recommended for determinism.
+  const credentialMode = parseCredential(values.credential ?? 'mock');
+  const observabilityMode = parseObservability(values.observability ?? 'noop');
+  const fixturesRoot = stringOrUndefined(values['fixtures-root']) ?? 'fixtures';
+  const outputDir = stringOrUndefined(values['output-dir']) ?? 'runs/eval';
+  const configPath = stringOrUndefined(values.config);
+
+  if (mockModel && !usePlaybook) {
+    process.stderr.write(
+      'eval --mock-model requires --use-playbook (the planner LLM is not mocked).\n',
+    );
+    return 2;
+  }
+
+  try {
+    const config = await loadConfig(configPath ? { path: configPath } : {});
+    const credential = buildCredential(credentialMode);
+    const credentialIdentity = describeCredential(credentialMode);
+
+    const makeModel = mockModel
+      ? (_item: DatasetItem): ModelClient => buildCannedMockModelClient()
+      : (_item: DatasetItem): ModelClient =>
+          new OpenAIModelClient({
+            endpoint: config.foundry.endpoint,
+            deployment: config.foundry.deployment,
+            apiVersion: config.foundry.api_version,
+            credential,
+          });
+
+    process.stdout.write(`Running pixiu eval on ${datasetPath}\n`);
+    process.stdout.write(`  fixtures: ${fixturesRoot}\n`);
+    process.stdout.write(
+      `  model: ${mockModel ? 'mock (canned reasoning)' : `foundry/${config.foundry.deployment}`}\n`,
+    );
+    process.stdout.write(`  planner: ${usePlaybook ? 'playbook' : 'planner LLM'}\n`);
+    process.stdout.write(`  observability: ${observabilityMode}\n\n`);
+
+    const result = await runEvaluationByPath(datasetPath, {
+      config,
+      makeModel,
+      modelProvider: mockModel ? 'mock' : 'foundry',
+      credentialIdentity,
+      usePlaybook,
+      runsDir: outputDir,
+      observabilityMode,
+      fixturesRoot,
+      onProgress: (line) => process.stdout.write(line + '\n'),
+    });
+
+    process.stdout.write('\n--- summary ---\n');
+    for (const item of result.items) {
+      printEvalItem(item);
+    }
+    process.stdout.write(
+      `\n${result.passed_all ? 'PASS' : 'FAIL'}: ${result.pass_count}/${result.items.length} item(s) green\n`,
+    );
+    return result.passed_all ? 0 : 3;
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      process.stderr.write(`Config error: ${err.message}\n`);
+      return 1;
+    }
+    process.stderr.write(`eval failed: ${describe(err)}\n`);
+    if (err instanceof Error && err.stack) {
+      process.stderr.write(err.stack + '\n');
+    }
+    return 4;
+  }
+}
+
+function printEvalItem(item: EvalItemResult): void {
+  const status = item.passed_all ? '✓' : '✖';
+  process.stdout.write(`${status} ${item.item_id} (fixture: ${item.fixture_id})\n`);
+  if (item.error) {
+    process.stdout.write(`    runtime error: ${item.error}\n`);
+    return;
+  }
+  for (const r of item.score.results) {
+    process.stdout.write(`    rubric ${r.passed ? '✓' : '✖'} ${r.rubric}`);
+    if (!r.passed && r.details) process.stdout.write(`: ${r.details}`);
+    process.stdout.write('\n');
+  }
+  for (const e of item.expectations.results) {
+    process.stdout.write(`    expect ${e.passed ? '✓' : '✖'} ${e.expectation}`);
+    if (!e.passed && e.details) process.stdout.write(`: ${e.details}`);
+    process.stdout.write('\n');
+  }
+  process.stdout.write(`    report: ${item.report_path}\n`);
 }
 
 async function runDiagnoseCommand(values: Record<string, unknown>): Promise<number> {

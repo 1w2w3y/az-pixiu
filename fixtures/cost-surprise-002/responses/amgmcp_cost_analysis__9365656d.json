@@ -1,0 +1,62 @@
+{
+  "capability": "amgmcp_cost_analysis",
+  "parameters": {
+    "subscription_id": "22222222-2222-2222-2222-222222222222",
+    "time_window": {
+      "start": "2026-04-24T00:00:00Z",
+      "end": "2026-05-01T00:00:00Z"
+    },
+    "granularity": "Daily",
+    "grouping": [
+      "ServiceName"
+    ]
+  },
+  "parameters_digest": "9365656d3b28dac49b58879f99385b4939defe56fb4799f6a4f0836f6bc6b0c4",
+  "response": {
+    "content": {
+      "columns": [
+        {
+          "name": "UsageDate",
+          "type": "string"
+        },
+        {
+          "name": "ServiceName",
+          "type": "string"
+        },
+        {
+          "name": "Cost",
+          "type": "decimal"
+        },
+        {
+          "name": "Currency",
+          "type": "string"
+        }
+      ],
+      "rows": [
+        [
+          "2026-04-24",
+          "Virtual Machines",
+          198.04,
+          "USD"
+        ],
+        [
+          "2026-04-27",
+          "Virtual Machines",
+          205.91,
+          "USD"
+        ],
+        [
+          "2026-04-30",
+          "Virtual Machines",
+          211.66,
+          "USD"
+        ]
+      ],
+      "total": {
+        "cost": 615.61,
+        "currency": "USD"
+      }
+    },
+    "isError": false
+  }
+}

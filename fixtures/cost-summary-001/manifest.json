@@ -1,0 +1,12 @@
+{
+  "fixture_id": "cost-summary-001",
+  "description": "Synthetic single-window cost_summary fixture (no baseline). Healthy data across two service families; the eval framework uses this fixture to verify the cost-summary playbook call shape and that the runner handles analysis_type=cost_summary end-to-end.",
+  "analysis_type": "cost_summary",
+  "recorded_at": "2026-05-18T00:00:00Z",
+  "sanitized_at": "2026-05-18T00:00:00Z",
+  "recorded_from": "synthetic",
+  "time_window": {
+    "start": "2026-05-01T00:00:00Z",
+    "end": "2026-05-08T00:00:00Z"
+  }
+}

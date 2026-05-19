@@ -1,0 +1,83 @@
+{
+  "schema_version": "1",
+  "items": [
+    {
+      "id": "cost-surprise-001",
+      "fixture_id": "cost-surprise-001",
+      "description": "Synthetic 7-day cost-surprise on a single PostgreSQL-heavy subscription. Healthy data path: every planned capability returns a record; tagging gap on db-prod-2 surfaces as a DQ finding.",
+      "scope": {
+        "subscription_ids": ["11111111-1111-1111-1111-111111111111"],
+        "resource_group_names": ["rg-db-prod"],
+        "time_window": {
+          "start": "2026-05-01T00:00:00Z",
+          "end": "2026-05-08T00:00:00Z"
+        },
+        "baseline_window": {
+          "start": "2026-04-24T00:00:00Z",
+          "end": "2026-05-01T00:00:00Z"
+        },
+        "analysis_type": "cost_surprise",
+        "resource_type_filter": ["Microsoft.DBforPostgreSQL/flexibleServers"],
+        "effective_scope_summary": "subscription 11111111-…/11, rg-db-prod, 2026-05-01 → 2026-05-08 vs 2026-04-24 → 2026-05-01"
+      },
+      "expectations": {
+        "min_recommendations": 1,
+        "expected_dq_categories": ["tagging_gap"],
+        "expected_capabilities_invoked": [
+          "amgmcp_cost_analysis",
+          "amgmcp_query_resource_graph",
+          "amgmcp_query_activity_log"
+        ]
+      }
+    },
+    {
+      "id": "cost-surprise-002",
+      "fixture_id": "cost-surprise-002",
+      "description": "Failure-mode variant: the activity-log call is refused with a wrapped 403, so the run must produce an authz_gap data-quality finding without losing its cost-analysis evidence.",
+      "scope": {
+        "subscription_ids": ["22222222-2222-2222-2222-222222222222"],
+        "resource_group_names": ["rg-locked-prod"],
+        "time_window": {
+          "start": "2026-05-01T00:00:00Z",
+          "end": "2026-05-08T00:00:00Z"
+        },
+        "baseline_window": {
+          "start": "2026-04-24T00:00:00Z",
+          "end": "2026-05-01T00:00:00Z"
+        },
+        "analysis_type": "cost_surprise",
+        "effective_scope_summary": "subscription 22222222-…/22, rg-locked-prod, 2026-05-01 → 2026-05-08 vs 2026-04-24 → 2026-05-01 (activity-log access denied)"
+      },
+      "expectations": {
+        "min_recommendations": 1,
+        "expected_dq_categories": ["authz_gap"],
+        "expected_capabilities_invoked": [
+          "amgmcp_cost_analysis",
+          "amgmcp_query_resource_graph"
+        ]
+      }
+    },
+    {
+      "id": "cost-summary-001",
+      "fixture_id": "cost-summary-001",
+      "description": "Healthy single-window cost_summary run. Exercises the cost-summary playbook (no baseline; one resource-graph inventory snapshot) so the runner verifies analysis_type=cost_summary end-to-end.",
+      "scope": {
+        "subscription_ids": ["33333333-3333-3333-3333-333333333333"],
+        "time_window": {
+          "start": "2026-05-01T00:00:00Z",
+          "end": "2026-05-08T00:00:00Z"
+        },
+        "analysis_type": "cost_summary",
+        "effective_scope_summary": "subscription 33333333-…/33, no resource-group filter, 2026-05-01 → 2026-05-08, analysis_type=cost_summary"
+      },
+      "expectations": {
+        "min_recommendations": 1,
+        "expected_capabilities_invoked": [
+          "amgmcp_query_azure_subscriptions",
+          "amgmcp_cost_analysis",
+          "amgmcp_query_resource_graph"
+        ]
+      }
+    }
+  ]
+}
