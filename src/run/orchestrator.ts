@@ -99,8 +99,8 @@ export interface DiscoverSubscriptionsOption {
    * Optional case-insensitive substring filter applied to the
    * subscription *display name* before the top-N-by-resource-count
    * selection. When set, subscriptions without a display name are
-   * excluded (no name to match against). Most useful for the
-   * cost_summary fan-out workflow.
+   * excluded (no name to match against). Available for any analysis
+   * type that auto-discovers subscriptions.
    */
   nameFilter?: string;
   /**

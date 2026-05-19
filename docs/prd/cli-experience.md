@@ -78,7 +78,7 @@ A maintainer changes a prompt or analysis behavior and runs evaluations from the
 - FR-13: The CLI must provide clear exit statuses for success, partial success, configuration failure, analysis failure, and evaluation failure.
 - FR-14: The CLI must avoid logging secrets, credentials, or unnecessary raw Azure telemetry to terminal output.
 - FR-15: The CLI should make it easy to find the generated report, trace identifier, and diagnostic summary after a run.
-- FR-16: For broad-scan analysis types — initially the cost summary scenario described in [use cases](../use-cases.md) — the CLI must support selecting subscriptions by case-insensitive name pattern, in addition to explicit subscription identifiers and the default top-N-by-resource-count auto-discovery. The pattern must be matched against subscription display names as returned by AMG-MCP. The CLI must reject patterns combined with explicit subscription identifiers and must surface the matched subscriptions in the effective scope summary before analysis. The pattern selection must not be silently extended to analysis types that have not opted in.
+- FR-16: For analysis types that auto-discover subscriptions, the CLI must support selecting subscriptions by case-insensitive name pattern, in addition to explicit subscription identifiers and the default top-N-by-resource-count auto-discovery. The pattern must be matched against subscription display names as returned by AMG-MCP. The CLI must reject patterns combined with explicit subscription identifiers and must surface the matched subscriptions in the effective scope summary before analysis.
 
 ## Non-Functional Requirements
 

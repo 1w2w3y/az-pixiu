@@ -65,9 +65,9 @@ export interface DiscoverTopSubscriptionsOptions {
    * without a display name are excluded from the filtered set — they
    * have no name to match against.
    *
-   * Useful for cost-summary fan-outs scoped to a naming convention
-   * (e.g. "prod", "team-platform"). For an exact-id selection, use
-   * the CLI's --subscription instead and skip discovery.
+   * Useful for fan-outs scoped to a naming convention (e.g. "prod",
+   * "team-platform") across either analysis type. For an exact-id
+   * selection, use the CLI's --subscription instead and skip discovery.
    */
   nameFilter?: string;
 }

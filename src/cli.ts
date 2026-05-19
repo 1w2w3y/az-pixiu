@@ -29,9 +29,9 @@ const USAGE = `Usage:
 analyze flags:
   --subscription <id>              Azure subscription GUID. May be repeated. If omitted, the agent auto-discovers the top 3 subscriptions by resource count via AMG-MCP.
   --max-subscriptions <n>          When auto-discovering, how many top subscriptions to analyze (default: 3)
-  --subscription-name-filter <s>   cost-summary only: case-insensitive substring filter on subscription display names.
-                                   The agent discovers all visible subscriptions, keeps only those whose name contains
-                                   <s>, and analyzes the top N by resource count. Mutually exclusive with --subscription.
+  --subscription-name-filter <s>   case-insensitive substring filter on subscription display names. The agent discovers
+                                   all visible subscriptions, keeps only those whose name contains <s>, and analyzes
+                                   the top N by resource count. Mutually exclusive with --subscription.
   --resource-group <name>          May be repeated
   --from <iso>                     time_window start (default: now − 7d)
   --to <iso>                       time_window end (default: now)
@@ -148,18 +148,6 @@ async function runAnalyzeCommand(
   const maxSubs = parsePositiveInt(values['max-subscriptions'], 3);
   const nameFilter = stringOrUndefined(values['subscription-name-filter']);
 
-  // --subscription-name-filter is a cost-summary-only flag in Phase 2.
-  // The discovery code itself is general, but the cost-summary fan-out
-  // is the use case the PRD scopes it to (see docs/prd/cli-experience.md
-  // FR-16). Reject it elsewhere so the surface stays honest until a
-  // second analysis type opts in.
-  if (nameFilter !== undefined && analysisType !== 'cost_summary') {
-    process.stderr.write(
-      `analyze: --subscription-name-filter is only supported for cost-summary in this phase ` +
-        `(passed with: ${analysisType.replace('_', '-')}).\n`,
-    );
-    return 2;
-  }
   if (nameFilter !== undefined && explicitSubs.length > 0) {
     process.stderr.write(
       `analyze: --subscription-name-filter and --subscription are mutually exclusive. ` +

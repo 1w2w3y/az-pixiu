@@ -10,6 +10,8 @@ A FinOps engineer notices that one subscription's monthly spend rose sharply aga
 
 Az-Pixiu should be able to gather the relevant cost and telemetry data, surface the most likely contributors, and provide a starting set of hypotheses with the evidence to evaluate each one.
 
+A related variant of this scenario is broader: a team lead sweeps every subscription owned by their team for recent cost anomalies rather than investigating a known one. The same analysis must therefore accept a name-pattern selection over the visible subscriptions, not only an explicit subscription identifier.
+
 ## Finding idle and underused resources
 
 A platform engineer is reviewing a long-lived subscription that has accumulated resources over many years. They want a list of resources that appear unused, underused, or oversized relative to their telemetry, along with enough context to confirm the assessment before recommending any change.
@@ -22,7 +24,7 @@ An engineering manager prepares for a cross-team cost review and wants a structu
 
 Az-Pixiu should be able to produce a coherent report grounded in actual data, suitable as a starting point for a human-written narrative.
 
-The scope of a cost review is often defined by naming convention rather than by enumerating subscription identifiers — for example, every subscription belonging to a business unit, every production-tier subscription, or every subscription owned by a particular team. Az-Pixiu should support selecting the in-scope subscriptions by a case-insensitive name pattern at the cost summary entry point, so the operator does not have to look up identifiers before running the analysis. The matched subscriptions must be echoed back as part of the effective scope before analysis begins.
+The scope of a cost review is often defined by naming convention rather than by enumerating subscription identifiers — for example, every subscription belonging to a business unit, every production-tier subscription, or every subscription owned by a particular team. Az-Pixiu should support selecting the in-scope subscriptions by a case-insensitive name pattern wherever subscriptions are auto-discovered, so the operator does not have to look up identifiers before running the analysis. The matched subscriptions must be echoed back as part of the effective scope before analysis begins.
 
 ## Correlating cost with reliability and performance
 
