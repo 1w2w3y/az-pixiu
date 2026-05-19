@@ -6,6 +6,8 @@ import {
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { trace, type Tracer } from '@opentelemetry/api';
 import { LangfuseSpanProcessor } from '@langfuse/otel';
+import { McpInstrumentation } from '@traceloop/instrumentation-mcp';
+import { Client as MCPSDKClient } from '@modelcontextprotocol/sdk/client/index.js';
 
 /**
  * Observability setup (design §4.9). Initializes a single OTEL tracer
@@ -50,6 +52,27 @@ export interface ObservabilityState {
 
 let activeState: ObservabilityState | undefined;
 
+/**
+ * @traceloop/instrumentation-mcp patches the SDK's Client class so every
+ * client.callTool() emits an OTel span automatically. In CommonJS
+ * `registerInstrumentations()` would handle this via require-hooks, but
+ * this project is ESM — imports are hoisted before any registration
+ * runs — so we use the SDK's explicit `manuallyInstrument({ Client })`
+ * path instead. One patch per process is enough; the class prototype
+ * stays patched for the lifetime of the Node runtime.
+ *
+ * Only the live transport benefits — FixtureMCPTransport doesn't call
+ * the SDK at all. Fixture runs default to --observability noop anyway,
+ * so the practical impact is zero.
+ */
+let mcpInstrumentationPatched = false;
+function ensureMcpInstrumented(): void {
+  if (mcpInstrumentationPatched) return;
+  const instrumentation = new McpInstrumentation();
+  instrumentation.manuallyInstrument({ Client: MCPSDKClient });
+  mcpInstrumentationPatched = true;
+}
+
 export async function initializeTracing(
   config: ObservabilityConfig = { mode: 'noop' },
 ): Promise<ObservabilityState> {
@@ -86,6 +109,11 @@ export async function initializeTracing(
   // Belt-and-braces: ensure the global is the new provider even if some
   // other code path nuked it (vitest workers tend to share globals).
   trace.setGlobalTracerProvider(provider);
+
+  // Patch the MCP SDK's Client now that the global provider is in
+  // place. Patching before this point would leave the instrumentation
+  // wired to whatever stale provider was previously global.
+  ensureMcpInstrumented();
 
   const state: ObservabilityState = {
     mode: config.mode,

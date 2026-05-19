@@ -7,9 +7,6 @@ import type {
 import type { MCPTransport } from './transport.js';
 import { isAllowedCapability, isMutatingCapabilityName } from './allowlist.js';
 import { getRequiredCapabilities } from './required-capabilities.js';
-import { withSpan, SpanNames, ATTR } from '../observability/spans.js';
-import { updateActiveObservation } from '@langfuse/tracing';
-import { parameterDigest, shortDigest } from './digest.js';
 
 export class MCPClientError extends Error {
   public override readonly cause?: unknown;
@@ -151,28 +148,11 @@ export class MCPClient {
       );
     }
 
-    // Per-call observability span. Nests under whatever parent is
-    // active — typically `run.evidence_retrieval` (executor) or
-    // `run.subscription_discovery` (auto-discovery). input/output
-    // land on the observation so Langfuse renders the request and
-    // response payloads, matching the trace card it produces for
-    // OpenAI tool calls.
-    const digest = parameterDigest(parameters);
-    const version = this.cachedCatalog.capability_versions[capability];
-    return withSpan(
-      SpanNames.EvidenceToolCall(capability),
-      async () => {
-        updateActiveObservation({ input: parameters });
-        const result = await this.transport.invoke(capability, parameters);
-        updateActiveObservation({ output: result.content });
-        return result;
-      },
-      {
-        [ATTR.capability]: capability,
-        ...(version ? { [ATTR.capabilityVersion]: version } : {}),
-        'az_pixiu.mcp.parameters_digest': shortDigest(digest),
-      },
-    );
+    // Per-call observability spans are emitted by
+    // @traceloop/instrumentation-mcp, which patches the SDK's Client
+    // class in observability/setup.ts (live transport only — fixture
+    // runs don't go through the SDK).
+    return this.transport.invoke(capability, parameters);
   }
 
   async close(): Promise<void> {

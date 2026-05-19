@@ -144,31 +144,6 @@ describe('MCPClient.invoke', () => {
     expect(transport.invokes[0]?.capability).toBe('amgmcp_cost_analysis');
   });
 
-  it('emits an observability span per MCP tool call with capability/version attributes', async () => {
-    const { initializeTracing, shutdownTracing } = await import(
-      '../../src/observability/setup.js'
-    );
-    const { ATTR } = await import('../../src/observability/spans.js');
-    const state = await initializeTracing({ mode: 'memory' });
-    try {
-      const transport = new FakeMCPTransport(phase1Catalog);
-      const client = new MCPClient({ transport });
-      await client.discover();
-      await client.invoke('amgmcp_cost_analysis', { window: '7d' });
-      await state.inMemoryExporter!.forceFlush();
-      const spans = state.inMemoryExporter!.getFinishedSpans();
-      const toolCall = spans.find(
-        (s) => s.name === 'evidence.tool_call.amgmcp_cost_analysis',
-      );
-      expect(toolCall).toBeDefined();
-      expect(toolCall?.attributes[ATTR.capability]).toBe('amgmcp_cost_analysis');
-      expect(toolCall?.attributes[ATTR.capabilityVersion]).toBe('1.0.0');
-      expect(toolCall?.attributes['az_pixiu.mcp.parameters_digest']).toMatch(/^[0-9a-f]{8}$/);
-    } finally {
-      await shutdownTracing();
-    }
-  });
-
   it('throws DiscoveryNotPerformedError when invoke is called before discover', async () => {
     const client = new MCPClient({ transport: new FakeMCPTransport(phase1Catalog) });
     await expect(client.invoke('amgmcp_cost_analysis', {})).rejects.toBeInstanceOf(

@@ -564,18 +564,18 @@ run.root                                  [trace]
 ├── run.config_resolution            [span]
 ├── run.scope_intake                  [span]   output: Scope
 ├── run.subscription_discovery        [span]   (only when no --subscription)
-│   ├── evidence.tool_call.amgmcp_query_azure_subscriptions  [span]
-│   └── evidence.tool_call.amgmcp_query_resource_graph       [span]
+│   ├── <toolName>.tool               [span — Traceloop, live transport only]
+│   └── ...
 ├── run.capability_discovery          [span]
 │       event: mutating_capabilities_excluded
 ├── run.evidence_planning             [span]
 │   └── reasoning.model_call          [generation]  attr: prompt.version, tokens
 ├── run.evidence_retrieval            [span]
-│   ├── evidence.tool_call.cost_analysis            [span]
-│   ├── evidence.tool_call.query_resource_graph     [span]
-│   ├── evidence.tool_call.query_resource_metric    [span]
-│   ├── evidence.tool_call.query_activity_log       [span]
-│   └── evidence.tool_call.query_resource_health    [span]
+│   ├── amgmcp_cost_analysis.tool             [span — Traceloop]
+│   ├── amgmcp_query_resource_graph.tool      [span — Traceloop]
+│   ├── amgmcp_query_resource_metric.tool     [span — Traceloop]
+│   ├── amgmcp_query_activity_log.tool        [span — Traceloop]
+│   └── amgmcp_query_resource_health.tool     [span — Traceloop]
 ├── run.reasoning                     [span]
 │   ├── reasoning.prompt_fetch        [span]
 │   ├── reasoning.model_call          [generation]
@@ -585,9 +585,11 @@ run.root                                  [trace]
       event: recommendations_evidence_links  (rec_id -> [fact_id|hyp_id])
 ```
 
-The `evidence.tool_call.<capability>` span is emitted by `MCPClient.invoke` itself, so it nests under whichever parent triggered the call — typically `run.evidence_retrieval` for the executor, or `run.subscription_discovery` when auto-discovery is on the critical path. Each tool-call span carries the request parameters as its input and the MCP response content as its output (so Langfuse renders the request/response pair on the observation card), plus attributes for capability name, capability version, and a short parameters digest.
+The per-tool-call observation is emitted by `@traceloop/instrumentation-mcp`, which patches `@modelcontextprotocol/sdk`'s `Client` class. Because this project is ESM, the SDK's `manuallyInstrument({ Client })` API is used — `registerInstrumentations()`-style require-hooks don't fire under ESM import hoisting. The patch lives in `src/observability/setup.ts` and is applied once per process. The span name and attribute set come from Traceloop's MCP semantic conventions; they nest under whichever parent triggered the call (typically `run.evidence_retrieval` or `run.subscription_discovery`) and carry the request parameters as input and the MCP response payload as output.
 
-The stable vocabulary points (future agents reuse exactly): `run.root`, `run.config_resolution`, `run.scope_intake`, `run.subscription_discovery`, `run.capability_discovery`, `run.evidence_planning`, `run.evidence_retrieval`, `run.reasoning`, `run.report_assembly`, `run.finalize`; `evidence.tool_call.<capability>`; `reasoning.prompt_fetch`, `reasoning.model_call`, `reasoning.normalize`. Future reliability/capacity/governance agents reuse every name above except the playbook contents inside `run.evidence_retrieval`.
+Auto-instrumentation only covers the live transport. `FixtureMCPTransport` does not go through the SDK, so fixture-driven runs (eval, tests) get the high-level `run.*` phase spans without per-call children. Eval defaults to `--observability noop` anyway, so this rarely matters in practice.
+
+The stable vocabulary points (future agents reuse exactly): `run.root`, `run.config_resolution`, `run.scope_intake`, `run.subscription_discovery`, `run.capability_discovery`, `run.evidence_planning`, `run.evidence_retrieval`, `run.reasoning`, `run.report_assembly`, `run.finalize`; `reasoning.prompt_fetch`, `reasoning.model_call`, `reasoning.normalize`. Per-MCP-call spans are owned by Traceloop's instrumentation (semantic-convention-aligned), not the agent. Future reliability/capacity/governance agents reuse every name above except the playbook contents inside `run.evidence_retrieval`.
 
 ---
 
