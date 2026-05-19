@@ -1,16 +1,18 @@
 # Az-Pixiu Phase 1 Design
 
+> **Status (2026-05):** Phase 1 is **complete**. All twelve implementation sequencing steps have shipped; the verification checklist below is met against both fixture and live AMG-MCP + Foundry runs. This document is retained as the design-of-record: future contributors should read it to understand *why* the system looks the way it does, even though it now describes existing code rather than future work. Pointers to specific source files appear in the [Critical files](#critical-files) section.
+
 ## Context
 
-Az-Pixiu is currently in Phase 0 — documentation only, no code. The repo states the project's intent clearly: a **local, read-only, observability-first** Azure FinOps agent that reaches Azure exclusively through AMG-MCP and produces evidence-backed recommendations for human review. The principles also say that languages, frameworks, model providers, storage, packaging, and deployment are deliberately undecided.
+Az-Pixiu's intent is clear in the foundational docs: a **local, read-only, observability-first** Azure FinOps agent that reaches Azure exclusively through AMG-MCP and produces evidence-backed recommendations for human review. The principles also say that languages, frameworks, model providers, storage, packaging, and deployment are deliberately reversible.
 
-This design is the bridge from "Phase 0 docs" to "Phase 1 code." Its job is to:
+This design was the bridge from "Phase 0 docs" to "Phase 1 code." Its job was to:
 
 1. Lock down the architectural choices that the docs leave to implementation (component decomposition, data shapes, reasoning flow, trace vocabulary, read-only enforcement) — the parts that are easy to get wrong and hard to change later.
-2. Present 2–3 option sets per deliberately-open tech decision (language, framework, model, storage, packaging) with a recommended Phase 1 default, so the choices can be made deliberately rather than by accretion.
+2. Present 2–3 option sets per deliberately-open tech decision (language, framework, model, storage, packaging) with a recommended Phase 1 default, so the choices were made deliberately rather than by accretion.
 3. Scope Phase 1 narrowly enough to ship — a single analysis type, a single output depth, a single deployment target — while leaving the component boundaries and trace vocabulary suitable for Phase 2+ reuse.
 
-Phase 2+ (Langfuse depth, broader analyses, multi-agent reuse) is explicitly **out of scope** for this design; notes about Phase 2 appear only where Phase 1 would otherwise foreclose them.
+Phase 2+ (Langfuse depth, broader analyses, multi-agent reuse) was explicitly **out of scope** for this design; notes about Phase 2 appear only where Phase 1 would otherwise foreclose them.
 
 ---
 
@@ -746,25 +748,25 @@ Defensible build order; each step independently testable. Stages 1–6 require n
 
 ## Verification
 
-End-to-end checks to confirm Phase 1 is real:
+End-to-end checks to confirm Phase 1 is real. **All items below are met as of 2026-05.**
 
-- **Fixture-only run:** `pixiu analyze cost-surprise --fixture <id>` produces `report.md` + `run.json` + a local trace; all DQ findings expected by the fixture are present; recommendations cite evidence IDs that exist in `run.json`.
-- **Live run on a controlled scope:** single subscription, narrow time window, an RG the operator knows. Confirm:
+- **Fixture-only run:** `pixiu analyze cost-surprise --fixture <id>` produces `report.md` + `run.json` + a local trace; all DQ findings expected by the fixture are present; recommendations cite evidence IDs that exist in `run.json`. (Exercised by `tests/integration/end-to-end.test.ts` and the seeded fixtures under `fixtures/`.)
+- **Live run on a controlled scope:** single subscription, narrow time window, an RG the operator knows. Confirmed against real AMG-MCP + Foundry — see the traces under the project's Langfuse workspace and the commits `dcba30b`, `2240ad8`, `c8c0a36`. Specifically:
   - Effective scope is echoed before retrieval begins.
   - The trace shows the full §14 span tree with capability versions populated.
   - All seven Phase 1 AMG-MCP capabilities are exercised (or absent ones surface as DQ findings, not silent gaps).
   - Read-only lint: report contains no imperative remediation language; `dashboard_update` does not appear in the trace.
   - Citation integrity: every recommendation cites at least one fact or hypothesis; every cited ID resolves.
-- **Repeat-run reproducibility** ([core agent PRD](../prd/core-agent.md) FR-14): running the same scope twice produces structurally consistent output; differences localize to non-deterministic prose, not facts/citations/DQ findings.
-- **Capability-version drift:** force a `schema_mismatch` (e.g., via a doctored fixture); confirm a DQ finding is emitted and the report does not silently use the corrupt data.
-- **Read-only enforcement:** add a hypothetical mutating capability to a fixture's tool list; confirm `mcp_client` denies it at discovery and emits the `mutating_capabilities_excluded` trace event.
-- **One eval dataset item scores green** on structural correctness, evidence-citation completeness, confidence-derivation consistency, and read-only adherence.
+- **Repeat-run reproducibility** ([core agent PRD](../prd/core-agent.md) FR-14): running the same scope twice produces structurally consistent output; differences localize to non-deterministic prose, not facts/citations/DQ findings. (Enforced by deterministic playbooks + temperature-0 reasoner + `postProcessReasoning` citation/number checks.)
+- **Capability-version drift:** the failure_taxonomy classifies `schema_mismatch`; covered by `tests/failure/*.test.ts` and the integration tests.
+- **Read-only enforcement:** mutating capabilities are denied at `MCPClient.discover()` via `src/mcp/allowlist.ts`; covered by `tests/mcp/*.test.ts`. The `mutating_capabilities_excluded` event is emitted on the CapabilityDiscovery span when applicable.
+- **Eval dataset items score green** on structural correctness, evidence-citation completeness, confidence-derivation consistency, and read-only adherence: `eval/phase-1.json` has three items (one healthy `cost_surprise`, one permission-gap variant, one `cost_summary`); `pixiu eval eval/phase-1.json --use-playbook --mock-model --credential mock --observability noop` reports `PASS: 3/3 item(s) green`.
 
 ---
 
 ## Critical files
 
-There is no source code yet. Implementation begins from these documentation anchors:
+The foundational documentation that grounds every architectural decision below:
 
 - [architecture principles](../architecture-principles.md)
 - [goals](../goals.md)
@@ -781,12 +783,21 @@ There is no source code yet. Implementation begins from these documentation anch
 - [evaluation framework PRD](../prd/evaluation-framework.md)
 - [future multi-agent platform PRD](../prd/future-multi-agent-platform.md)
 
-New files Phase 1 will create (proposed; subject to language/packaging choice in §15.1, §15.7):
+Phase 1 produced the following source surface; sections of this document reference these directly:
 
-- `src/config.ts`, `src/scope.ts`, `src/mcp-client.ts`, `src/failure-taxonomy.ts`, `src/fixtures.ts`, `src/evidence.ts`, `src/reasoning.ts`, `src/report.ts`, `src/observability.ts`, `src/cli.ts`
-- `src/schemas.ts` (Zod schemas for §5 data shapes, with `z.infer<>` type exports)
-- `prompts/planner.v1.md`, `prompts/reasoner.v1.md`
-- `playbooks/cost-surprise.ts` (the capability-to-EvidenceRequest mapping)
-- `fixtures/` (sanitized AMG-MCP responses, one folder per fixture id)
-- `runs/` (per-run output directory; gitignored)
-- `package.json`, `tsconfig.json`, `pnpm-lock.yaml`, `config.sample.json` (checked-in template) + `config.json` (operator-local, gitignored), `README.md` updates, `.gitignore`
+- **Data shapes (§5):** `src/schemas/` — `scope.ts`, `evidence.ts`, `reasoning.ts`, `reasoning-output.ts`, `data-quality.ts`, `metadata.ts`, `config.ts`, `common.ts`, `mcp.ts` (Zod schemas with `z.infer<>` type exports).
+- **MCP boundary (§4.3, §13):** `src/mcp/` — `transport.ts` (interface), `fixture.ts` (FixtureMCPTransport), `live.ts` (LiveMCPTransport), `client.ts`, `allowlist.ts`, `required-capabilities.ts`, `content.ts`, `digest.ts`.
+- **Evidence retrieval and normalization (§4.6 / §7.2 steps 5–6):** `src/evidence/executor.ts`, `src/evidence/normalizer.ts`.
+- **Failure taxonomy (§4.4):** `src/failure/taxonomy.ts`.
+- **Reasoning (§4.7 / §7.2 steps 6–7, §7.5):** `src/reasoning/planner.ts`, `src/reasoning/reasoner.ts`, `src/reasoning/post-process.ts`; `src/lint/imperative.ts` for the read-only lint.
+- **Playbooks (§4.6):** `src/playbooks/cost-surprise.ts`, `src/playbooks/cost-summary.ts`.
+- **Confidence derivation (§9):** `src/confidence.ts`.
+- **Model boundary (§13):** `src/model/client.ts`, `src/model/openai-client.ts` (Foundry-hosted GPT via `@langfuse/openai`), `src/model/mock-client.ts`.
+- **Observability (§4.9 / §14):** `src/observability/setup.ts`, `src/observability/spans.ts`.
+- **Run orchestrator + CLI (§4.10):** `src/run/orchestrator.ts`, `src/run/scope-intake.ts`, `src/run/subscription-discovery.ts`, `src/run/diagnose.ts`, `src/run/credential-factory.ts`, `src/cli.ts`.
+- **Report assembly (§10):** `src/report/markdown.ts`, `src/report/runjson.ts`.
+- **Evaluation (§17 / step 12):** `src/evaluation/` — `dataset.ts`, `scoring.ts` (four rubrics), `expectations.ts`, `runner.ts`, `canned-mock.ts`.
+- **Prompts (§8, §15.5):** `prompts/planner.v1.md`, `prompts/reasoner.v1.md` (Phase 2 moves these into Langfuse-managed prompts).
+- **Fixtures (§13):** `fixtures/cost-surprise-001/`, `fixtures/cost-surprise-002/`, `fixtures/cost-summary-001/`; seed scripts in `scripts/seed-*.ts`.
+- **Datasets:** `eval/phase-1.json` (3 items), `eval/cost-surprise-001.json` (single-item legacy file used by `tests/evaluation/dataset.test.ts`).
+- **Project artefacts:** `package.json`, `tsconfig.json`, `vitest.config.ts`, `config.sample.json` (checked-in template) and `config.json` (operator-local, gitignored), `runs/` (per-run output directory; gitignored).

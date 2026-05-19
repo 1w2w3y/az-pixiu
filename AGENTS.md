@@ -4,9 +4,9 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Repository status
 
-Az-Pixiu is in **Phase 0 — Foundations** (see `docs/roadmap.md`). The repository currently contains documentation only. There is no source code, no build system, no tests, and no package manifest. Do not invent build/lint/test commands; if asked to "run the tests" or similar, first confirm that the implementation phase has begun.
+Phase 1 ("minimum viable agent") is complete; the project is moving into **Phase 2 — Langfuse depth** (see `docs/roadmap.md`). The agent runs end-to-end against live AMG-MCP and Azure AI Foundry, produces a markdown report plus a `run.json` artefact per invocation, lands a Langfuse trace for every run, and has a first evaluation dataset (`eval/phase-1.json`, 3 items) plus four scoring rubrics. The next concrete work is wiring eval results back to Langfuse as Scores, migrating prompts to Langfuse Prompts, and standing up Langfuse Datasets / Experiments.
 
-Phase 1 ("Minimum viable agent") is expected to introduce the first code: an end-to-end agent that connects to AMG-MCP, retrieves a small set of Azure cost and telemetry signals, and produces an evidence-backed recommendation. Langfuse tracing is in scope from the first run — observability is not added later.
+The code is TypeScript / Node 22 with `tsc` for build and `vitest` for tests. Useful commands: `npm run build`, `npm run dev`, `npm test`, `npm run typecheck`. Per-run artefacts land in `runs/<run-id>/`; eval-runner output goes under `runs/eval/<item-id>/<run-id>/`. The CLI surface is `pixiu analyze` (cost-surprise / cost-summary), `pixiu eval <dataset.json>`, and `pixiu diagnose`.
 
 ## What this project is
 
@@ -60,9 +60,11 @@ The existing docs share a recognizable voice — match it when extending them:
 - Avoid expanding non-goals casually; treat the Goals/Non-Goals lists in `docs/goals.md` as deliberately scoped.
 - New PRDs go in `docs/prd/` and follow the existing template shape (Overview, Problem Statement, Goals, Non-Goals, Personas, User Journeys, Functional Requirements, Non-Functional Requirements, Risks, Open Questions, Future Considerations, Success Criteria).
 
-## When implementation begins (Phase 1+)
+## Working in the code
 
-This section will need to be replaced with real commands once code lands. Until then, when proposing implementation work:
-- Anchor it to a specific PRD requirement or roadmap phase.
+- Anchor implementation work to a specific PRD requirement, design-doc section, or roadmap phase. Bare "this would be nice" changes get rejected.
 - Honor the hard constraints above by default; flag explicitly if a proposal pushes against one.
-- Assume Langfuse instrumentation from the first commit, not as a follow-up.
+- Langfuse tracing is wired into the orchestrator (`src/observability/`, `src/run/orchestrator.ts`). Every new span/event should join the existing §14 vocabulary in `docs/design/phase-1.md`, not invent fresh attribute names.
+- The Azure boundary is `MCPTransport` (`src/mcp/`). Don't add Azure SDK calls inside the agent for cost / resource / telemetry data; if AMG-MCP lacks something, prefer an upstream contribution.
+- The fixture-replay seam (`FixtureMCPTransport` + `scripts/seed-*.ts`) is how tests, the eval runner, and offline operator demos work without paid Azure / Foundry calls. New analysis types should ship with a seeded fixture and a dataset item.
+- Tests live next to the modules in `tests/` mirroring `src/`. End-to-end coverage is in `tests/integration/end-to-end.test.ts` and `tests/evaluation/runner.test.ts`. One test (`tests/mcp/live.test.ts > listCapabilities propagates network errors`) hits a real endpoint and times out in network-isolated environments — that failure is pre-existing and unrelated to local changes.

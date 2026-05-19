@@ -4,27 +4,23 @@ This roadmap describes the order in which the project intends to develop capabil
 
 The phases are cumulative. Earlier work is not discarded as later work begins; each phase builds on the foundations laid before it.
 
-## Phase 0 — Foundations
+## Phase 0 — Foundations (complete)
 
-The project is currently in this phase.
+The goal was to establish a shared understanding of what Az-Pixiu is, what it is not, and the principles by which it will be built. The deliverables of this phase were documentation, not code: vision, goals, architecture principles, use cases, positioning of key dependencies, and this roadmap. These remain the source of truth for everything that follows.
 
-The goal is to establish a shared understanding of what Az-Pixiu is, what it is not, and the principles by which it will be built. The deliverables of this phase are documentation, not code: vision, goals, architecture principles, use cases, positioning of key dependencies, and this roadmap.
+## Phase 1 — Minimum viable agent (complete)
 
-This phase ends when the documentation is sufficient for another engineer to read it and understand the project's intent without needing to ask the original authors.
+The goal was to bring an end-to-end agent into existence, even in a constrained form. That bar has been met. The agent connects to AMG-MCP, retrieves a small but realistic set of Azure cost and telemetry signals, produces a recommendation grounded in that data, lands a Langfuse trace for every run, and ships with a first evaluation dataset (`eval/phase-1.json`, 3 items) and four scoring rubrics.
 
-## Phase 1 — Minimum viable agent
+Scope stayed intentionally narrow: two analysis types (`cost_surprise`, `cost_summary`), a handful of AMG-MCP capabilities, and a single deployment target (clone-and-run TypeScript / Node 22). The point of this phase was to validate the architecture and to give the project something concrete to evaluate; both are done.
 
-The goal of this phase is to bring an end-to-end agent into existence, even in a constrained form. The agent should be able to connect to AMG-MCP, retrieve a small but realistic set of Azure cost and telemetry signals, and produce a recommendation grounded in that data.
+The full Phase 1 design lives in [phase-1 design](design/phase-1.md); its implementation sequencing and verification checklist record what was delivered.
 
-Scope is intentionally narrow. A small number of Azure resource types, a small number of optimization patterns, and a single deployment target are sufficient. The point of this phase is to validate the architecture and to give the project something concrete to evaluate.
+## Phase 2 — Langfuse depth (current)
 
-Langfuse tracing is part of this phase from the start. The project does not introduce observability later; the first runs of the agent are already instrumented.
+With a working agent in place, the focus shifts to exercising Langfuse capabilities in earnest. Eval rubric and expectation results move from local files to Langfuse Scores, attached to the trace each run produces. Prompts move from versioned files (`prompts/planner.v1.md`, `prompts/reasoner.v1.md`) into Langfuse-managed prompts. Datasets move from `eval/*.json` into Langfuse Datasets. Experiments compare alternative prompts, models, and analysis strategies against the same dataset. Human-review scoring sits alongside the automated rubrics for judgments the automated layer cannot make on its own.
 
-## Phase 2 — Langfuse depth
-
-With a working agent in place, the focus shifts to exercising Langfuse capabilities in earnest. Datasets of representative scenarios are curated. Evaluations are defined against those datasets. Prompts move into managed versions. Experiments compare alternative strategies on real workloads. Scoring — both automated and human — becomes part of the development loop.
-
-The aim is for the project's day-to-day work to genuinely depend on Langfuse rather than to demonstrate its features in isolation. The [Langfuse learning goals](langfuse-learning-goals.md) document describes what this looks like in more detail.
+The aim is for the project's day-to-day work to genuinely depend on Langfuse rather than to demonstrate its features in isolation. The [Langfuse learning goals](langfuse-learning-goals.md) document describes what this looks like in more detail; the [Langfuse observability PRD](prd/langfuse-observability.md) FRs 6–12 are the concrete checklist.
 
 ## Phase 3 — Optimization breadth
 

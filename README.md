@@ -26,7 +26,29 @@ Second, it is an open exploration of AI observability. The project is intentiona
 
 ## Project status
 
-Az-Pixiu is in its earliest stage. This repository currently contains foundational documentation only. No implementation has been written. See the [roadmap](docs/roadmap.md) for the intended direction of travel.
+Phase 1 ("minimum viable agent") is complete. The agent runs end-to-end against live AMG-MCP and Azure AI Foundry, produces an evidence-cited markdown report plus a `run.json` artefact for each invocation, and lands a Langfuse trace for every run. A first 3-item evaluation dataset (`eval/phase-1.json`) plus four scoring rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence) are in place. The project is moving into **Phase 2 — Langfuse depth**: managed prompts, Langfuse-hosted datasets, scores pushed back as Langfuse Scores, and prompt/model experiments on real workloads. See the [roadmap](docs/roadmap.md) for the full direction of travel.
+
+## Getting started
+
+Az-Pixiu is a CLI (`pixiu`) intended to be cloned and run locally. It requires Node.js 22+ and an `az login` against a tenant that has access to both an Azure Managed Grafana instance with MCP enabled and an Azure AI Foundry deployment.
+
+```bash
+npm install
+cp config.sample.json config.json    # then edit endpoints + deployment name
+npm run build                        # or use `npm run dev` during development
+
+# real run against live AMG-MCP + Foundry
+npx pixiu analyze cost-surprise --subscription <sub-id> --resource-group <rg>
+
+# fully-offline eval against the seeded fixtures (no Foundry, no Azure calls)
+npx pixiu eval eval/phase-1.json --use-playbook --mock-model \
+    --credential mock --observability noop
+
+# environment sanity check (credentials, endpoint reachability, MCP capabilities)
+npx pixiu diagnose
+```
+
+Run `npx pixiu --help` for the full flag set. Per-run artefacts land in `runs/<run-id>/`.
 
 ## Documentation
 
