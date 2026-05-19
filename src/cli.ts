@@ -39,7 +39,8 @@ analyze flags:
   --use-playbook                   skip the planner LLM; use the deterministic cost-surprise playbook
   --mock-model                     skip Foundry; use a hard-coded mock model response
   --output-dir <path>              where to write the run subdir (default: runs/)
-  --observability <mode>           noop | memory | langfuse  (default: memory)
+  --observability <mode>           noop | memory | langfuse  (default: langfuse — requires
+                                   LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL)
   --credential <mode>              azure-cli | default | mock  (default: azure-cli)
 
 shared flags:
@@ -287,7 +288,7 @@ function stringArrayOrUndefined(v: unknown): string[] | undefined {
 
 function parseObservability(v: unknown): 'noop' | 'memory' | 'langfuse' {
   if (v === 'noop' || v === 'memory' || v === 'langfuse') return v;
-  return 'memory';
+  return 'langfuse';
 }
 
 function parseCredential(v: unknown): CredentialMode {

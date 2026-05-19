@@ -212,7 +212,27 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
 
     return result;
   } finally {
-    await shutdownTracing();
+    // Trace export failures should never mask a successful analysis.
+    // The report, run.json, and exit code reflect the analysis itself —
+    // a Langfuse 5xx or network blip during the final flush is logged as
+    // a warning, not raised. (The provider throws an Array of one or
+    // more OTLPExporterErrors; we unwrap for a useful message.)
+    try {
+      await shutdownTracing();
+    } catch (err) {
+      const errs = Array.isArray(err) ? err : [err];
+      for (const [i, e] of errs.entries()) {
+        const o = e as { name?: string; message?: string; code?: unknown; data?: unknown };
+        const tag = errs.length > 1 ? ` [${i + 1}/${errs.length}]` : '';
+        const code = o.code !== undefined ? ` (code=${String(o.code)})` : '';
+        process.stderr.write(
+          `  ⚠ trace export${tag}: ${o.message ?? String(e)}${code}\n`,
+        );
+        if (typeof o.data === 'string' && o.data.length > 0) {
+          process.stderr.write(`    server: ${o.data.slice(0, 500)}\n`);
+        }
+      }
+    }
   }
 }
 
