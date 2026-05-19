@@ -235,13 +235,15 @@ function extractSubscriptions(value: unknown): ParsedSubscription[] {
             subscriptionId?: unknown;
             id?: unknown;
             subscription_id?: unknown;
+            subscriptionName?: unknown;
             displayName?: unknown;
             display_name?: unknown;
             name?: unknown;
           };
           const id = obj.subscriptionId ?? obj.id ?? obj.subscription_id;
           if (typeof id !== 'string' || id.length === 0) return undefined;
-          const rawName = obj.displayName ?? obj.display_name ?? obj.name;
+          // Live AMG-MCP uses `subscriptionName`; older/seeded shapes use displayName/name.
+          const rawName = obj.subscriptionName ?? obj.displayName ?? obj.display_name ?? obj.name;
           const display_name =
             typeof rawName === 'string' && rawName.length > 0 ? rawName : undefined;
           return display_name ? { subscription_id: id, display_name } : { subscription_id: id };
