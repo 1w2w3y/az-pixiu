@@ -11,6 +11,7 @@ export const SpanNames = {
   RunRoot: 'run.root',
   ConfigResolution: 'run.config_resolution',
   ScopeIntake: 'run.scope_intake',
+  SubscriptionDiscovery: 'run.subscription_discovery',
   CapabilityDiscovery: 'run.capability_discovery',
   EvidencePlanning: 'run.evidence_planning',
   EvidenceRetrieval: 'run.evidence_retrieval',
@@ -55,6 +56,11 @@ export const ATTR = {
   reasoningRecommendationsProduced: 'az_pixiu.reasoning.recommendations',
   reasoningDqProduced: 'az_pixiu.reasoning.data_quality',
   reasoningIssuesEmitted: 'az_pixiu.reasoning.post_process_issues',
+  discoveryLimit: 'az_pixiu.discovery.limit',
+  discoveryVisibleCount: 'az_pixiu.discovery.visible_count',
+  discoveryWithNamesCount: 'az_pixiu.discovery.with_names_count',
+  discoverySelectedCount: 'az_pixiu.discovery.selected_count',
+  discoveryShapeHint: 'az_pixiu.discovery.shape_hint',
 } as const;
 
 /**

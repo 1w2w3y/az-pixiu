@@ -3,10 +3,7 @@ import { loadConfig, ConfigError } from './config.js';
 import { intakeScope } from './run/scope-intake.js';
 import { runAnalysis } from './run/orchestrator.js';
 import { diagnose, type DiagnoseResult } from './run/diagnose.js';
-import {
-  discoverTopSubscriptions,
-  SubscriptionDiscoveryError,
-} from './run/subscription-discovery.js';
+import { SubscriptionDiscoveryError } from './run/subscription-discovery.js';
 import {
   buildCredential,
   describeCredential,
@@ -161,26 +158,12 @@ async function runAnalyzeCommand(
     client = new MCPClient({ transport });
     await client.discover();
 
-    // Resolve subscriptions: explicit > auto-discover > fail.
-    let subscriptionIds = args.subscriptions;
-    if (subscriptionIds.length === 0) {
-      process.stdout.write(
-        `No --subscription given; discovering top ${args.maxSubscriptions} subscription(s) by resource count via AMG-MCP...\n`,
-      );
-      const discovered = await discoverTopSubscriptions(client, args.maxSubscriptions);
-      subscriptionIds = discovered.selected_subscription_ids;
-      process.stdout.write(
-        `Discovered ${subscriptionIds.length} subscription(s): ${subscriptionIds.join(', ')}\n`,
-      );
-      if (discovered.diagnostics.length > 0) {
-        for (const d of discovered.diagnostics) {
-          process.stdout.write(`  note: ${d}\n`);
-        }
-      }
-    }
-
-    const scope = intakeScope({
-      subscription_ids: subscriptionIds,
+    // Build the shared scope-intake input. When `--subscription` is
+    // given we build the Scope here; when it isn't, we hand the same
+    // input (minus `subscription_ids`) to `runAnalysis` so the
+    // SubscriptionDiscovery span lives inside the same Langfuse trace
+    // as the analysis it feeds.
+    const scopeIntake = {
       analysis_type: analysisType,
       ...(args.resourceGroups ? { resource_group_names: args.resourceGroups } : {}),
       ...(args.resourceTypeFilter ? { resource_type_filter: args.resourceTypeFilter } : {}),
@@ -189,7 +172,11 @@ async function runAnalyzeCommand(
       ...(args.baselineFrom ? { baseline_window_start: args.baselineFrom } : {}),
       ...(args.baselineTo ? { baseline_window_end: args.baselineTo } : {}),
       ...(args.userContext ? { user_context: args.userContext } : {}),
-    });
+    };
+    const scope =
+      args.subscriptions.length > 0
+        ? intakeScope({ ...scopeIntake, subscription_ids: args.subscriptions })
+        : undefined;
 
     let model: ModelClient;
     let modelProvider: string;
@@ -215,7 +202,14 @@ async function runAnalyzeCommand(
 
     const result = await runAnalysis({
       config,
-      scope,
+      ...(scope
+        ? { scope }
+        : {
+            discoverSubscriptions: {
+              maxSubscriptions: args.maxSubscriptions,
+              scopeIntake,
+            },
+          }),
       client,
       model,
       modelProvider,

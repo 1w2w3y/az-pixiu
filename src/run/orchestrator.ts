@@ -31,6 +31,11 @@ import { costSurprisePlaybook } from '../playbooks/cost-surprise.js';
 import { costSummaryPlaybook } from '../playbooks/cost-summary.js';
 import { loadPrompt, type LoadedPrompt } from '../prompts/loader.js';
 import { scoreAll, type AggregateScore } from '../evaluation/scoring.js';
+import {
+  discoverTopSubscriptions,
+  formatSubscription,
+} from './subscription-discovery.js';
+import { intakeScope, type ScopeIntakeInput } from './scope-intake.js';
 import type {
   Config,
   Scope,
@@ -38,6 +43,7 @@ import type {
   RunMetadata,
   ReasoningOutput,
   DataQualityFinding,
+  AnalysisType,
 } from '../schemas/index.js';
 import { DataQualityFindingSchema } from '../schemas/index.js';
 import type { ClassifiedFailure } from '../failure/taxonomy.js';
@@ -45,7 +51,22 @@ import type { CredentialIdentity } from './credential-factory.js';
 
 export interface RunOptions {
   config: Config;
-  scope: Scope;
+  /**
+   * Pre-resolved scope. Either this or {@link discoverSubscriptions}
+   * must be set. Tests and explicit-subscription CLI invocations supply
+   * `scope` directly; auto-discovery from the CLI supplies
+   * `discoverSubscriptions` instead and the orchestrator builds the
+   * scope inside RunRoot, after discovery, so the discovery span is
+   * part of the same Langfuse trace as the analysis it feeds.
+   */
+  scope?: Scope;
+  /**
+   * Run AMG-MCP subscription auto-discovery as the first child of
+   * RunRoot, then build the scope from the discovered subscription ids
+   * plus {@link DiscoverSubscriptionsOption.scopeIntake}. Mutually
+   * exclusive with {@link RunOptions.scope}.
+   */
+  discoverSubscriptions?: DiscoverSubscriptionsOption;
   /**
    * MCPClient with its transport already constructed. The orchestrator
    * calls .discover() on it (idempotent — caches), so callers may call
@@ -67,6 +88,17 @@ export interface RunOptions {
   observabilityMode?: ObservabilityMode;
   /** Fixture id if running against a fixture transport. */
   fixtureId?: string;
+}
+
+export interface DiscoverSubscriptionsOption {
+  /** Max top-N subscriptions to select by resource count. */
+  maxSubscriptions: number;
+  /**
+   * Scope-intake input minus `subscription_ids`. The orchestrator fills
+   * in `subscription_ids` from the discovery result and calls
+   * `intakeScope` to build the final {@link Scope}.
+   */
+  scopeIntake: Omit<ScopeIntakeInput, 'subscription_ids'>;
 }
 
 export interface RunResult {
@@ -94,6 +126,17 @@ export interface RunResult {
  * advertises any capability matching the deny patterns.
  */
 export async function runAnalysis(options: RunOptions): Promise<RunResult> {
+  if (!options.scope && !options.discoverSubscriptions) {
+    throw new Error(
+      'runAnalysis: either `scope` or `discoverSubscriptions` must be set.',
+    );
+  }
+  if (options.scope && options.discoverSubscriptions) {
+    throw new Error(
+      'runAnalysis: `scope` and `discoverSubscriptions` are mutually exclusive.',
+    );
+  }
+
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const runsDir = options.runsDir ?? 'runs';
@@ -104,9 +147,23 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
   const observabilityMode = options.observabilityMode ?? 'memory';
   await initializeTracing({ mode: observabilityMode });
 
+  // Analysis type is known up front from either input — used for tags
+  // and traceName so the trace is filterable from the moment RunRoot
+  // opens, even if the scope itself is still being discovered.
+  const analysisType: AnalysisType =
+    options.scope?.analysis_type ??
+    options.discoverSubscriptions?.scopeIntake.analysis_type ??
+    'cost_surprise';
+
   // Operator transparency (design §4.2): echo what is about to happen.
   process.stdout.write(`Az-Pixiu run ${runId}\n`);
-  process.stdout.write(`  scope: ${options.scope.effective_scope_summary}\n`);
+  if (options.scope) {
+    process.stdout.write(`  scope: ${options.scope.effective_scope_summary}\n`);
+  } else {
+    process.stdout.write(
+      `  scope: (auto-discovering top ${options.discoverSubscriptions!.maxSubscriptions} subscription(s); analysis_type=${analysisType})\n`,
+    );
+  }
   process.stdout.write(`  amg_mcp_endpoint: ${options.config.amg.endpoint}\n`);
   process.stdout.write(
     `  foundry: ${options.config.foundry.endpoint} (${options.config.foundry.deployment}, sku=${options.config.foundry.deployment_sku})\n`,
@@ -128,7 +185,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
   //                tenants/environments)
   //   - tags:      analysis_type + 'fixture' when running offline, so
   //                the UI can filter offline vs live runs
-  const tags = [`analysis:${options.scope.analysis_type}`];
+  const tags = [`analysis:${analysisType}`];
   if (options.fixtureId) tags.push('fixture');
 
   try {
@@ -137,7 +194,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
       async (rootSpan) =>
         propagateAttributes(
           {
-            traceName: `analyze.${options.scope.analysis_type}`,
+            traceName: `analyze.${analysisType}`,
             userId: options.credentialIdentity.identity,
             sessionId: options.config.amg.endpoint,
             tags,
@@ -151,25 +208,47 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
             },
           },
           async () => {
+            // Resolve the scope first — discovery (if requested) runs as
+            // a child span of RunRoot so its evidence and selection land
+            // on the same Langfuse trace as the analysis that consumes
+            // them. setActiveTraceIO is deferred until we have the final
+            // scope so the trace input reflects what was actually
+            // analyzed, not a placeholder.
+            const scope = options.scope
+              ? options.scope
+              : await runSubscriptionDiscovery(
+                  options.client,
+                  options.discoverSubscriptions!,
+                );
+
             // Trace-level input is the operator's effective ask; trace-level
             // output is set after doRun returns so Langfuse renders the
             // request → response pair on the trace card.
             setActiveTraceIO({
               input: {
                 scope: {
-                  subscription_ids: options.scope.subscription_ids,
-                  analysis_type: options.scope.analysis_type,
-                  time_window: options.scope.time_window,
-                  baseline_window: options.scope.baseline_window,
-                  resource_group_names: options.scope.resource_group_names,
-                  effective_scope_summary: options.scope.effective_scope_summary,
+                  subscription_ids: scope.subscription_ids,
+                  analysis_type: scope.analysis_type,
+                  time_window: scope.time_window,
+                  baseline_window: scope.baseline_window,
+                  resource_group_names: scope.resource_group_names,
+                  effective_scope_summary: scope.effective_scope_summary,
                 },
               },
             });
             // Annotate the root span itself with a structured input too,
             // so it's discoverable when filtering on root-span observations.
-            updateActiveObservation({ input: { scope_summary: options.scope.effective_scope_summary } });
-            const r = await doRun({ ...options, runId, startedAt, runDir, reportPath, runJsonPath, traceId });
+            updateActiveObservation({ input: { scope_summary: scope.effective_scope_summary } });
+            const r = await doRun({
+              ...options,
+              scope,
+              runId,
+              startedAt,
+              runDir,
+              reportPath,
+              runJsonPath,
+              traceId,
+            });
             const outputSummary = {
               run_id: r.run_id,
               status: r.metadata.status,
@@ -189,7 +268,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
       {
         [ATTR.agentName]: 'az-pixiu',
         [ATTR.agentDomain]: 'finops',
-        [ATTR.analysisType]: options.scope.analysis_type,
+        [ATTR.analysisType]: analysisType,
         [ATTR.modelProvider]: options.modelProvider,
         [ATTR.modelName]: options.config.foundry.deployment,
         [ATTR.modelDeploymentSku]: options.config.foundry.deployment_sku,
@@ -236,7 +315,88 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
   }
 }
 
-interface RunCtx extends RunOptions {
+/**
+ * OTEL span attributes only allow primitive values or arrays of
+ * primitives (string | number | boolean). Discovery events carry richer
+ * shapes (e.g. arrays of subscription objects), so coerce non-primitive
+ * values to JSON strings here at the OTEL boundary. Keeps discovery
+ * itself transport-agnostic and OTEL-naive.
+ */
+function toOtelAttributes(
+  attrs: Record<string, unknown> | undefined,
+): Record<string, string | number | boolean | string[]> | undefined {
+  if (!attrs) return undefined;
+  const out: Record<string, string | number | boolean | string[]> = {};
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      out[key] = value;
+    } else if (Array.isArray(value) && value.every((v) => typeof v === 'string')) {
+      out[key] = value as string[];
+    } else {
+      out[key] = JSON.stringify(value);
+    }
+  }
+  return out;
+}
+
+/**
+ * Run subscription auto-discovery inside its own child span of RunRoot,
+ * so the discovery's stdout progress lines also surface as span events
+ * (and as input/output) on the same Langfuse trace as the rest of the
+ * run. Returns the {@link Scope} built from the discovery result.
+ */
+async function runSubscriptionDiscovery(
+  client: MCPClient,
+  option: DiscoverSubscriptionsOption,
+): Promise<Scope> {
+  process.stdout.write(
+    `→ discovering top ${option.maxSubscriptions} subscription(s) by resource count via AMG-MCP...\n`,
+  );
+  const discovered = await withSpan(SpanNames.SubscriptionDiscovery, async (span) => {
+    updateActiveObservation({ input: { limit: option.maxSubscriptions } });
+    const result = await discoverTopSubscriptions(client, option.maxSubscriptions, {
+      onProgress: (line, event) => {
+        process.stdout.write(line + '\n');
+        if (event) emitEvent(span, event.name, toOtelAttributes(event.attrs));
+      },
+    });
+    const visibleCount = result.all_counts.length;
+    const withNamesCount = result.all_counts.filter((c) => c.display_name).length;
+    span.setAttribute(ATTR.discoveryLimit, option.maxSubscriptions);
+    span.setAttribute(ATTR.discoveryVisibleCount, visibleCount);
+    span.setAttribute(ATTR.discoveryWithNamesCount, withNamesCount);
+    span.setAttribute(ATTR.discoverySelectedCount, result.selected.length);
+    const shapeDiag = result.diagnostics.find((d) => d.startsWith('no display names'));
+    if (shapeDiag) span.setAttribute(ATTR.discoveryShapeHint, shapeDiag);
+    updateActiveObservation({
+      output: {
+        selected: result.selected.map((c) => ({
+          subscription_id: c.subscription_id,
+          display_name: c.display_name,
+          resource_count: c.resource_count,
+          formatted: formatSubscription(c),
+        })),
+        diagnostics: result.diagnostics,
+      },
+    });
+    return result;
+  });
+
+  if (discovered.diagnostics.length > 0) {
+    for (const d of discovered.diagnostics) {
+      process.stdout.write(`  note: ${d}\n`);
+    }
+  }
+
+  return intakeScope({
+    ...option.scopeIntake,
+    subscription_ids: discovered.selected_subscription_ids,
+  });
+}
+
+interface RunCtx extends Omit<RunOptions, 'scope'> {
+  scope: Scope;
   runId: string;
   startedAt: string;
   runDir: string;
