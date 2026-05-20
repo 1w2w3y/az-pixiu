@@ -1,10 +1,10 @@
 # Az-Pixiu Phase 2 Design
 
-> **Status (2026-05):** Phase 2 is in flight. The agent's *tracing* surface is already wired (`src/observability/`, every run produces a Langfuse trace), but the rest of the Langfuse stack — scores, datasets, prompt management, experiments, human review — is still local-only. This document records the plan for moving each of those out of the project's filesystem and into Langfuse without breaking offline operation.
+> **Status (2026-05):** Phase 2 is in flight. The agent's *tracing* surface is wired (`src/observability/`, every run produces a Langfuse trace when configured). Langfuse Scores are now attached to ordinary `pixiu analyze` runs for the four structural rubrics, and `pixiu eval` can publish rubric and expectation scores, upsert local dataset items, and group per-item traces into a Langfuse Dataset Run / Experiment. Prompt management, Langfuse-sourced datasets, LLM-as-judge, human review, calibration, and configurable redaction remain planned work. This document records the path for moving the remaining surfaces into Langfuse without breaking offline operation.
 
 ## Context
 
-Phase 1 delivered an end-to-end agent that runs against real AMG-MCP + Foundry, produces an evidence-cited report, lands a Langfuse trace per run, and scores its own reasoning against four structural rubrics ([phase-1 design](phase-1.md) §17). The Langfuse trace surface is real; everything *around* it — datasets, scores, prompt versions, experiments — still lives as files and in-process state. Phase 1 deliberately deferred the rest ([phase-1 design](phase-1.md) §"What Phase 1 deliberately leaves to later").
+Phase 1 delivered an end-to-end agent that runs against real AMG-MCP + Foundry, produces an evidence-cited report, lands a Langfuse trace per run, and scores its own reasoning against four structural rubrics ([phase-1 design](phase-1.md) §17). Phase 2 has started to make those local quality signals visible in Langfuse: analyze runs publish rubric scores when Langfuse is configured, and eval runs can publish scores and experiment grouping. The remaining surfaces — prompt versions, Langfuse-sourced datasets, judge scores, human review, calibration, and redaction policy — are still being moved out of the filesystem and in-process state. Phase 1 deliberately deferred that broader stack ([phase-1 design](phase-1.md) §"What Phase 1 deliberately leaves to later").
 
 Phase 2's purpose is to make Langfuse load-bearing in day-to-day development, not a tracing sink. The bar set by the [Langfuse learning goals](../langfuse-learning-goals.md) is that "the project's day-to-day work genuinely depend on Langfuse." The bar set by the [Langfuse observability PRD](../prd/langfuse-observability.md) is the FR-6 through FR-12 cluster (prompt versioning, datasets, structural-plus-quality scoring, experiments, human review). The bar set by the [evaluation framework PRD](../prd/evaluation-framework.md) is FR-5 (eval results linked to Langfuse traces, prompts, model configs, experiments) plus FR-7 through FR-10 (grounding checks, multi-dimension scoring, baseline-vs-candidate comparison).
 
@@ -52,13 +52,16 @@ Phase 1's rubric output is a typed `AggregateScore` with four boolean rubrics pl
 
 | Score name | Producer | Value type | Trigger |
 |---|---|---|---|
-| `structural_correctness` | orchestrator | boolean (0 or 1) | every run |
-| `citation_completeness` | orchestrator | boolean | every run |
-| `confidence_consistency` | orchestrator | boolean | every run |
-| `read_only_adherence` | orchestrator | boolean | every run |
-| `min_recommendations` | eval runner | boolean | eval items with this expectation |
-| `expected_dq_categories` | eval runner | boolean | eval items with this expectation |
-| `expected_capabilities_invoked` | eval runner | boolean | eval items with this expectation |
+| `rubric.structural_correctness` | orchestrator | boolean (0 or 1) | every run |
+| `rubric.citation_completeness` | orchestrator | boolean | every run |
+| `rubric.confidence_consistency` | orchestrator | boolean | every run |
+| `rubric.read_only_adherence` | orchestrator | boolean | every run |
+| `rubric.passed_all` | orchestrator | boolean | every run |
+| `expectation.min_recommendations` | eval runner | boolean | eval items with this expectation |
+| `expectation.expected_dq_categories` | eval runner | boolean | eval items with this expectation |
+| `expectation.expected_capabilities_invoked` | eval runner | boolean | eval items with this expectation |
+| `expectation.passed_all` | eval runner | boolean | eval items |
+| `eval.passed_all` | eval runner | boolean | eval items |
 | `judge.grounding` | LLM-as-judge | numeric (0.0–1.0) | eval items, optional |
 | `judge.actionability` | LLM-as-judge | numeric (0.0–1.0) | eval items, optional |
 | `judge.clarity` | LLM-as-judge | numeric (0.0–1.0) | eval items, optional |
@@ -192,11 +195,11 @@ The conventions are written down because the [langfuse-observability PRD](../prd
 
 Each step independently shippable and independently revertible. Steps 1–3 unlock the rest; 4–6 fan out from there.
 
-1. **Score-push from the orchestrator.** Extend the orchestrator's Finalize span to call Langfuse's score API for the four existing rubrics. Demote write failures to warnings (mirror commit `cf9fe97`). Pass-through `pixiu eval`: no change to the runner yet; rubric scores attach to every run automatically.
-2. **Score-push for expectations.** Eval runner adds the per-expectation score writes after each item. The local summary printout stays; it's now a redundant convenience.
+1. **Score-push from the orchestrator.** **Shipped.** The orchestrator publishes `rubric.*` scores for ordinary `pixiu analyze` runs when a Langfuse publisher is configured. Write failures are warnings only; reports and `run.json` remain the operator's ground truth.
+2. **Score-push for expectations.** **Shipped for eval runs.** The eval runner writes per-rubric and per-expectation scores after each item. The local summary printout stays as a redundant convenience.
 3. **Prompt move.** Initial upload of `prompts/planner.v1.md` and `prompts/reasoner.v1.md` to Langfuse Prompts (one-time script). Switch the orchestrator to read from Langfuse with local-fallback. `RunMetadata.prompt_versions` reads the Langfuse version.
-4. **Dataset move.** One-time upload script `eval/phase-1.json` → Langfuse Dataset `phase-1`. Eval runner switches to reading the dataset from Langfuse, with a `--dataset-file` flag retained for offline operation against the local JSON. Add a reverse-sync command that exports Langfuse Dataset edits back to JSON for PR review.
-5. **Experiments.** Eval runner creates one Langfuse Experiment per invocation, names it from the config hash, tags every per-item trace with the experiment ID. Document the baseline-vs-candidate workflow in `docs/operations.md`.
+4. **Dataset move.** **Partially shipped.** Eval runs can upsert local JSON items into a Langfuse Dataset. Still to do: read datasets from Langfuse as a source, retain a local-file override for offline operation, and add reverse-sync from Langfuse Dataset edits back to JSON for PR review.
+5. **Experiments.** **Partially shipped.** Eval runs can group per-item traces under a Langfuse Dataset Run / Experiment name. Still to do: standardize the config-hash naming, enrich metadata with prompt versions and git SHA, and document the baseline-vs-candidate workflow in `docs/operations.md`.
 6. **LLM-as-judge.** Add a judge step after each eval item's `ReasoningOutput`. Judge prompt is Langfuse-managed. Three judge dimensions land: `judge.grounding`, `judge.actionability`, `judge.clarity`. Add a `--no-judge` flag for fast iterations.
 7. **Redactor.** Introduce the `Redactor` interface and a default policy. Apply to span attributes and score string fields before they leave the process.
 8. **Human review tooling.** `pixiu review` subcommand that pulls a queue of traces by filter and opens each in the browser. Document the manual scoring path in `docs/operations.md`.

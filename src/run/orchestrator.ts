@@ -31,6 +31,7 @@ import { costSurprisePlaybook } from '../playbooks/cost-surprise.js';
 import { costSummaryPlaybook } from '../playbooks/cost-summary.js';
 import { loadPrompt, type LoadedPrompt } from '../prompts/loader.js';
 import { scoreAll, type AggregateScore } from '../evaluation/scoring.js';
+import type { ScorePayload } from '../evaluation/langfuse-publisher.js';
 import {
   discoverTopSubscriptions,
   formatSubscription,
@@ -90,6 +91,16 @@ export interface RunOptions {
   observabilityMode?: ObservabilityMode;
   /** Fixture id if running against a fixture transport. */
   fixtureId?: string;
+  /**
+   * Optional Langfuse score publisher. Normal CLI runs pass this when
+   * observability is `langfuse`; tests pass a fake. Publishing failures
+   * are warnings only and never change the analysis result.
+   */
+  langfusePublisher?: AnalyzeScorePublisher;
+}
+
+export interface AnalyzeScorePublisher {
+  pushScores(scores: ScorePayload[]): Promise<void>;
 }
 
 export interface DiscoverSubscriptionsOption {
@@ -310,6 +321,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
             };
             setActiveTraceIO({ output: outputSummary });
             updateActiveObservation({ output: outputSummary });
+            await publishAnalyzeScores(options.langfusePublisher, otelTraceId, r);
             rootSpan.setAttribute(ATTR.status, r.metadata.status);
             return r;
           },
@@ -649,6 +661,34 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
 }
 
 // --- helpers ---
+
+async function publishAnalyzeScores(
+  publisher: AnalyzeScorePublisher | undefined,
+  otelTraceId: string | undefined,
+  result: RunResult,
+): Promise<void> {
+  if (!publisher || !otelTraceId) return;
+  try {
+    const scores: ScorePayload[] = result.score.results.map((r) => ({
+      traceId: otelTraceId,
+      name: `rubric.${r.rubric}`,
+      value: r.passed ? 1 : 0,
+      dataType: 'BOOLEAN',
+      ...(r.details ? { comment: r.details } : {}),
+    }));
+    scores.push({
+      traceId: otelTraceId,
+      name: 'rubric.passed_all',
+      value: result.score.passed_all ? 1 : 0,
+      dataType: 'BOOLEAN',
+    });
+    await publisher.pushScores(scores);
+    process.stdout.write(`  ↗ published rubric scores to Langfuse\n`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`  ⚠ Langfuse score publish failed: ${message}\n`);
+  }
+}
 
 function runIdAsBranded(id: string): RunMetadata['run_id'] {
   // randomUUID is RFC 4122 v4 so it satisfies the RunIdSchema brand.

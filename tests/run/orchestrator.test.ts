@@ -11,6 +11,7 @@ import { FixtureMCPTransport } from '../../src/mcp/fixture.js';
 import { MCPClient } from '../../src/mcp/client.js';
 import { MockModelClient } from '../../src/model/mock-client.js';
 import type { Config, ReasoningOutput } from '../../src/schemas/index.js';
+import type { ScorePayload } from '../../src/evaluation/langfuse-publisher.js';
 
 const subId = '11111111-1111-1111-1111-111111111111';
 
@@ -159,4 +160,103 @@ describe('runAnalysis — fixture transport + mock model + playbook', () => {
       await rm(tmp, { recursive: true, force: true });
     }
   });
+
+  it('publishes rubric scores to Langfuse when a score publisher is supplied', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'azp-orc-scores-'));
+    try {
+      const scope = intakeScope({
+        subscription_ids: [subId],
+        resource_group_names: ['rg-db-prod'],
+        time_window_start: '2026-05-01T00:00:00Z',
+        time_window_end: '2026-05-08T00:00:00Z',
+        baseline_window_start: '2026-04-24T00:00:00Z',
+        baseline_window_end: '2026-05-01T00:00:00Z',
+      });
+      const publisher = new RecordingScorePublisher();
+
+      const result = await runAnalysis({
+        config,
+        scope,
+        client: new MCPClient({
+          transport: new FixtureMCPTransport({ fixturePath: 'fixtures/cost-surprise-001' }),
+        }),
+        model: new MockModelClient({ responses: emptyReasoningResponse() }),
+        modelProvider: 'mock',
+        credentialIdentity: describeCredential('mock'),
+        usePlaybook: true,
+        runsDir: tmp,
+        observabilityMode: 'memory',
+        langfusePublisher: publisher,
+      });
+
+      expect(result.otel_trace_id).toBeDefined();
+      expect(publisher.calls).toHaveLength(1);
+      expect(publisher.calls[0]!.map((s) => s.name)).toEqual([
+        'rubric.structural_correctness',
+        'rubric.citation_completeness',
+        'rubric.confidence_consistency',
+        'rubric.read_only_adherence',
+        'rubric.passed_all',
+      ]);
+      expect(publisher.calls[0]!.every((s) => s.traceId === result.otel_trace_id)).toBe(true);
+      expect(publisher.calls[0]!.every((s) => s.dataType === 'BOOLEAN')).toBe(true);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not fail the analysis when Langfuse score publishing fails', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'azp-orc-score-fail-'));
+    try {
+      const scope = intakeScope({
+        subscription_ids: [subId],
+        resource_group_names: ['rg-db-prod'],
+        time_window_start: '2026-05-01T00:00:00Z',
+        time_window_end: '2026-05-08T00:00:00Z',
+        baseline_window_start: '2026-04-24T00:00:00Z',
+        baseline_window_end: '2026-05-01T00:00:00Z',
+      });
+
+      const result = await runAnalysis({
+        config,
+        scope,
+        client: new MCPClient({
+          transport: new FixtureMCPTransport({ fixturePath: 'fixtures/cost-surprise-001' }),
+        }),
+        model: new MockModelClient({ responses: emptyReasoningResponse() }),
+        modelProvider: 'mock',
+        credentialIdentity: describeCredential('mock'),
+        usePlaybook: true,
+        runsDir: tmp,
+        observabilityMode: 'memory',
+        langfusePublisher: {
+          async pushScores() {
+            throw new Error('Langfuse is unavailable');
+          },
+        },
+      });
+
+      expect(result.score.passed_all).toBe(true);
+      expect(result.report_path).toContain(tmp);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
+
+class RecordingScorePublisher {
+  readonly calls: ScorePayload[][] = [];
+
+  async pushScores(scores: ScorePayload[]): Promise<void> {
+    this.calls.push(scores);
+  }
+}
+
+function emptyReasoningResponse(): ReasoningOutput {
+  return {
+    facts: [],
+    hypotheses: [],
+    recommendations: [],
+    data_quality: [],
+  };
+}

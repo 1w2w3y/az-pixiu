@@ -243,6 +243,15 @@ async function runAnalyzeCommand(
       modelProvider = config.provider;
     }
 
+    const langfusePublisher =
+      args.observability === 'langfuse' ? LangfusePublisher.fromEnv() : undefined;
+    if (args.observability === 'langfuse' && !langfusePublisher) {
+      process.stderr.write(
+        '⚠ --observability langfuse without LANGFUSE_PUBLIC_KEY/SECRET_KEY/BASE_URL env: ' +
+          'trace export may still be attempted by OTLP, but analyze rubric scores will be skipped.\n',
+      );
+    }
+
     const result = await runAnalysis({
       config,
       ...(scope
@@ -264,6 +273,7 @@ async function runAnalyzeCommand(
       ...(args.outputDir ? { runsDir: args.outputDir } : {}),
       observabilityMode: args.observability,
       ...(args.fixture ? { fixtureId: args.fixture } : {}),
+      ...(langfusePublisher ? { langfusePublisher } : {}),
     });
 
     return result.score.passed_all ? 0 : 3;
