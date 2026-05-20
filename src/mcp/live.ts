@@ -100,7 +100,11 @@ export class LiveMCPTransport implements MCPTransport {
       }
       const headers = new Headers(init?.headers);
       headers.set('Authorization', `Bearer ${token.token}`);
-      return this.fetchImpl(url, { ...init, headers });
+      const response = await this.fetchImpl(url, { ...init, headers });
+      if (!response.ok) {
+        throw new Error(await describeHttpFailure(url, init, response));
+      }
+      return response;
     };
   }
 
@@ -141,4 +145,26 @@ export class LiveMCPTransport implements MCPTransport {
       this.client = undefined;
     }
   }
+}
+
+async function describeHttpFailure(
+  url: string | URL,
+  init: RequestInit | undefined,
+  response: Response,
+): Promise<string> {
+  const method = init?.method ?? 'GET';
+  const contentType = response.headers.get('content-type') ?? '(none)';
+  let body = '';
+  try {
+    body = await response.clone().text();
+  } catch {
+    body = '(could not read response body)';
+  }
+  const bodySnippet = body.trim().slice(0, 1000);
+  return [
+    `AMG-MCP HTTP ${response.status} ${response.statusText}`.trim(),
+    `${method} ${String(url)}`,
+    `content-type: ${contentType}`,
+    `body: ${bodySnippet || '(empty)'}`,
+  ].join('; ');
 }

@@ -26,13 +26,13 @@ describe('LiveMCPTransport (construction)', () => {
     expect(t).toBeDefined();
   });
 
-  it('strips trailing slashes from the endpoint', () => {
+  it('strips trailing slashes from the endpoint', async () => {
     const t = new LiveMCPTransport({
       endpoint: 'https://example.grafana.azure.com/',
       credential: fakeCredential,
     });
     // Implementation detail surfaced via .close() being safe on never-connected instance:
-    expect(t.close()).resolves.toBeUndefined();
+    await expect(t.close()).resolves.toBeUndefined();
   });
 
   it('close() resolves cleanly without a prior connection', async () => {
@@ -49,5 +49,22 @@ describe('LiveMCPTransport (construction)', () => {
       credential: fakeCredential,
     });
     await expect(t.listCapabilities()).rejects.toBeDefined();
+  });
+
+  it('includes HTTP status and response body details for non-2xx AMG-MCP responses', async () => {
+    const t = new LiveMCPTransport({
+      endpoint: 'https://example.grafana.azure.com',
+      credential: fakeCredential,
+      fetchImpl: async () =>
+        new Response('missing or invalid audience', {
+          status: 401,
+          statusText: 'Unauthorized',
+          headers: { 'content-type': 'text/plain' },
+        }),
+    });
+
+    await expect(t.listCapabilities()).rejects.toThrow(
+      /AMG-MCP HTTP 401 Unauthorized.*missing or invalid audience/,
+    );
   });
 });
