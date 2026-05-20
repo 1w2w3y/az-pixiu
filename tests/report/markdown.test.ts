@@ -201,4 +201,60 @@ describe('renderMarkdownReport', () => {
     // and not the quoted name form
     expect(md).not.toMatch(/Subscriptions:\*\*\s+"/);
   });
+
+  it('renders a deterministic spend overview for cost_summary reports', () => {
+    const summaryScope: Scope = {
+      subscription_ids: [subId],
+      time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
+      analysis_type: 'cost_summary',
+      effective_scope_summary: '1 subscription, 7-day cost summary',
+    };
+    const summaryEvidence: EvidenceRecord[] = [
+      {
+        evidence_id: 'ev-amgmcp_cost_analysis-aaaaaaaa',
+        source_capability: 'amgmcp_cost_analysis',
+        capability_version: '1.0.0',
+        query_intent: 'cost_breakdown',
+        scope_subset: { subscription_ids: [subId] },
+        time_window: summaryScope.time_window,
+        payload_ref: {
+          kind: 'inline',
+          data: {
+            rows: [
+              ['2026-05-01', 'App Service', 38.21, 'USD'],
+              ['2026-05-01', 'Storage', 11.42, 'USD'],
+              ['2026-05-04', 'App Service', 41.55, 'USD'],
+              ['2026-05-04', 'Storage', 12.05, 'USD'],
+              ['2026-05-07', 'App Service', 42.78, 'USD'],
+              ['2026-05-07', 'Storage', 12.71, 'USD'],
+            ],
+            total: { cost: 158.72, currency: 'USD' },
+          },
+        },
+        payload_summary: { total_cost: 158.72, currency: 'USD' },
+        caveats: [],
+      },
+    ];
+
+    const md = renderMarkdownReport({
+      scope: summaryScope,
+      reasoning,
+      evidence: summaryEvidence,
+      metadata,
+    });
+
+    expect(md).toContain('## Cost Summary Overview');
+    expect(md).toContain('**Total observed cost:** 158.72 USD');
+    expect(md).toContain('**Cost records:** 6');
+    expect(md).toContain('**Cost evidence:** ev-amgmcp_cost_analysis-aaaaaaaa');
+    expect(md).toContain('- App Service: 122.54 USD');
+    expect(md).toContain('- Storage: 36.18 USD');
+    expect(md).toContain('**Peak observed day:** 2026-05-07 (55.49 USD)');
+    expect(md).toContain('**Lowest observed day:** 2026-05-01 (49.63 USD)');
+  });
+
+  it('does not add the cost-summary overview to cost_surprise reports', () => {
+    const md = renderMarkdownReport({ scope, reasoning, evidence, metadata });
+    expect(md).not.toContain('## Cost Summary Overview');
+  });
 });
