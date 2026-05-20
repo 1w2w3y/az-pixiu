@@ -1,0 +1,41 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "subscription_ids": [
+      "44444444-4444-4444-4444-444444444444",
+      "55555555-5555-5555-5555-555555555555",
+      "66666666-6666-6666-6666-666666666666"
+    ],
+    "query": "Resources | extend owner = tostring(tags['owner']), environment = tostring(tags['environment']), cost_center = tostring(tags['cost-center']) | summarize total=count(), no_owner=countif(owner == ''), no_environment=countif(environment == ''), no_cost_center=countif(cost_center == '') by subscriptionId"
+  },
+  "parameters_digest": "7056d0352fd1216dc8a491f5813f85c53be3c88cbc7dab6d6a16448fd1751d77",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "subscriptionId": "44444444-4444-4444-4444-444444444444",
+          "total": 1659,
+          "no_owner": 412,
+          "no_environment": 168,
+          "no_cost_center": 1103
+        },
+        {
+          "subscriptionId": "55555555-5555-5555-5555-555555555555",
+          "total": 6,
+          "no_owner": 0,
+          "no_environment": 0,
+          "no_cost_center": 1
+        },
+        {
+          "subscriptionId": "66666666-6666-6666-6666-666666666666",
+          "total": 1,
+          "no_owner": 1,
+          "no_environment": 1,
+          "no_cost_center": 1
+        }
+      ],
+      "count": 3
+    },
+    "isError": false
+  }
+}

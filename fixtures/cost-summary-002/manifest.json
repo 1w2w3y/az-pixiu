@@ -1,0 +1,12 @@
+{
+  "fixture_id": "cost-summary-002",
+  "description": "Multi-subscription cost_summary fixture. Cost totals and resource-graph distribution are sanitized from a real AMG-MCP run; tag-coverage and activity-log payloads are realistically reconstructed to match the recorded resource volumes.",
+  "analysis_type": "cost_summary",
+  "recorded_at": "2026-05-19T19:48:46Z",
+  "sanitized_at": "2026-05-20T00:00:00Z",
+  "recorded_from": "live AMG-MCP, sanitized (source run a0173f27-37ab-4688-9174-b2fb4798a457)",
+  "time_window": {
+    "start": "2026-05-12T00:00:00Z",
+    "end": "2026-05-19T00:00:00Z"
+  }
+}

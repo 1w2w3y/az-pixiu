@@ -1,0 +1,43 @@
+{
+  "capability": "amgmcp_query_activity_log",
+  "parameters": {
+    "subscription_id": "44444444-4444-4444-4444-444444444444",
+    "time_window": {
+      "start": "2026-05-12T00:00:00Z",
+      "end": "2026-05-19T00:00:00Z"
+    }
+  },
+  "parameters_digest": "df253c251541ea8afbba5ab227e2b803c6a227265e945cbf5b9e4304c13e0d9d",
+  "response": {
+    "content": {
+      "entries": [
+        {
+          "operation": "Microsoft.DBforPostgreSQL/flexibleServers/write",
+          "resource_id": "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-data-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/pg-prod-primary",
+          "timestamp": "2026-05-14T08:31:42Z",
+          "caller": "platform-deploy@example.com",
+          "properties": {
+            "from_sku": "Standard_D8ds_v5",
+            "to_sku": "Standard_D16ds_v5"
+          },
+          "status": "Succeeded"
+        },
+        {
+          "operation": "Microsoft.Authorization/roleAssignments/write",
+          "resource_id": "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-platform/providers/Microsoft.Authorization/roleAssignments/role-2026-05-15",
+          "timestamp": "2026-05-15T17:04:11Z",
+          "caller": "iam-admin@example.com",
+          "status": "Succeeded"
+        },
+        {
+          "operation": "Microsoft.ContainerService/managedClusters/write",
+          "resource_id": "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-platform/providers/Microsoft.ContainerService/managedClusters/aks-platform-1",
+          "timestamp": "2026-05-17T11:48:09Z",
+          "caller": "platform-deploy@example.com",
+          "status": "Succeeded"
+        }
+      ]
+    },
+    "isError": false
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "capability": "amgmcp_cost_analysis",
+  "parameters": {
+    "subscription_id": "55555555-5555-5555-5555-555555555555",
+    "time_window": {
+      "start": "2026-05-12T00:00:00Z",
+      "end": "2026-05-19T00:00:00Z"
+    },
+    "granularity": "Daily",
+    "grouping": [
+      "ServiceName"
+    ]
+  },
+  "parameters_digest": "90679942bf14176ae062130fe095c64878994a9772a2765d06a4c90576be7877",
+  "response": {
+    "content": {
+      "periodStart": "2026-05-12",
+      "periodEnd": "2026-05-19",
+      "subscriptions": [
+        {
+          "subscriptionId": "55555555-5555-5555-5555-555555555555",
+          "totalCost": 93.42,
+          "currency": "USD",
+          "byService": [
+            {
+              "name": "Azure Database for PostgreSQL",
+              "cost": 72.29
+            },
+            {
+              "name": "Azure Cosmos DB",
+              "cost": 20.72
+            },
+            {
+              "name": "Microsoft Defender for Cloud",
+              "cost": 0.41
+            }
+          ],
+          "byRegion": [
+            {
+              "name": "us central",
+              "cost": 75.78
+            },
+            {
+              "name": "kr central",
+              "cost": 4.65
+            },
+            {
+              "name": "us east 2",
+              "cost": 4.65
+            },
+            {
+              "name": "us west 3",
+              "cost": 3.1
+            },
+            {
+              "name": "fr central",
+              "cost": 2.9
+            },
+            {
+              "name": "de west central",
+              "cost": 2.32
+            },
+            {
+              "name": "global",
+              "cost": 0.02
+            }
+          ],
+          "byResourceType": [
+            {
+              "name": "microsoft.dbforpostgresql/flexibleservers",
+              "cost": 72.68
+            },
+            {
+              "name": "microsoft.documentdb/databaseaccounts",
+              "cost": 20.72
+            },
+            {
+              "name": "microsoft.security/pricings",
+              "cost": 0.02
+            }
+          ]
+        }
+      ]
+    },
+    "isError": false
+  }
+}

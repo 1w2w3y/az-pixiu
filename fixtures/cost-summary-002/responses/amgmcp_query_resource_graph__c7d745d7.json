@@ -1,0 +1,80 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "subscription_ids": [
+      "44444444-4444-4444-4444-444444444444",
+      "55555555-5555-5555-5555-555555555555",
+      "66666666-6666-6666-6666-666666666666"
+    ],
+    "query": "Resources | summarize count_=count() by type | order by count_ desc | take 15"
+  },
+  "parameters_digest": "c7d745d7704a51c39f4dd2c036ddedb33911f8fedc0b427a48fa9a8d5bc3b158",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "type": "microsoft.network/publicipaddresses",
+          "count_": 160
+        },
+        {
+          "type": "microsoft.insights/scheduledqueryrules",
+          "count_": 154
+        },
+        {
+          "type": "microsoft.managedidentity/userassignedidentities",
+          "count_": 139
+        },
+        {
+          "type": "microsoft.insights/metricalerts",
+          "count_": 136
+        },
+        {
+          "type": "microsoft.storage/storageaccounts",
+          "count_": 119
+        },
+        {
+          "type": "microsoft.dashboard/dashboards",
+          "count_": 105
+        },
+        {
+          "type": "microsoft.alertsmanagement/prometheusrulegroups",
+          "count_": 96
+        },
+        {
+          "type": "microsoft.insights/webtests",
+          "count_": 84
+        },
+        {
+          "type": "microsoft.keyvault/vaults",
+          "count_": 61
+        },
+        {
+          "type": "microsoft.compute/virtualmachinescalesets",
+          "count_": 49
+        },
+        {
+          "type": "microsoft.network/networksecuritygroups",
+          "count_": 44
+        },
+        {
+          "type": "microsoft.insights/datacollectionrules",
+          "count_": 42
+        },
+        {
+          "type": "microsoft.dbforpostgresql/flexibleservers",
+          "count_": 40
+        },
+        {
+          "type": "microsoft.network/dnszones",
+          "count_": 37
+        },
+        {
+          "type": "microsoft.documentdb/databaseaccounts",
+          "count_": 29
+        }
+      ],
+      "count": 15
+    },
+    "isError": false
+  }
+}

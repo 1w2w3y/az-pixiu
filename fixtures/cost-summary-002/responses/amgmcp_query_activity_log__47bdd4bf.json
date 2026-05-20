@@ -1,0 +1,25 @@
+{
+  "capability": "amgmcp_query_activity_log",
+  "parameters": {
+    "subscription_id": "55555555-5555-5555-5555-555555555555",
+    "time_window": {
+      "start": "2026-05-12T00:00:00Z",
+      "end": "2026-05-19T00:00:00Z"
+    }
+  },
+  "parameters_digest": "47bdd4bf9a4ed513b25a09cc5bb01f9dbfc5562a5f6688776bc0ad58eda5f5e2",
+  "response": {
+    "content": {
+      "entries": [
+        {
+          "operation": "Microsoft.DocumentDB/databaseAccounts/write",
+          "resource_id": "/subscriptions/55555555-5555-5555-5555-555555555555/resourceGroups/rg-staging/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-staging",
+          "timestamp": "2026-05-13T10:12:55Z",
+          "caller": "platform-deploy@example.com",
+          "status": "Succeeded"
+        }
+      ]
+    },
+    "isError": false
+  }
+}

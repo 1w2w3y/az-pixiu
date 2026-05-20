@@ -78,6 +78,33 @@
           "amgmcp_query_resource_graph"
         ]
       }
+    },
+    {
+      "id": "cost-summary-002",
+      "fixture_id": "cost-summary-002",
+      "description": "Multi-subscription cost_summary across three internal platform subscriptions (prod, staging, sandbox). Cost totals and resource-graph distribution are sanitized from a real AMG-MCP run; the playbook fan-out is exercised per-subscription. The prod sub dominates total spend (~98%) with a Postgres-heavy mix; sandbox is effectively idle; tag-coverage rows show a wide cost-center gap.",
+      "scope": {
+        "subscription_ids": [
+          "44444444-4444-4444-4444-444444444444",
+          "55555555-5555-5555-5555-555555555555",
+          "66666666-6666-6666-6666-666666666666"
+        ],
+        "time_window": {
+          "start": "2026-05-12T00:00:00Z",
+          "end": "2026-05-19T00:00:00Z"
+        },
+        "analysis_type": "cost_summary",
+        "effective_scope_summary": "3 subscriptions: corp-platform-prod (44444444-…/44), corp-platform-staging (55555555-…/55), corp-platform-sandbox (66666666-…/66), no resource-group filter, 2026-05-12 → 2026-05-19, analysis_type=cost_summary"
+      },
+      "expectations": {
+        "min_recommendations": 1,
+        "expected_capabilities_invoked": [
+          "amgmcp_query_azure_subscriptions",
+          "amgmcp_cost_analysis",
+          "amgmcp_query_resource_graph",
+          "amgmcp_query_activity_log"
+        ]
+      }
     }
   ]
 }
