@@ -140,6 +140,46 @@ describe('EvidenceNormalizer — per-capability summaries', () => {
     });
   });
 
+  it('summarizes cost_analysis live AMG-MCP shape (subscriptions[].totalCost + byService)', () => {
+    const n = new EvidenceNormalizer();
+    const { records } = n.normalize(
+      [
+        rawEvidence({
+          result: {
+            content: {
+              periodStart: '2026-05-12',
+              periodEnd: '2026-05-19',
+              subscriptions: [
+                {
+                  subscriptionId: '11111111-1111-1111-1111-111111111111',
+                  totalCost: 100,
+                  currency: 'USD',
+                  byService: [
+                    { name: 'App Service', cost: 60 },
+                    { name: 'Storage', cost: 40 },
+                  ],
+                },
+                {
+                  subscriptionId: '22222222-2222-2222-2222-222222222222',
+                  totalCost: 25.5,
+                  currency: 'USD',
+                  byService: [{ name: 'App Service', cost: 25.5 }],
+                },
+              ],
+            },
+          },
+        }),
+      ],
+      { defaultTimeWindow: defaultWindow },
+    );
+    expect(records[0]?.payload_summary).toEqual({
+      capability: 'amgmcp_cost_analysis',
+      row_count: 3,
+      total_cost: 125.5,
+      currency: 'USD',
+    });
+  });
+
   it('summarizes query_resource_graph with count + sample_names', () => {
     const n = new EvidenceNormalizer();
     const { records } = n.normalize(

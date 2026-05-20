@@ -3,7 +3,13 @@ import { readFile, mkdtemp, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeRunArtifact, buildRunArtifact, RUN_JSON_SCHEMA_VERSION } from '../../src/report/runjson.js';
-import type { ReasoningOutput, Scope, RunMetadata, EvidenceRecord } from '../../src/schemas/index.js';
+import type {
+  ReasoningOutput,
+  Scope,
+  RunMetadata,
+  EvidenceRecord,
+  DataQualityFinding,
+} from '../../src/schemas/index.js';
 
 const subId = '11111111-1111-1111-1111-111111111111';
 const scope: Scope = {
@@ -55,6 +61,28 @@ describe('buildRunArtifact', () => {
     expect(a.scope).toBe(scope);
     expect(a.evidence).toBe(evidence);
     expect(a.reasoning).toBe(reasoning);
+    expect(a.input_data_quality).toBeUndefined();
+  });
+
+  it('persists input_data_quality (pre-reasoner findings) when supplied', () => {
+    const inputDq: DataQualityFinding[] = [
+      {
+        dq_id: 'dq-1',
+        category: 'tagging_gap',
+        affected_capability: 'amgmcp_query_resource_graph',
+        affected_scope_subset: null,
+        consequence_for_analysis: 'half the inventoried resources lack tags',
+        impact_on_recommendations: [],
+        actionable_hint: 'apply a tagging policy',
+      },
+    ];
+    const a = buildRunArtifact(metadata, scope, evidence, reasoning, inputDq);
+    expect(a.input_data_quality).toEqual(inputDq);
+  });
+
+  it('omits input_data_quality when the array is empty', () => {
+    const a = buildRunArtifact(metadata, scope, evidence, reasoning, []);
+    expect(a.input_data_quality).toBeUndefined();
   });
 });
 

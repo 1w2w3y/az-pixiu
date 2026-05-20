@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { renderMarkdownReport } from '../../src/report/markdown.js';
-import type { ReasoningOutput, Scope, RunMetadata, EvidenceRecord } from '../../src/schemas/index.js';
+import type {
+  ReasoningOutput,
+  Scope,
+  RunMetadata,
+  EvidenceRecord,
+  DataQualityFinding,
+} from '../../src/schemas/index.js';
 
 const subId = '11111111-1111-1111-1111-111111111111';
 
@@ -256,5 +262,131 @@ describe('renderMarkdownReport', () => {
   it('does not add the cost-summary overview to cost_surprise reports', () => {
     const md = renderMarkdownReport({ scope, reasoning, evidence, metadata });
     expect(md).not.toContain('## Cost Summary Overview');
+  });
+
+  it('renders a spend overview from live AMG-MCP shape (subscriptions[].byService)', () => {
+    const summaryScope: Scope = {
+      subscription_ids: [subId],
+      time_window: { start: '2026-05-12T00:00:00Z', end: '2026-05-19T00:00:00Z' },
+      analysis_type: 'cost_summary',
+      effective_scope_summary: '1 subscription, 7-day cost summary (live shape)',
+    };
+    const liveEvidence: EvidenceRecord[] = [
+      {
+        evidence_id: 'ev-amgmcp_cost_analysis-bbbbbbbb',
+        source_capability: 'amgmcp_cost_analysis',
+        capability_version: '1.0.0',
+        query_intent: 'cost_breakdown',
+        scope_subset: { subscription_ids: [subId] },
+        time_window: summaryScope.time_window,
+        payload_ref: {
+          kind: 'inline',
+          data: {
+            periodStart: '2026-05-12',
+            periodEnd: '2026-05-19',
+            subscriptions: [
+              {
+                subscriptionId: subId,
+                totalCost: 158.72,
+                currency: 'USD',
+                byService: [
+                  { name: 'App Service', cost: 122.54 },
+                  { name: 'Storage', cost: 36.18 },
+                ],
+                byRegion: [{ name: 'us west 2', cost: 158.72 }],
+                byResourceType: [{ name: 'microsoft.web/sites', cost: 122.54 }],
+              },
+            ],
+          },
+        },
+        payload_summary: { total_cost: 158.72, currency: 'USD' },
+        caveats: [],
+      },
+    ];
+
+    const md = renderMarkdownReport({
+      scope: summaryScope,
+      reasoning,
+      evidence: liveEvidence,
+      metadata,
+    });
+
+    expect(md).toContain('## Cost Summary Overview');
+    expect(md).toContain('**Total observed cost:** 158.72 USD');
+    expect(md).toContain('**Cost records:** 2');
+    expect(md).toContain('- App Service: 122.54 USD');
+    expect(md).toContain('- Storage: 36.18 USD');
+    // Live shape has no per-day breakdown — the Peak/Lowest day block must
+    // elide rather than fabricate a single-day total.
+    expect(md).not.toContain('Peak observed day');
+    expect(md).not.toContain('Lowest observed day');
+  });
+});
+
+describe('renderMarkdownReport — retrieval-stage data quality', () => {
+  const taggingFinding: DataQualityFinding = {
+    dq_id: 'dq-1',
+    category: 'tagging_gap',
+    affected_capability: 'amgmcp_query_resource_graph',
+    affected_scope_subset: null,
+    consequence_for_analysis: 'half the inventoried resources lack tags',
+    impact_on_recommendations: [],
+    actionable_hint: 'apply a tagging policy',
+  };
+  const authzFinding: DataQualityFinding = {
+    dq_id: 'dq-2',
+    category: 'authz_gap',
+    affected_capability: 'amgmcp_query_activity_log',
+    affected_scope_subset: null,
+    consequence_for_analysis: 'activity log access denied — change attribution unreliable',
+    impact_on_recommendations: [],
+    actionable_hint: 'grant the AMG identity Activity Log Reader on the scope',
+  };
+
+  it('omits the retrieval-stage section when inputDataQuality is empty', () => {
+    const md = renderMarkdownReport({ scope, reasoning, evidence, metadata });
+    expect(md).not.toContain('## Data Quality — Retrieval Stage');
+  });
+
+  it('renders pre-reasoner findings in a separate section and marks dropped categories', () => {
+    const md = renderMarkdownReport({
+      scope,
+      reasoning, // reasoning.data_quality is empty in the fixture
+      evidence,
+      metadata,
+      inputDataQuality: [taggingFinding, authzFinding],
+    });
+    expect(md).toContain('## Data Quality — Retrieval Stage');
+    expect(md).toContain('### dq-1 — tagging_gap');
+    expect(md).toContain('### dq-2 — authz_gap');
+    // Both categories are absent from reasoning.data_quality, so each is
+    // tagged as not-echoed.
+    expect(md).toMatch(/dq-1 — tagging_gap[\s\S]*Status:_ not echoed by the reasoner/);
+    expect(md).toMatch(/dq-2 — authz_gap[\s\S]*Status:_ not echoed by the reasoner/);
+    // Executive summary should call out the dropped categories.
+    expect(md).toContain('Retrieval-stage findings not echoed by the reasoner: tagging_gap (1), authz_gap (1).');
+  });
+
+  it('does not mark a finding as dropped when the reasoner echoes the same category', () => {
+    const reasoningWithDq: ReasoningOutput = {
+      ...reasoning,
+      data_quality: [
+        {
+          ...taggingFinding,
+          dq_id: 'dq-reasoner-1',
+          consequence_for_analysis: 'reasoner restated the tagging gap',
+        },
+      ],
+    };
+    const md = renderMarkdownReport({
+      scope,
+      reasoning: reasoningWithDq,
+      evidence,
+      metadata,
+      inputDataQuality: [taggingFinding],
+    });
+    expect(md).toContain('## Data Quality — Retrieval Stage');
+    expect(md).not.toMatch(/dq-1 — tagging_gap[\s\S]*Status:_ not echoed/);
+    expect(md).not.toContain('Retrieval-stage findings not echoed');
   });
 });

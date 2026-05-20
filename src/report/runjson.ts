@@ -5,6 +5,7 @@ import type {
   Scope,
   RunMetadata,
   EvidenceRecord,
+  DataQualityFinding,
 } from '../schemas/index.js';
 
 /**
@@ -20,6 +21,18 @@ export interface RunArtifact {
   scope: Scope;
   evidence: EvidenceRecord[];
   reasoning: ReasoningOutput;
+  /**
+   * Data-quality findings surfaced *before* the reasoner ran — the
+   * normalizer's own findings (e.g., tagging_gap from a resource_graph
+   * payload) plus the failure-taxonomy's classifications. The reasoner
+   * receives these as a prompt block; whatever it endorses lands in
+   * `reasoning.data_quality`. Persisting the pre-reasoner set
+   * separately preserves provenance: an operator can see what was
+   * detected during retrieval, and a reviewer can spot a finding the
+   * reasoner silently dropped. Optional so older artefacts written
+   * before this field existed still parse.
+   */
+  input_data_quality?: DataQualityFinding[];
 }
 
 export interface WriteRunArtifactOptions {
@@ -53,6 +66,7 @@ export function buildRunArtifact(
   scope: Scope,
   evidence: EvidenceRecord[],
   reasoning: ReasoningOutput,
+  inputDataQuality?: DataQualityFinding[],
 ): RunArtifact {
   return {
     schema_version: RUN_JSON_SCHEMA_VERSION,
@@ -60,5 +74,8 @@ export function buildRunArtifact(
     scope,
     evidence,
     reasoning,
+    ...(inputDataQuality && inputDataQuality.length > 0
+      ? { input_data_quality: inputDataQuality }
+      : {}),
   };
 }

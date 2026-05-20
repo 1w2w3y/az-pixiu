@@ -40,7 +40,7 @@ describe('runEvaluation — Phase 1 dataset against seeded fixtures (mock model 
         observabilityMode: 'noop',
       });
 
-      expect(result.items).toHaveLength(3);
+      expect(result.items).toHaveLength(4);
 
       const byId = Object.fromEntries(result.items.map((i) => [i.item_id, i]));
 
@@ -69,8 +69,15 @@ describe('runEvaluation — Phase 1 dataset against seeded fixtures (mock model 
       expect(summary001.score.passed_all).toBe(true);
       expect(summary001.expectations.passed_all).toBe(true);
 
+      // cost-summary-002: multi-subscription cost_summary sanitized from
+      // a real AMG-MCP run; verifies the playbook fan-out across 3 subs.
+      const summary002 = byId['cost-summary-002']!;
+      expect(summary002.error).toBeUndefined();
+      expect(summary002.score.passed_all).toBe(true);
+      expect(summary002.expectations.passed_all).toBe(true);
+
       expect(result.passed_all).toBe(true);
-      expect(result.pass_count).toBe(3);
+      expect(result.pass_count).toBe(4);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

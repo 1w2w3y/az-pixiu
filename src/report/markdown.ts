@@ -21,18 +21,28 @@ export interface RenderReportInput {
   reasoning: ReasoningOutput;
   evidence: EvidenceRecord[];
   metadata: RunMetadata;
+  /**
+   * Data-quality findings detected during retrieval (normalizer +
+   * failure-taxonomy classifications), before the reasoner saw the
+   * evidence. Surfaced separately from {@link reasoning}.data_quality so
+   * the report shows what the agent observed even when the reasoner
+   * silently dropped a finding. Optional; the section is omitted when
+   * the array is empty or undefined.
+   */
+  inputDataQuality?: DataQualityFinding[];
 }
 
 export function renderMarkdownReport(input: RenderReportInput): string {
-  const { scope, reasoning, evidence, metadata } = input;
+  const { scope, reasoning, evidence, metadata, inputDataQuality = [] } = input;
   const sections = [
     title(scope),
     scopeAndDataSources(scope, evidence, metadata),
     costSummaryOverview(scope, evidence),
-    executiveSummary(reasoning),
+    executiveSummary(reasoning, inputDataQuality),
     recommendationsSection(reasoning),
     hypothesesSection(reasoning),
     factsSection(reasoning),
+    retrievalStageDataQualitySection(inputDataQuality, reasoning),
     dataQualitySection(reasoning),
     metadataFooter(metadata),
   ].filter((section) => section.length > 0);
@@ -72,7 +82,10 @@ function scopeAndDataSources(scope: Scope, evidence: EvidenceRecord[], metadata:
   return ['## Scope & Data Sources', '', bullets(items)].join('\n');
 }
 
-function executiveSummary(reasoning: ReasoningOutput): string {
+function executiveSummary(
+  reasoning: ReasoningOutput,
+  inputDataQuality: readonly DataQualityFinding[],
+): string {
   const sorted = sortedRecommendations(reasoning.recommendations);
   if (sorted.length === 0) {
     return [
@@ -82,11 +95,7 @@ function executiveSummary(reasoning: ReasoningOutput): string {
     ].join('\n');
   }
   const top = sorted[0]!;
-  const dqByCategory = countBy(reasoning.data_quality, (d) => d.category);
-  const dqLine =
-    reasoning.data_quality.length > 0
-      ? `Data-quality concerns: ${Object.entries(dqByCategory).map(([k, v]) => `${k} (${v})`).join(', ')}.`
-      : 'No data-quality concerns surfaced.';
+  const dqLine = formatExecutiveDqLine(reasoning.data_quality, inputDataQuality);
   return [
     '## Executive Summary',
     '',
@@ -94,6 +103,39 @@ function executiveSummary(reasoning: ReasoningOutput): string {
     '',
     dqLine,
   ].join('\n');
+}
+
+function formatExecutiveDqLine(
+  reasonerDq: readonly DataQualityFinding[],
+  inputDq: readonly DataQualityFinding[],
+): string {
+  if (reasonerDq.length === 0 && inputDq.length === 0) {
+    return 'No data-quality concerns surfaced.';
+  }
+  const parts: string[] = [];
+  if (reasonerDq.length > 0) {
+    const byCategory = countBy(reasonerDq, (d) => d.category);
+    parts.push(
+      `Data-quality concerns: ${Object.entries(byCategory).map(([k, v]) => `${k} (${v})`).join(', ')}.`,
+    );
+  }
+  // Surface categories the retrieval stage flagged but the reasoner did
+  // not echo forward. Same-category matches are treated as endorsed; new
+  // categories highlight that the reasoner silently dropped them.
+  const reasonerCategories = new Set(reasonerDq.map((d) => d.category));
+  const droppedByCategory: Record<string, number> = {};
+  for (const f of inputDq) {
+    if (!reasonerCategories.has(f.category)) {
+      droppedByCategory[f.category] = (droppedByCategory[f.category] ?? 0) + 1;
+    }
+  }
+  const droppedEntries = Object.entries(droppedByCategory);
+  if (droppedEntries.length > 0) {
+    parts.push(
+      `Retrieval-stage findings not echoed by the reasoner: ${droppedEntries.map(([k, v]) => `${k} (${v})`).join(', ')}.`,
+    );
+  }
+  return parts.join(' ');
 }
 
 function costSummaryOverview(scope: Scope, evidence: EvidenceRecord[]): string {
@@ -228,6 +270,28 @@ function dataQualitySection(reasoning: ReasoningOutput): string {
   return ['## Data Quality', ...blocks].join('\n\n');
 }
 
+/**
+ * Pre-reasoner data-quality findings: what the normalizer and failure
+ * taxonomy detected during evidence retrieval. Surfaced separately from
+ * the reasoner's endorsed findings so the report preserves provenance —
+ * a category that was detected here but never appears under "## Data
+ * Quality" was silently dropped by the reasoner.
+ */
+function retrievalStageDataQualitySection(
+  inputDataQuality: readonly DataQualityFinding[],
+  reasoning: ReasoningOutput,
+): string {
+  if (inputDataQuality.length === 0) return '';
+  const reasonerCategories = new Set(reasoning.data_quality.map((d) => d.category));
+  const blocks = inputDataQuality.map((d) => {
+    const rendered = renderDataQuality(d);
+    return reasonerCategories.has(d.category)
+      ? rendered
+      : `${rendered}\n_Status:_ not echoed by the reasoner.`;
+  });
+  return ['## Data Quality — Retrieval Stage', ...blocks].join('\n\n');
+}
+
 function renderDataQuality(d: DataQualityFinding): string {
   return [
     `### ${d.dq_id} — ${d.category}`,
@@ -350,6 +414,13 @@ function summarizeCostEvidence(evidence: EvidenceRecord[]): CostSummary | undefi
       add(serviceTotals, row.serviceName, row.cost);
       add(dailyTotals, row.date, row.cost);
     }
+
+    if (parsed.liveServiceCosts) {
+      for (const entry of parsed.liveServiceCosts) {
+        add(serviceTotals, entry.serviceName, entry.cost);
+      }
+      rowCount += parsed.liveServiceCosts.length;
+    }
   }
 
   const totalCost = totalFromRows > 0 ? totalFromRows : totalFromPayloads;
@@ -369,34 +440,70 @@ interface CostRow {
   cost: number;
 }
 
-function parseCostAnalysisPayload(
-  payload: unknown,
-): { rows: CostRow[]; totalCost?: number; currency?: string } | undefined {
+function parseCostAnalysisPayload(payload: unknown): ParsedCostPayload | undefined {
   if (typeof payload !== 'object' || payload === null) return undefined;
   const obj = payload as Record<string, unknown>;
+
+  // Tabular shape (columns / rows / total) — what the cost-summary-001
+  // synthetic fixture and the cost-surprise fixtures use.
   const rawRows = Array.isArray(obj.rows) ? obj.rows : [];
   const columnIndexes = costColumnIndexes(obj.columns);
   const rows: CostRow[] = [];
-
   for (const raw of rawRows) {
     const row = parseCostRow(raw, columnIndexes);
     if (row) rows.push(row);
   }
-
   const totalObj = typeof obj.total === 'object' && obj.total !== null
     ? (obj.total as Record<string, unknown>)
     : undefined;
-  const totalCost = typeof totalObj?.cost === 'number' ? totalObj.cost : undefined;
-  const currency =
+  let totalCost = typeof totalObj?.cost === 'number' ? totalObj.cost : undefined;
+  let currency: string | undefined =
     typeof totalObj?.currency === 'string'
       ? totalObj.currency
-      : firstRowCurrency(rawRows, columnIndexes.currency) ?? 'unknown';
+      : firstRowCurrency(rawRows, columnIndexes.currency);
+
+  // Live AMG-MCP shape: { periodStart, periodEnd, subscriptions: [{
+  // subscriptionId, totalCost, currency, byService[], byRegion[],
+  // byResourceType[] }] }. No daily breakdown — the reasoner sees the
+  // service / region / resource-type axes but not per-day costs. We
+  // surface totals and service rollup here; dailyTotals stays empty so
+  // the Peak/Lowest day block elides itself when only live-shape
+  // payloads are present.
+  let liveServiceCosts: Array<{ serviceName: string; cost: number }> | undefined;
+  if (Array.isArray(obj.subscriptions)) {
+    const services: Array<{ serviceName: string; cost: number }> = [];
+    for (const sub of obj.subscriptions) {
+      if (typeof sub !== 'object' || sub === null) continue;
+      const s = sub as Record<string, unknown>;
+      if (typeof s.totalCost === 'number') {
+        totalCost = (totalCost ?? 0) + s.totalCost;
+      }
+      if (!currency && typeof s.currency === 'string') currency = s.currency;
+      const byService = Array.isArray(s.byService) ? s.byService : [];
+      for (const entry of byService) {
+        if (typeof entry !== 'object' || entry === null) continue;
+        const e = entry as Record<string, unknown>;
+        if (typeof e.name === 'string' && typeof e.cost === 'number') {
+          services.push({ serviceName: e.name, cost: e.cost });
+        }
+      }
+    }
+    if (services.length > 0) liveServiceCosts = services;
+  }
 
   return {
     rows,
     ...(totalCost !== undefined ? { totalCost } : {}),
-    currency,
+    currency: currency ?? 'unknown',
+    ...(liveServiceCosts ? { liveServiceCosts } : {}),
   };
+}
+
+interface ParsedCostPayload {
+  rows: CostRow[];
+  totalCost?: number;
+  currency?: string;
+  liveServiceCosts?: Array<{ serviceName: string; cost: number }>;
 }
 
 function parseCostRow(

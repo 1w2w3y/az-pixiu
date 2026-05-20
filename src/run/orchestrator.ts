@@ -618,12 +618,18 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
 
   process.stdout.write(`→ writing report to ${ctx.runDir}/\n`);
   await withSpan(SpanNames.ReportAssembly, async () => {
-    const md = renderMarkdownReport({ scope: ctx.scope, reasoning, evidence: records, metadata });
+    const md = renderMarkdownReport({
+      scope: ctx.scope,
+      reasoning,
+      evidence: records,
+      metadata,
+      inputDataQuality: allDq,
+    });
     await mkdir(ctx.runDir, { recursive: true });
     await writeFile(ctx.reportPath, md, 'utf8');
     await writeRunArtifact({
       path: ctx.runJsonPath,
-      artifact: buildRunArtifact(metadata, ctx.scope, records, reasoning),
+      artifact: buildRunArtifact(metadata, ctx.scope, records, reasoning, allDq),
     });
   });
 

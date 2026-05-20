@@ -199,6 +199,27 @@ function summarize(capability: string, content: unknown): unknown {
     case 'amgmcp_cost_analysis': {
       const rows = Array.isArray(c.rows) ? c.rows : [];
       const total = (c.total as { cost?: number; currency?: string } | undefined) ?? {};
+      // Live AMG-MCP shape ({subscriptions: [{totalCost, byService, ...}]})
+      // carries no rows/total, so fall through to a subscriptions
+      // rollup that produces the same summary shape.
+      if (rows.length === 0 && total.cost === undefined && Array.isArray(c.subscriptions)) {
+        let liveTotal = 0;
+        let liveCurrency: string | undefined;
+        let liveServiceCount = 0;
+        for (const sub of c.subscriptions) {
+          if (typeof sub !== 'object' || sub === null) continue;
+          const s = sub as Record<string, unknown>;
+          if (typeof s.totalCost === 'number') liveTotal += s.totalCost;
+          if (!liveCurrency && typeof s.currency === 'string') liveCurrency = s.currency;
+          if (Array.isArray(s.byService)) liveServiceCount += s.byService.length;
+        }
+        return {
+          capability,
+          row_count: liveServiceCount,
+          total_cost: liveTotal,
+          currency: liveCurrency,
+        };
+      }
       return {
         capability,
         row_count: rows.length,
