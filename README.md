@@ -44,6 +44,13 @@ npx pixiu analyze cost-surprise --subscription <sub-id> --resource-group <rg>
 npx pixiu eval eval/phase-1.json --use-playbook --mock-model \
     --credential mock --observability noop
 
+# compare multiple models on the same dataset, push results to Langfuse
+# (each model becomes one Langfuse Experiment; scores attach to each trace)
+LANGFUSE_PUBLIC_KEY=… LANGFUSE_SECRET_KEY=… LANGFUSE_BASE_URL=… \
+    npx pixiu eval eval/phase-1.json --use-playbook \
+        --models gpt-5.4,gpt-4o,gpt-chat-latest \
+        --observability langfuse
+
 # environment sanity check (credentials, endpoint reachability, MCP capabilities)
 npx pixiu diagnose
 ```

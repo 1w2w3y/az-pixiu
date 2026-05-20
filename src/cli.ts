@@ -19,6 +19,8 @@ import { MockModelClient } from './model/mock-client.js';
 import type { ModelClient } from './model/client.js';
 import type { Config } from './schemas/index.js';
 import type { TokenCredential } from '@azure/identity';
+import { LangfusePublisher } from './evaluation/langfuse-publisher.js';
+import { basename } from 'node:path';
 import { runEvaluationByPath, type EvalItemResult } from './evaluation/runner.js';
 import type { DatasetItem } from './evaluation/dataset.js';
 import { buildCannedMockModelClient } from './evaluation/canned-mock.js';
@@ -57,6 +59,11 @@ eval flags:
   --fixtures-root <path>           directory containing fixtures (default: fixtures/)
   --observability <mode>           noop | memory | langfuse  (default: noop for eval runs)
   --credential <mode>              azure-cli | default | mock  (default: mock — eval does not call Azure)
+  --models <id1,id2,...>           sweep the dataset against multiple models, one Langfuse Experiment per model.
+                                   Each id overrides config.litellm.model (or config.foundry.deployment).
+  --experiment-name <name>         base name for the Langfuse Dataset Run (default: derived from dataset + timestamp).
+                                   When --models is set, each model gets the suffix ".<model-id>" appended.
+  --dataset-name <name>            Langfuse Dataset name to publish items under (default: dataset file basename).
 
 shared flags:
   --config <path>                  path to config.json (default: ./config.json)
@@ -111,6 +118,9 @@ async function main(): Promise<number> {
       'output-dir': { type: 'string' },
       'fixtures-root': { type: 'string' },
       observability: { type: 'string' },
+      models: { type: 'string' },
+      'experiment-name': { type: 'string' },
+      'dataset-name': { type: 'string' },
       credential: { type: 'string' },
     },
   });
@@ -299,11 +309,18 @@ async function runEvalCommand(
   const fixturesRoot = stringOrUndefined(values['fixtures-root']) ?? 'fixtures';
   const outputDir = stringOrUndefined(values['output-dir']) ?? 'runs/eval';
   const configPath = stringOrUndefined(values.config);
+  const modelsArg = stringOrUndefined(values.models);
+  const experimentBase = stringOrUndefined(values['experiment-name']);
+  const datasetNameOverride = stringOrUndefined(values['dataset-name']);
 
   if (mockModel && !usePlaybook) {
     process.stderr.write(
       'eval --mock-model requires --use-playbook (the planner LLM is not mocked).\n',
     );
+    return 2;
+  }
+  if (modelsArg && mockModel) {
+    process.stderr.write('eval --models cannot be combined with --mock-model.\n');
     return 2;
   }
 
@@ -312,42 +329,121 @@ async function runEvalCommand(
     const credential = buildCredential(credentialMode);
     const credentialIdentity = describeCredential(credentialMode);
 
-    const makeModel = mockModel
-      ? (_item: DatasetItem): ModelClient => buildCannedMockModelClient()
-      : (_item: DatasetItem): ModelClient => buildModelClient(config, credential);
+    // Default the Langfuse dataset name to the file basename so the same
+    // local dataset always maps to the same Langfuse-side dataset, and
+    // generate a timestamped experiment-name base unless the operator
+    // pinned one.
+    const datasetName = datasetNameOverride ?? basename(datasetPath).replace(/\.[^.]+$/, '');
+    const experimentBaseName =
+      experimentBase ?? `${datasetName}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
 
-    const modelLabel = mockModel
-      ? 'mock (canned reasoning)'
-      : config.provider === 'litellm'
-        ? `litellm/${config.litellm!.model}`
-        : `foundry/${config.foundry!.deployment}`;
-
-    process.stdout.write(`Running pixiu eval on ${datasetPath}\n`);
-    process.stdout.write(`  fixtures: ${fixturesRoot}\n`);
-    process.stdout.write(`  model: ${modelLabel}\n`);
-    process.stdout.write(`  planner: ${usePlaybook ? 'playbook' : 'planner LLM'}\n`);
-    process.stdout.write(`  observability: ${observabilityMode}\n\n`);
-
-    const result = await runEvaluationByPath(datasetPath, {
-      config,
-      makeModel,
-      modelProvider: mockModel ? 'mock' : config.provider,
-      credentialIdentity,
-      usePlaybook,
-      runsDir: outputDir,
-      observabilityMode,
-      fixturesRoot,
-      onProgress: (line) => process.stdout.write(line + '\n'),
-    });
-
-    process.stdout.write('\n--- summary ---\n');
-    for (const item of result.items) {
-      printEvalItem(item);
+    // Try to construct a Langfuse publisher when observability is
+    // langfuse. We only publish when we have both an OTel trace ID (a
+    // function of observabilityMode === 'langfuse') AND the env vars
+    // needed. When either is missing the runner falls back to local-only.
+    const langfusePublisher =
+      observabilityMode === 'langfuse' ? LangfusePublisher.fromEnv() : undefined;
+    if (observabilityMode === 'langfuse' && !langfusePublisher) {
+      process.stderr.write(
+        '⚠ --observability langfuse without LANGFUSE_PUBLIC_KEY/SECRET_KEY/BASE_URL env: ' +
+          'agent runs will still trace via OTLP, but eval scores + experiment grouping will be skipped.\n',
+      );
     }
-    process.stdout.write(
-      `\n${result.passed_all ? 'PASS' : 'FAIL'}: ${result.pass_count}/${result.items.length} item(s) green\n`,
-    );
-    return result.passed_all ? 0 : 3;
+
+    // Sweep: when --models is set, run the dataset once per model with
+    // an experiment-name-suffix per model. Otherwise run once against
+    // whatever's already in config.
+    const models = modelsArg
+      ? modelsArg.split(',').map((s) => s.trim()).filter(Boolean)
+      : [undefined]; // sentinel: use config as-is
+
+    const perRunResults: Array<{
+      model: string;
+      experimentName: string;
+      result: Awaited<ReturnType<typeof runEvaluationByPath>>;
+    }> = [];
+
+    for (const modelOverride of models) {
+      // Mutate the in-memory config object so the model client picks up
+      // the override. This is local to this CLI invocation only — we
+      // never write back to disk.
+      if (modelOverride !== undefined) {
+        if (config.provider === 'litellm') {
+          config.litellm!.model = modelOverride;
+        } else {
+          config.foundry!.deployment = modelOverride;
+        }
+      }
+      const activeModelLabel = mockModel
+        ? 'mock (canned reasoning)'
+        : config.provider === 'litellm'
+          ? `litellm/${config.litellm!.model}`
+          : `foundry/${config.foundry!.deployment}`;
+      const activeModelId =
+        config.provider === 'litellm' ? config.litellm!.model : config.foundry!.deployment;
+
+      const makeModel = mockModel
+        ? (_item: DatasetItem): ModelClient => buildCannedMockModelClient()
+        : (_item: DatasetItem): ModelClient => buildModelClient(config, credential);
+
+      const experimentName = modelOverride
+        ? `${experimentBaseName}.${activeModelId}`
+        : experimentBaseName;
+
+      process.stdout.write(`\n=== pixiu eval on ${datasetPath} ===\n`);
+      process.stdout.write(`  fixtures: ${fixturesRoot}\n`);
+      process.stdout.write(`  model: ${activeModelLabel}\n`);
+      process.stdout.write(`  planner: ${usePlaybook ? 'playbook' : 'planner LLM'}\n`);
+      process.stdout.write(`  observability: ${observabilityMode}\n`);
+      if (langfusePublisher) {
+        process.stdout.write(`  langfuse dataset: ${datasetName}\n`);
+        process.stdout.write(`  langfuse experiment: ${experimentName}\n`);
+      }
+      process.stdout.write('\n');
+
+      const result = await runEvaluationByPath(datasetPath, {
+        config,
+        makeModel,
+        modelProvider: mockModel ? 'mock' : config.provider,
+        credentialIdentity,
+        usePlaybook,
+        runsDir: outputDir,
+        observabilityMode,
+        fixturesRoot,
+        onProgress: (line) => process.stdout.write(line + '\n'),
+        ...(langfusePublisher
+          ? {
+              langfusePublisher,
+              langfuseDatasetName: datasetName,
+              langfuseRunName: experimentName,
+              langfuseRunMetadata: {
+                model_provider: config.provider,
+                model_name: activeModelId,
+                planner: usePlaybook ? 'playbook' : 'planner_llm',
+              },
+            }
+          : {}),
+      });
+
+      perRunResults.push({ model: activeModelId, experimentName, result });
+    }
+
+    process.stdout.write('\n=== summary ===\n');
+    let overallOk = true;
+    for (const { model, experimentName, result } of perRunResults) {
+      process.stdout.write(`\nmodel: ${model}\n`);
+      if (langfusePublisher) {
+        process.stdout.write(`experiment: ${experimentName}\n`);
+      }
+      for (const item of result.items) {
+        printEvalItem(item);
+      }
+      process.stdout.write(
+        `${result.passed_all ? 'PASS' : 'FAIL'}: ${result.pass_count}/${result.items.length} item(s) green\n`,
+      );
+      if (!result.passed_all) overallOk = false;
+    }
+    return overallOk ? 0 : 3;
   } catch (err) {
     if (err instanceof ConfigError) {
       process.stderr.write(`Config error: ${err.message}\n`);

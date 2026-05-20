@@ -116,7 +116,20 @@ export interface RunResult {
   run_dir: string;
   report_path: string;
   run_json_path: string;
+  /**
+   * Agent-side logical trace identifier (`run-<run_id>`). Stable across
+   * observability modes; written into RunMetadata.trace_id. Note this is
+   * NOT the OTel/Langfuse trace ID — see {@link RunResult.otel_trace_id}.
+   */
   trace_id: string;
+  /**
+   * The OpenTelemetry trace ID (32 hex chars) of the RunRoot span, when
+   * observability was active enough to assign one. This is the ID under
+   * which Langfuse stored the trace; downstream consumers (eval-time
+   * score publishing, experiment grouping) must attach by this ID, not
+   * by {@link RunResult.trace_id}.
+   */
+  otel_trace_id?: string;
   metadata: RunMetadata;
   reasoning: ReasoningOutput;
   /**
@@ -217,11 +230,16 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
   const tags = [`analysis:${analysisType}`];
   if (options.fixtureId) tags.push('fixture');
 
+  let otelTraceId: string | undefined;
   try {
     const result = await withSpan(
       SpanNames.RunRoot,
-      async (rootSpan) =>
-        propagateAttributes(
+      async (rootSpan) => {
+        const ctx = rootSpan.spanContext();
+        if (ctx.traceId && ctx.traceId !== '0'.repeat(32)) {
+          otelTraceId = ctx.traceId;
+        }
+        return propagateAttributes(
           {
             traceName: `analyze.${analysisType}`,
             userId: options.credentialIdentity.identity,
@@ -295,7 +313,8 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
             rootSpan.setAttribute(ATTR.status, r.metadata.status);
             return r;
           },
-        ),
+        );
+      },
       {
         [ATTR.agentName]: 'az-pixiu',
         [ATTR.agentDomain]: 'finops',
@@ -315,6 +334,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
     process.stdout.write(`  report: ${result.report_path}\n`);
     process.stdout.write(`  run.json: ${result.run_json_path}\n`);
     process.stdout.write(`  trace_id: ${result.trace_id}\n`);
+    if (otelTraceId) process.stdout.write(`  otel_trace_id: ${otelTraceId}\n`);
     if (!result.score.passed_all) {
       process.stdout.write(`  ⚠ scoring: ${result.score.fail_count} rubric(s) failed\n`);
       for (const r of result.score.results) {
@@ -322,7 +342,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
       }
     }
 
-    return result;
+    return { ...result, ...(otelTraceId ? { otel_trace_id: otelTraceId } : {}) };
   } finally {
     // Trace export failures should never mask a successful analysis.
     // The report, run.json, and exit code reflect the analysis itself —

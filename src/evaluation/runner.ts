@@ -10,6 +10,7 @@ import type { ObservabilityMode } from '../observability/setup.js';
 import { scoreAll, type AggregateScore } from './scoring.js';
 import { checkExpectations, type ExpectationsAggregate } from './expectations.js';
 import { loadDataset, fixturePathFor, type Dataset, type DatasetItem } from './dataset.js';
+import { LangfusePublisher, LangfusePublishError, type ScorePayload } from './langfuse-publisher.js';
 
 /**
  * Phase 1 step 12 eval runner. Iterates a dataset, replays each item
@@ -54,6 +55,37 @@ export interface EvalRunnerOptions {
   promptsCwd?: string;
   /** Side-channel for streaming progress lines (CLI uses process.stdout). */
   onProgress?: (line: string) => void;
+  /**
+   * Optional Langfuse publisher. When set, the runner pushes per-rubric
+   * and per-expectation Scores onto each run's Langfuse trace and links
+   * the trace to a Langfuse Dataset Run (the "Experiment" view). When
+   * unset, the runner behaves as before — local artefacts only.
+   *
+   * The runner does not construct the publisher itself; the CLI is the
+   * place where the LANGFUSE_* env vars are read, so passing the
+   * already-constructed instance keeps this module free of env coupling
+   * and easy to test with a mock.
+   */
+  langfusePublisher?: LangfusePublisher;
+  /**
+   * Langfuse-side dataset name to publish under. Required when
+   * {@link langfusePublisher} is set. Defaults to the dataset's local
+   * basename (without extension) when the runner is reached via
+   * {@link runEvaluationByPath}.
+   */
+  langfuseDatasetName?: string;
+  /**
+   * Run name for the Langfuse Dataset Run / Experiment. All items in
+   * this invocation are grouped under this name so a sweep over models
+   * produces one run-name per model, easily comparable side-by-side in
+   * the Langfuse Experiment UI.
+   */
+  langfuseRunName?: string;
+  /**
+   * Optional metadata attached to each Dataset Run Item (e.g. model id,
+   * git SHA). Surfaces in the Langfuse UI alongside each item's trace.
+   */
+  langfuseRunMetadata?: Record<string, unknown>;
 }
 
 export interface EvalItemResult {
@@ -62,6 +94,8 @@ export interface EvalItemResult {
   run_id: string;
   run_dir: string;
   report_path: string;
+  /** OTel trace id of the agent run, when observability assigned one. Used by the Langfuse publisher. */
+  otel_trace_id?: string;
   /** scoreAll across the four Phase 1 rubrics. */
   score: AggregateScore;
   /** Dataset-level expectations (`min_recommendations`, etc.). Empty results if the item had no expectations block. */
@@ -73,6 +107,8 @@ export interface EvalItemResult {
   passed_all: boolean;
   /** Error message when the item threw before scoring (fixture missing, credential rejected, …). */
   error?: string;
+  /** True when Langfuse score / dataset-run-item publishing for this item failed; the run still counts otherwise. */
+  langfuse_publish_error?: string;
 }
 
 export interface EvalRunnerResult {
@@ -87,6 +123,13 @@ export async function runEvaluation(options: EvalRunnerOptions): Promise<EvalRun
   const fixturesRoot = options.fixturesRoot ?? 'fixtures';
   const observabilityMode = options.observabilityMode ?? 'noop';
   const baseRunsDir = options.runsDir ?? 'runs/eval';
+
+  if (options.langfusePublisher) {
+    validateLangfuseOptions(options);
+    // Ensure the dataset + all items exist server-side once per
+    // invocation. Repeated invocations are idempotent (upsert on id).
+    await prepareLangfuseDataset(options);
+  }
 
   const items: EvalItemResult[] = [];
 
@@ -120,6 +163,20 @@ export async function runEvaluation(options: EvalRunnerOptions): Promise<EvalRun
       `  ${status} rubrics ${result.score.pass_count}/${result.score.pass_count + result.score.fail_count}, ` +
         `expectations ${result.expectations.pass_count}/${result.expectations.pass_count + result.expectations.fail_count}`,
     );
+
+    if (options.langfusePublisher && result.otel_trace_id && !result.error) {
+      try {
+        await publishItemToLangfuse(options, item, result);
+        log(`  ↗ published scores + experiment to Langfuse`);
+      } catch (err) {
+        const msg = err instanceof LangfusePublishError
+          ? err.message
+          : err instanceof Error ? err.message : String(err);
+        log(`  ⚠ Langfuse publish failed: ${msg}`);
+        result.langfuse_publish_error = msg;
+      }
+    }
+
     items.push(result);
   }
 
@@ -178,6 +235,7 @@ async function runOne(
       run_id: result.run_id,
       run_dir: result.run_dir,
       report_path: result.report_path,
+      ...(result.otel_trace_id ? { otel_trace_id: result.otel_trace_id } : {}),
       score,
       expectations,
       passed_all: score.passed_all && expectations.passed_all,
@@ -190,6 +248,102 @@ async function runOne(
 function resolveFixturePath(fixturesRoot: string, item: DatasetItem): string {
   const rel = fixturePathFor(item, fixturesRoot);
   return isAbsolute(rel) ? rel : resolve(process.cwd(), rel);
+}
+
+function validateLangfuseOptions(options: EvalRunnerOptions): void {
+  if (!options.langfuseDatasetName || options.langfuseDatasetName.trim() === '') {
+    throw new Error(
+      'langfusePublisher requires langfuseDatasetName so items can be upserted into a named dataset.',
+    );
+  }
+  if (!options.langfuseRunName || options.langfuseRunName.trim() === '') {
+    throw new Error(
+      'langfusePublisher requires langfuseRunName so each invocation creates a distinct Experiment.',
+    );
+  }
+}
+
+async function prepareLangfuseDataset(options: EvalRunnerOptions): Promise<void> {
+  const publisher = options.langfusePublisher!;
+  const datasetName = options.langfuseDatasetName!;
+  await publisher.ensureDataset(datasetName, `Az-Pixiu eval dataset: ${datasetName}`);
+  for (const item of options.dataset.items) {
+    await publisher.upsertItem(datasetName, {
+      id: item.id,
+      input: {
+        scope: item.scope,
+        fixture_id: item.fixture_id,
+      },
+      expectedOutput: item.expectations ?? {},
+      metadata: { description: item.description ?? '' },
+    });
+  }
+}
+
+/**
+ * Push the per-rubric and per-expectation results as Langfuse Scores
+ * onto the trace, then link the trace into the dataset run. We emit one
+ * BOOLEAN score per rubric and per expectation so the Langfuse UI shows
+ * a per-dimension column; the aggregate booleans (`passed_all`) ride on
+ * top so a single sort lands the failing items at the top of the
+ * Experiment view.
+ */
+async function publishItemToLangfuse(
+  options: EvalRunnerOptions,
+  item: DatasetItem,
+  result: EvalItemResult,
+): Promise<void> {
+  const publisher = options.langfusePublisher!;
+  const traceId = result.otel_trace_id!;
+  const runName = options.langfuseRunName!;
+  const datasetName = options.langfuseDatasetName!;
+
+  const scores: ScorePayload[] = [];
+  for (const r of result.score.results) {
+    scores.push({
+      traceId,
+      name: `rubric.${r.rubric}`,
+      value: r.passed ? 1 : 0,
+      dataType: 'BOOLEAN',
+      ...(r.details ? { comment: r.details } : {}),
+    });
+  }
+  for (const e of result.expectations.results) {
+    scores.push({
+      traceId,
+      name: `expectation.${e.expectation}`,
+      value: e.passed ? 1 : 0,
+      dataType: 'BOOLEAN',
+      ...(e.details ? { comment: e.details } : {}),
+    });
+  }
+  // Aggregates: cheap to attach, useful for filtering / charting.
+  scores.push({
+    traceId,
+    name: 'rubric.passed_all',
+    value: result.score.passed_all ? 1 : 0,
+    dataType: 'BOOLEAN',
+  });
+  scores.push({
+    traceId,
+    name: 'expectation.passed_all',
+    value: result.expectations.passed_all ? 1 : 0,
+    dataType: 'BOOLEAN',
+  });
+  scores.push({
+    traceId,
+    name: 'eval.passed_all',
+    value: result.passed_all ? 1 : 0,
+    dataType: 'BOOLEAN',
+  });
+
+  await publisher.pushScores(scores);
+  await publisher.createRunItem({
+    runName,
+    datasetItemId: item.id,
+    traceId,
+    ...(options.langfuseRunMetadata ? { metadata: options.langfuseRunMetadata } : {}),
+  });
 }
 
 /**
