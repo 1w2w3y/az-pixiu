@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "cost-summary": "tsx src/cli.ts analyze cost-summary --subscription-name-filter GrafanaDevRP"
+    "cost-summary": "tsx src/cli.ts analyze cost-summary --subscription-name-filter GrafanaDevRP",
+    "eval:compare": "tsx src/cli.ts eval eval/phase-1.json --use-playbook --observability langfuse --experiment-name 5-model-compare --models gpt-4o,gpt-4.1,gpt-5-mini,gpt-5.4,gpt-chat-latest"
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",
