@@ -60,6 +60,7 @@ Run `npx pixiu --help` for the full flag set. Per-run artefacts land in `runs/<r
 - [Langfuse learning goals](docs/langfuse-learning-goals.md) — the Langfuse capabilities the project intends to demonstrate.
 - [AMG-MCP positioning](docs/amg-mcp-positioning.md) — why AMG-MCP sits at the boundary between the agent and Azure.
 - [AMG-MCP capabilities](docs/amg-mcp-capabilities.md) — a snapshot of what AMG-MCP exposes to the agent today and how it maps to project use cases.
+- [Model comparison](docs/model-comparison.md) — Phase 1 sweep of OpenAI chat-completion models against the cost-summary workload; informs the default model in `config.json` and flags models to avoid.
 
 ## Product requirements
 

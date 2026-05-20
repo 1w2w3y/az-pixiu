@@ -80,6 +80,16 @@ export class LiteLLMModelClient implements ModelClient {
       // type, but the OpenAI SDK passes unknown body fields through to
       // the wire request. LiteLLM picks it up server-side.
       ...(correlationMetadata ? ({ metadata: correlationMetadata } as Record<string, unknown>) : {}),
+      // Tell the LiteLLM proxy to silently drop request params that the
+      // selected provider/model rejects, instead of returning 400. The
+      // concrete case that motivated this: gpt-5 / gpt-5-pro / gpt-5-nano
+      // reject `temperature=0` and only accept `temperature=1`, while
+      // every other model in the catalog accepts our deterministic
+      // default. Without `drop_params`, picking one of those models in
+      // config.json hard-fails the run on a config-shape mismatch the
+      // operator didn't choose. With it, the proxy drops the offending
+      // field and returns whatever the provider's default is.
+      drop_params: true,
     } as Parameters<typeof this.client.chat.completions.parse>[0]);
 
     const parsed = response.choices[0]?.message.parsed;
