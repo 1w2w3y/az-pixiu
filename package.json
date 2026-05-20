@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",
+    "@langfuse/core": "^5.3.0",
     "@langfuse/openai": "^5.3.0",
     "@langfuse/otel": "^5.3.0",
     "@langfuse/tracing": "^5.3.0",
