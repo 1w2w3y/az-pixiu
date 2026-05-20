@@ -14,8 +14,11 @@ import { LiveMCPTransport } from './mcp/live.js';
 import type { MCPTransport } from './mcp/transport.js';
 import { MCPClient } from './mcp/client.js';
 import { OpenAIModelClient } from './model/openai-client.js';
+import { LiteLLMModelClient } from './model/litellm-client.js';
 import { MockModelClient } from './model/mock-client.js';
 import type { ModelClient } from './model/client.js';
+import type { Config } from './schemas/index.js';
+import type { TokenCredential } from '@azure/identity';
 import { runEvaluationByPath, type EvalItemResult } from './evaluation/runner.js';
 import type { DatasetItem } from './evaluation/dataset.js';
 import { buildCannedMockModelClient } from './evaluation/canned-mock.js';
@@ -226,13 +229,8 @@ async function runAnalyzeCommand(
       });
       modelProvider = 'mock';
     } else {
-      model = new OpenAIModelClient({
-        endpoint: config.foundry.endpoint,
-        deployment: config.foundry.deployment,
-        apiVersion: config.foundry.api_version,
-        credential,
-      });
-      modelProvider = 'foundry';
+      model = buildModelClient(config, credential);
+      modelProvider = config.provider;
     }
 
     const result = await runAnalysis({
@@ -316,26 +314,24 @@ async function runEvalCommand(
 
     const makeModel = mockModel
       ? (_item: DatasetItem): ModelClient => buildCannedMockModelClient()
-      : (_item: DatasetItem): ModelClient =>
-          new OpenAIModelClient({
-            endpoint: config.foundry.endpoint,
-            deployment: config.foundry.deployment,
-            apiVersion: config.foundry.api_version,
-            credential,
-          });
+      : (_item: DatasetItem): ModelClient => buildModelClient(config, credential);
+
+    const modelLabel = mockModel
+      ? 'mock (canned reasoning)'
+      : config.provider === 'litellm'
+        ? `litellm/${config.litellm!.model}`
+        : `foundry/${config.foundry!.deployment}`;
 
     process.stdout.write(`Running pixiu eval on ${datasetPath}\n`);
     process.stdout.write(`  fixtures: ${fixturesRoot}\n`);
-    process.stdout.write(
-      `  model: ${mockModel ? 'mock (canned reasoning)' : `foundry/${config.foundry.deployment}`}\n`,
-    );
+    process.stdout.write(`  model: ${modelLabel}\n`);
     process.stdout.write(`  planner: ${usePlaybook ? 'playbook' : 'planner LLM'}\n`);
     process.stdout.write(`  observability: ${observabilityMode}\n\n`);
 
     const result = await runEvaluationByPath(datasetPath, {
       config,
       makeModel,
-      modelProvider: mockModel ? 'mock' : 'foundry',
+      modelProvider: mockModel ? 'mock' : config.provider,
       credentialIdentity,
       usePlaybook,
       runsDir: outputDir,
@@ -414,6 +410,29 @@ async function runDiagnoseCommand(values: Record<string, unknown>): Promise<numb
 }
 
 // --- helpers ---
+
+/**
+ * Build the configured ModelClient. The Foundry path needs Entra ID auth
+ * (the credential), while the LiteLLM path ignores it — LiteLLM auth is
+ * an optional bearer token carried in the config itself.
+ */
+function buildModelClient(config: Config, credential: TokenCredential): ModelClient {
+  if (config.provider === 'litellm') {
+    const l = config.litellm!;
+    return new LiteLLMModelClient({
+      endpoint: l.endpoint,
+      model: l.model,
+      ...(l.api_key ? { apiKey: l.api_key } : {}),
+    });
+  }
+  const f = config.foundry!;
+  return new OpenAIModelClient({
+    endpoint: f.endpoint,
+    deployment: f.deployment,
+    apiVersion: f.api_version,
+    credential,
+  });
+}
 
 function stringOrUndefined(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;

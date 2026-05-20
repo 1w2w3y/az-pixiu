@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ConfigSchema,
   FoundryConfigSchema,
+  LiteLLMConfigSchema,
   AmgConfigSchema,
 } from '../../src/schemas/index.js';
 
@@ -89,5 +90,98 @@ describe('FoundryConfigSchema (standalone)', () => {
 describe('AmgConfigSchema (standalone)', () => {
   it('parses standalone amg config', () => {
     expect(AmgConfigSchema.safeParse(validConfig.amg).success).toBe(true);
+  });
+});
+
+describe('ConfigSchema with LiteLLM provider', () => {
+  const validLiteLLMConfig = {
+    provider: 'litellm',
+    litellm: {
+      endpoint: 'https://litellm.example.com',
+      model: 'gpt-5.4',
+    },
+    amg: {
+      endpoint: 'https://example.grafana.azure.com',
+    },
+  };
+
+  it('accepts a litellm-only config', () => {
+    const result = ConfigSchema.safeParse(validLiteLLMConfig);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provider).toBe('litellm');
+      expect(result.data.litellm?.model).toBe('gpt-5.4');
+    }
+  });
+
+  it('accepts litellm config with an api_key', () => {
+    const result = ConfigSchema.safeParse({
+      ...validLiteLLMConfig,
+      litellm: { ...validLiteLLMConfig.litellm, api_key: 'sk-test' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects provider="litellm" without a litellm block', () => {
+    const { litellm: _l, ...withoutLitellm } = validLiteLLMConfig;
+    const result = ConfigSchema.safeParse(withoutLitellm);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects provider="foundry" without a foundry block', () => {
+    const result = ConfigSchema.safeParse({
+      provider: 'foundry',
+      amg: { endpoint: 'https://example.grafana.azure.com' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('defaults provider to "foundry" when omitted (backwards-compat)', () => {
+    const result = ConfigSchema.safeParse(validConfig);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provider).toBe('foundry');
+    }
+  });
+
+  it('rejects an unknown provider value', () => {
+    const result = ConfigSchema.safeParse({ ...validLiteLLMConfig, provider: 'bedrock' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a non-URL litellm endpoint', () => {
+    const result = ConfigSchema.safeParse({
+      ...validLiteLLMConfig,
+      litellm: { ...validLiteLLMConfig.litellm, endpoint: 'not-a-url' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty litellm model name', () => {
+    const result = ConfigSchema.safeParse({
+      ...validLiteLLMConfig,
+      litellm: { ...validLiteLLMConfig.litellm, model: '' },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('LiteLLMConfigSchema (standalone)', () => {
+  it('parses a standalone litellm config', () => {
+    expect(
+      LiteLLMConfigSchema.safeParse({
+        endpoint: 'https://litellm.example.com',
+        model: 'gpt-5.4',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects unknown keys in litellm section', () => {
+    const result = LiteLLMConfigSchema.safeParse({
+      endpoint: 'https://litellm.example.com',
+      model: 'gpt-5.4',
+      deployment: 'oops-wrong-key',
+    });
+    expect(result.success).toBe(false);
   });
 });

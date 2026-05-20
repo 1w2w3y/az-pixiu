@@ -1,7 +1,12 @@
 {
+  "provider": "foundry",
   "foundry": {
     "endpoint": "https://<your-foundry-resource>.openai.azure.com",
     "deployment": "<your-deployment-name>"
+  },
+  "litellm": {
+    "endpoint": "https://litellm.wus2.sample-dev.azgrafana-test.io",
+    "model": "gpt-5.4"
   },
   "amg": {
     "endpoint": "https://<your-amg-instance>.grafana.azure.com"

@@ -205,7 +205,7 @@ function metadataFooter(metadata: RunMetadata): string {
       run_id: metadata.run_id,
       trace_id: metadata.trace_id,
       status: metadata.status,
-      model: `${metadata.model_provider}/${metadata.model_name} (sku: ${metadata.model_deployment_sku}, config_hash: ${metadata.model_config_hash})`,
+      model: `${metadata.model_provider}/${metadata.model_name} (${metadata.model_deployment_sku ? `sku: ${metadata.model_deployment_sku}, ` : ''}config_hash: ${metadata.model_config_hash})`,
       prompts: `planner: ${metadata.prompt_versions.planner}, reasoner: ${metadata.prompt_versions.reasoner}`,
       credential: `${metadata.credential_source.implementation} (${metadata.credential_source.identity})`,
       capabilities: Object.entries(metadata.capability_versions)

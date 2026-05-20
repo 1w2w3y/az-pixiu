@@ -94,14 +94,33 @@ export async function diagnose(
     }
   }
 
-  // 3. Foundry-scoped token (construction only — we don't spend model tokens here)
+  // 3. Model provider preflight. Foundry uses Entra ID, so we check we
+  //    can mint a Cognitive Services token without actually spending
+  //    model quota. LiteLLM is OpenAI-compatible over plain HTTP(S);
+  //    we GET /v1/models as the cheapest signal that the gateway is
+  //    reachable and recognizes the configured model id.
+  if (config.provider === 'litellm') {
+    await diagnoseLiteLLM(config.litellm!, results);
+  } else {
+    await diagnoseFoundry(config.foundry!, credential, results);
+  }
+
+  const ok = results.every((r) => r.ok);
+  return { ok, results };
+}
+
+async function diagnoseFoundry(
+  foundry: NonNullable<Config['foundry']>,
+  credential: TokenCredential,
+  results: CheckResult[],
+): Promise<void> {
   try {
     const token = await credential.getToken(FOUNDRY_SCOPE);
     if (!token) throw new Error('credential returned null token');
     results.push({
       name: 'foundry_token',
       ok: true,
-      detail: `Acquired Foundry-scoped token. Endpoint: ${config.foundry.endpoint}, deployment: ${config.foundry.deployment}.`,
+      detail: `Acquired Foundry-scoped token. Endpoint: ${foundry.endpoint}, deployment: ${foundry.deployment}.`,
     });
   } catch (err) {
     results.push({
@@ -111,9 +130,56 @@ export async function diagnose(
       hint: 'Confirm your identity has Cognitive Services User role on the Foundry resource.',
     });
   }
+}
 
-  const ok = results.every((r) => r.ok);
-  return { ok, results };
+async function diagnoseLiteLLM(
+  litellm: NonNullable<Config['litellm']>,
+  results: CheckResult[],
+): Promise<void> {
+  const base = litellm.endpoint.replace(/\/+$/, '');
+  const url = `${base}/v1/models`;
+  const headers: Record<string, string> = {};
+  if (litellm.api_key) headers['Authorization'] = `Bearer ${litellm.api_key}`;
+  try {
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      results.push({
+        name: 'litellm_reachable',
+        ok: false,
+        detail: `GET ${url} returned HTTP ${res.status}.`,
+        hint: 'Confirm the LiteLLM endpoint is correct and (if required) the api_key has access.',
+      });
+      return;
+    }
+    const body = (await res.json()) as { data?: Array<{ id?: string }> };
+    const ids = (body.data ?? []).map((m) => m.id).filter((s): s is string => !!s);
+    if (ids.length === 0) {
+      results.push({
+        name: 'litellm_reachable',
+        ok: true,
+        detail: `LiteLLM at ${litellm.endpoint} responded but advertised no models. Configured model: ${litellm.model}.`,
+      });
+      return;
+    }
+    const known = ids.includes(litellm.model);
+    results.push({
+      name: 'litellm_reachable',
+      ok: known,
+      detail: known
+        ? `LiteLLM at ${litellm.endpoint} advertises ${ids.length} model(s); configured model "${litellm.model}" is present.`
+        : `LiteLLM at ${litellm.endpoint} advertises ${ids.length} model(s) but "${litellm.model}" is not among them.`,
+      ...(known
+        ? {}
+        : { hint: `Pick one of the advertised models: ${ids.slice(0, 10).join(', ')}${ids.length > 10 ? '…' : ''}` }),
+    });
+  } catch (err) {
+    results.push({
+      name: 'litellm_reachable',
+      ok: false,
+      detail: `Could not reach LiteLLM at ${url}: ${describe(err)}`,
+      hint: 'Check the endpoint URL (https vs http), DNS, and network reachability.',
+    });
+  }
 }
 
 function describe(err: unknown): string {

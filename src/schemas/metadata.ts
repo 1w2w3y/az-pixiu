@@ -39,7 +39,10 @@ export const RunMetadataSchema = z
     model_provider: z.string().min(1),
     model_name: z.string().min(1),
     model_config_hash: z.string().min(1),
-    model_deployment_sku: ModelDeploymentSkuSchema,
+    // Foundry-only — describes where prompts/responses are processed for
+    // the data-residency record (§5.7). LiteLLM and other OpenAI-
+    // compatible gateways do not expose this concept, so it is optional.
+    model_deployment_sku: ModelDeploymentSkuSchema.optional(),
     credential_source: CredentialSourceSchema,
     experiment_variant: z.string().min(1).optional(),
     amg_mcp_endpoint: z.string().url(),

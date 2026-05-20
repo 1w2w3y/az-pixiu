@@ -192,8 +192,10 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
     );
   }
   process.stdout.write(`  amg_mcp_endpoint: ${options.config.amg.endpoint}\n`);
+  const modelInfo = resolveModelInfo(options.config);
   process.stdout.write(
-    `  foundry: ${options.config.foundry.endpoint} (${options.config.foundry.deployment}, sku=${options.config.foundry.deployment_sku})\n`,
+    `  model: ${modelInfo.provider}/${modelInfo.modelName} @ ${modelInfo.endpoint}` +
+      `${modelInfo.deploymentSku ? ` (sku=${modelInfo.deploymentSku})` : ''}\n`,
   );
   process.stdout.write(
     `  credential: ${options.credentialIdentity.implementation} (${options.credentialIdentity.identity})\n`,
@@ -228,8 +230,10 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
             metadata: {
               run_id: runId,
               amg_mcp_endpoint: options.config.amg.endpoint,
-              model_deployment: options.config.foundry.deployment,
-              model_deployment_sku: options.config.foundry.deployment_sku,
+              model_deployment: modelInfo.modelName,
+              ...(modelInfo.deploymentSku
+                ? { model_deployment_sku: modelInfo.deploymentSku }
+                : {}),
               credential_source: options.credentialIdentity.implementation,
               ...(options.fixtureId ? { fixture_id: options.fixtureId } : {}),
             },
@@ -297,8 +301,10 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
         [ATTR.agentDomain]: 'finops',
         [ATTR.analysisType]: analysisType,
         [ATTR.modelProvider]: options.modelProvider,
-        [ATTR.modelName]: options.config.foundry.deployment,
-        [ATTR.modelDeploymentSku]: options.config.foundry.deployment_sku,
+        [ATTR.modelName]: modelInfo.modelName,
+        ...(modelInfo.deploymentSku
+          ? { [ATTR.modelDeploymentSku]: modelInfo.deploymentSku }
+          : {}),
         [ATTR.credentialSource]: options.credentialIdentity.implementation,
         [ATTR.credentialIdentity]: options.credentialIdentity.identity,
         ...(options.fixtureId ? { [ATTR.fixtureId]: options.fixtureId } : {}),
@@ -556,18 +562,19 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   const score = scoreAll(reasoning);
 
   const endedAt = new Date().toISOString();
+  const modelInfo = resolveModelInfo(ctx.config);
   const metadata: RunMetadata = {
     run_id: runIdAsBranded(ctx.runId),
     trace_id: ctx.traceId,
     prompt_versions: { planner: plannerPrompt.version, reasoner: reasonerPrompt.version },
     model_provider: ctx.modelProvider,
-    model_name: ctx.config.foundry.deployment,
+    model_name: modelInfo.modelName,
     model_config_hash: modelConfigHash({
       provider: ctx.modelProvider,
-      name: ctx.config.foundry.deployment,
+      name: modelInfo.modelName,
       temperature: 0,
     }),
-    model_deployment_sku: ctx.config.foundry.deployment_sku,
+    ...(modelInfo.deploymentSku ? { model_deployment_sku: modelInfo.deploymentSku } : {}),
     credential_source: ctx.credentialIdentity,
     amg_mcp_endpoint: ctx.config.amg.endpoint,
     capability_versions: { ...catalog.capability_versions },
@@ -626,6 +633,31 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
 function runIdAsBranded(id: string): RunMetadata['run_id'] {
   // randomUUID is RFC 4122 v4 so it satisfies the RunIdSchema brand.
   return id as unknown as RunMetadata['run_id'];
+}
+
+/**
+ * Resolve the provider-specific model fields the orchestrator needs to
+ * print, trace, and write into RunMetadata. Centralizing this here keeps
+ * `doRun` and the RunRoot setup agnostic to which provider is configured;
+ * the schema's superRefine guarantees the matching block is present.
+ */
+export function resolveModelInfo(config: Config): {
+  provider: 'foundry' | 'litellm';
+  endpoint: string;
+  modelName: string;
+  deploymentSku?: 'GlobalStandard' | 'DataZoneStandard' | 'regional';
+} {
+  if (config.provider === 'litellm') {
+    const l = config.litellm!;
+    return { provider: 'litellm', endpoint: l.endpoint, modelName: l.model };
+  }
+  const f = config.foundry!;
+  return {
+    provider: 'foundry',
+    endpoint: f.endpoint,
+    modelName: f.deployment,
+    deploymentSku: f.deployment_sku,
+  };
 }
 
 function selectPlaybook(scope: import('../schemas/index.js').Scope): EvidencePlan {

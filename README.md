@@ -30,17 +30,17 @@ Phase 1 ("minimum viable agent") is complete. The agent runs end-to-end against 
 
 ## Getting started
 
-Az-Pixiu is a CLI (`pixiu`) intended to be cloned and run locally. It requires Node.js 22+ and an `az login` against a tenant that has access to both an Azure Managed Grafana instance with MCP enabled and an Azure AI Foundry deployment.
+Az-Pixiu is a CLI (`pixiu`) intended to be cloned and run locally. It requires Node.js 22+ and an `az login` against a tenant that has access to an Azure Managed Grafana instance with MCP enabled. For the LLM call it can use either an Azure AI Foundry deployment (Entra ID auth) or an OpenAI-compatible LiteLLM gateway; pick one in `config.json` via the top-level `"provider"` field (`"foundry"` — the default — or `"litellm"`).
 
 ```bash
 npm install
-cp config.sample.json config.json    # then edit endpoints + deployment name
+cp config.sample.json config.json    # then edit endpoints + deployment / model name
 npm run build                        # or use `npm run dev` during development
 
-# real run against live AMG-MCP + Foundry
+# real run against live AMG-MCP + the configured model provider
 npx pixiu analyze cost-surprise --subscription <sub-id> --resource-group <rg>
 
-# fully-offline eval against the seeded fixtures (no Foundry, no Azure calls)
+# fully-offline eval against the seeded fixtures (no LLM provider, no Azure calls)
 npx pixiu eval eval/phase-1.json --use-playbook --mock-model \
     --credential mock --observability noop
 
