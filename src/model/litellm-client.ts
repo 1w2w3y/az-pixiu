@@ -5,6 +5,7 @@ import { getPropagatedAttributesFromContext } from '@langfuse/core';
 import { context, trace } from '@opentelemetry/api';
 import type { z } from 'zod';
 import type { GenerateStructuredArgs, ModelClient } from './client.js';
+import { currentInstrumentationFlavor } from '../observability/setup.js';
 
 /**
  * LiteLLMModelClient — OpenAI-compatible client pointed at a LiteLLM
@@ -17,10 +18,13 @@ import type { GenerateStructuredArgs, ModelClient } from './client.js';
  * deployments in dev/test environments commonly run without an API key,
  * and the OpenAI SDK accepts `apiKey: null` for that case.
  *
- * Like the Foundry client, the underlying SDK is wrapped with
- * `observeOpenAI` so every call becomes a Langfuse `generation` under
- * the active span. The wrapper is a no-op when no Langfuse processor is
- * installed (i.e., `--observability noop|memory`).
+ * Instrumentation flavor is process-wide (see observability/setup.ts):
+ *   - 'langfuse'      → wrap with `observeOpenAI` so calls become
+ *                       Langfuse generations.
+ *   - 'openinference' → leave unwrapped; the OpenAIInstrumentation
+ *                       installed in setup.ts has already patched the
+ *                       openai module. Wrapping on top would double
+ *                       instrument.
  */
 
 export interface LiteLLMModelClientOptions {
@@ -43,7 +47,8 @@ export class LiteLLMModelClient implements ModelClient {
       baseURL,
       apiKey: options.apiKey ?? 'no-auth',
     });
-    this.client = observeOpenAI(rawClient);
+    this.client =
+      currentInstrumentationFlavor() === 'langfuse' ? observeOpenAI(rawClient) : rawClient;
   }
 
   async generateStructured<TSchema extends z.ZodTypeAny>(

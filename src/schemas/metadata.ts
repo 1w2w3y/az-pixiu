@@ -45,6 +45,9 @@ export const RunMetadataSchema = z
     model_deployment_sku: ModelDeploymentSkuSchema.optional(),
     credential_source: CredentialSourceSchema,
     experiment_variant: z.string().min(1).optional(),
+    // Which OTel instrumentation flavor was active for this run.
+    // Process-wide choice — see observability/setup.ts.
+    instrumentation_flavor: z.enum(['langfuse', 'openinference']).optional(),
     amg_mcp_endpoint: z.string().url(),
     capability_versions: z.record(z.string().min(1), z.string().min(1)),
     fixture_id: z.string().min(1).optional(),

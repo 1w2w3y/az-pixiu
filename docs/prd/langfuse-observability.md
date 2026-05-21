@@ -78,6 +78,8 @@ The project reviews aggregate observability data across recent runs. Maintainers
 - FR-13: Observability views must make it easy to find failed runs, partial runs, high-latency runs, high-cost runs, and low-quality outputs.
 - FR-14: The system must make unsupported scenarios visible so that coverage gaps can become product backlog items.
 - FR-15: The observability requirements must apply to future agents without requiring each agent to invent its own tracing vocabulary.
+- FR-16: The trace pipeline must be additively pluggable. An operator who wants to evaluate a second OTel-compatible backend (Arize Phoenix, an OpenTelemetry collector, a tracing SaaS) must be able to enable it as a parallel sink via environment configuration, without weakening the Langfuse trace tree or moving any logic out of the local agent. Phoenix is the first such optional sink and is gated on `PHOENIX_BASE_URL` (see [phase-1 design](../design/phase-1.md#trace-span-vocabulary-shared)).
+- FR-17: The OTel instrumentation layer (the libraries that monkey-patch the OpenAI SDK and the MCP SDK to auto-emit LLM and tool spans) must be swappable per process. Phase 1 supports two flavors: `langfuse` (`@langfuse/openai` + `@traceloop/instrumentation-mcp`) and `openinference` (`@arizeai/openinference-instrumentation-openai` + `@arizeai/openinference-instrumentation-mcp`). The chosen flavor must be recorded on the trace root span and in `RunMetadata` so every trace is self-describing about which attribute vocabulary it uses.
 
 ## Non-Functional Requirements
 

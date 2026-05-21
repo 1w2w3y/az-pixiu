@@ -19,6 +19,7 @@ import {
 import {
   initializeTracing,
   shutdownTracing,
+  currentInstrumentationFlavor,
   type ObservabilityMode,
 } from '../observability/setup.js';
 import {
@@ -224,7 +225,9 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
   process.stdout.write(
     `  credential: ${options.credentialIdentity.implementation} (${options.credentialIdentity.identity})\n`,
   );
+  const instrumentationFlavor = currentInstrumentationFlavor();
   process.stdout.write(`  observability: ${observabilityMode}\n`);
+  process.stdout.write(`  instrumentation: ${instrumentationFlavor}\n`);
 
   const traceId = `run-${runId}`;
 
@@ -264,6 +267,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
                 ? { model_deployment_sku: modelInfo.deploymentSku }
                 : {}),
               credential_source: options.credentialIdentity.implementation,
+              instrumentation_flavor: instrumentationFlavor,
               ...(options.fixtureId ? { fixture_id: options.fixtureId } : {}),
             },
           },
@@ -338,6 +342,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
           : {}),
         [ATTR.credentialSource]: options.credentialIdentity.implementation,
         [ATTR.credentialIdentity]: options.credentialIdentity.identity,
+        [ATTR.instrumentationFlavor]: instrumentationFlavor,
         ...(options.fixtureId ? { [ATTR.fixtureId]: options.fixtureId } : {}),
       },
     );
@@ -608,6 +613,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     }),
     ...(modelInfo.deploymentSku ? { model_deployment_sku: modelInfo.deploymentSku } : {}),
     credential_source: ctx.credentialIdentity,
+    instrumentation_flavor: currentInstrumentationFlavor(),
     amg_mcp_endpoint: ctx.config.amg.endpoint,
     capability_versions: { ...catalog.capability_versions },
     ...(ctx.fixtureId ? { fixture_id: ctx.fixtureId } : {}),

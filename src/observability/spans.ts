@@ -61,6 +61,7 @@ export const ATTR = {
   discoveryWithNamesCount: 'az_pixiu.discovery.with_names_count',
   discoverySelectedCount: 'az_pixiu.discovery.selected_count',
   discoveryShapeHint: 'az_pixiu.discovery.shape_hint',
+  instrumentationFlavor: 'az_pixiu.instrumentation.flavor',
 } as const;
 
 /**

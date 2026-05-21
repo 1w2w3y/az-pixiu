@@ -68,6 +68,17 @@ eval flags:
 shared flags:
   --config <path>                  path to config.json (default: ./config.json)
   -h, --help                       show this help
+
+env vars (observability):
+  LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL   Langfuse credentials
+  PHOENIX_BASE_URL                                                Optional Phoenix sink.
+                                                                  When set under --observability langfuse,
+                                                                  spans are also shipped to <base>/v1/traces
+                                                                  via OTLP HTTP, in parallel with Langfuse.
+  PHOENIX_API_KEY                                                 Optional Phoenix bearer token.
+  AZ_PIXIU_INSTRUMENTATION                                        langfuse | openinference. Pins the OpenAI/MCP
+                                                                  instrumentation flavor for the process.
+                                                                  Default is a 50/50 random choice per process.
 `;
 
 interface AnalyzeArgs {

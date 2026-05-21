@@ -557,6 +557,7 @@ run.root                                  [trace]
     model.provider, model.name, model.config_hash, model.deployment_sku
     credential.source, credential.identity
     experiment.variant (optional)
+    instrumentation.flavor = langfuse | openinference
     fixture.id (optional)
     capability.versions (object)
     status = success | partial | failed_*
@@ -586,6 +587,10 @@ run.root                                  [trace]
 ```
 
 The per-tool-call observation is emitted by `@traceloop/instrumentation-mcp`, which patches `@modelcontextprotocol/sdk`'s `Client` class. Because this project is ESM, the SDK's `manuallyInstrument({ Client })` API is used — `registerInstrumentations()`-style require-hooks don't fire under ESM import hoisting. The patch lives in `src/observability/setup.ts` and is applied once per process. The span name and attribute set come from Traceloop's MCP semantic conventions; they nest under whichever parent triggered the call (typically `run.evidence_retrieval` or `run.subscription_discovery`) and carry the request parameters as input and the MCP response payload as output.
+
+**Instrumentation flavor.** The OpenAI client and the MCP SDK can each be patched by either a Langfuse-flavored library (`@langfuse/openai` + `@traceloop/instrumentation-mcp`, emitting `gen_ai.*` attributes that Langfuse's UI renders) or an Arize-flavored library (`@arizeai/openinference-instrumentation-openai` + `@arizeai/openinference-instrumentation-mcp`, emitting `input.value` / `output.value` / `llm.*` attributes that Phoenix's UI renders). Both libraries monkey-patch the same module surface, so they cannot coexist in one process. `src/observability/setup.ts` therefore picks one flavor per process at module-load time (`AZ_PIXIU_INSTRUMENTATION` env override, otherwise a 50/50 coin flip), records the choice on the root span as `az_pixiu.instrumentation.flavor`, and persists it on `RunMetadata.instrumentation_flavor` so a trace is always self-describing. Attribute names downstream of `reasoning.model_call` and the per-tool-call observation therefore vary by flavor; the §14 `run.*` phase spans are unaffected.
+
+**Phoenix as an optional second sink.** When `PHOENIX_BASE_URL` is set, the langfuse observability mode adds a parallel `BatchSpanProcessor` over OTLP HTTP that ships the same spans to a Phoenix instance at `<base>/v1/traces`. Optional `PHOENIX_API_KEY` becomes a bearer header. The two processors are independent — a Langfuse outage does not block Phoenix and vice versa — so Phoenix is purely additive and remains explicitly optional, in keeping with the local-first constraint.
 
 Auto-instrumentation only covers the live transport. `FixtureMCPTransport` does not go through the SDK, so fixture-driven runs (eval, tests) get the high-level `run.*` phase spans without per-call children. Eval defaults to `--observability noop` anyway, so this rarely matters in practice.
 
