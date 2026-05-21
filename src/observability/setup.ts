@@ -8,7 +8,7 @@ import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 import { trace, type Tracer } from '@opentelemetry/api';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { LangfuseSpanProcessor } from '@langfuse/otel';
 import { McpInstrumentation as TraceloopMcpInstrumentation } from '@traceloop/instrumentation-mcp';
 import { MCPInstrumentation as OpenInferenceMcpInstrumentation } from '@arizeai/openinference-instrumentation-mcp';
@@ -160,6 +160,13 @@ function ensureOpenAIInstrumented(): void {
  * unless the operator already included it. PHOENIX_API_KEY is optional —
  * dev Phoenix instances commonly run without auth, prod ones expect a
  * bearer header.
+ *
+ * Uses the protobuf OTLP exporter (`exporter-trace-otlp-proto`), not the
+ * JSON one (`exporter-trace-otlp-http`). Phoenix's OTLP receiver rejects
+ * `Content-Type: application/json` with `415 Unsupported Media Type`; it
+ * only accepts protobuf payloads. The two packages have identical APIs
+ * and both target `<base>/v1/traces`, so the only practical difference
+ * is the wire encoding.
  */
 function buildPhoenixProcessor(): SpanProcessor | undefined {
   const base = process.env.PHOENIX_BASE_URL?.trim();
