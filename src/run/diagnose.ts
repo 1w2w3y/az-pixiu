@@ -31,7 +31,7 @@ export interface DiagnoseResult {
   results: CheckResult[];
 }
 
-const AMG_SCOPE = 'ce34e7e5-485f-4d76-964f-b3d2b16d1e4f/.default';
+const AMG_SCOPE = '6f2d169c-08f3-4a4c-a982-bcaf2d038c45/.default';
 const FOUNDRY_SCOPE = 'https://cognitiveservices.azure.com/.default';
 
 export async function diagnose(

@@ -31,7 +31,7 @@ import {
  * objects; the failure_taxonomy (§4.4) interprets them downstream.
  */
 
-const AMG_RESOURCE_SCOPE = 'ce34e7e5-485f-4d76-964f-b3d2b16d1e4f/.default';
+const AMG_RESOURCE_SCOPE = '6f2d169c-08f3-4a4c-a982-bcaf2d038c45/.default';
 
 export interface LiveMCPTransportOptions {
   /** Base URL of the AMG-MCP server (Grafana host). */
