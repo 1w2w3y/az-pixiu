@@ -19,7 +19,7 @@ import * as openaiModule from 'openai';
 
 /**
  * Observability setup (design §4.9, §14). Initializes a single OTEL tracer
- * provider for the run. Three modes:
+ * provider for the run. Four modes:
  *
  *   - 'langfuse' — registers a LangfuseSpanProcessor; if PHOENIX_BASE_URL
  *     is set, a parallel BatchSpanProcessor ships the same spans to a
@@ -31,6 +31,16 @@ import * as openaiModule from 'openai';
  *     trace-artifact mode when Langfuse is disabled.
  *   - 'noop' — no exporter; spans created but never shipped. Default
  *     when no configuration is supplied.
+ *   - 'ms-otel' — delegates provider lifecycle to the Microsoft
+ *     OpenTelemetry Distro (@microsoft/opentelemetry). The distro owns
+ *     the global tracer provider; it auto-instruments HTTP / Azure SDK /
+ *     OpenAI Agents SDK (the import-hook instrumentations only fire when
+ *     the process is started with `node --import @microsoft/opentelemetry/loader`)
+ *     and exports to Azure Monitor when APPLICATIONINSIGHTS_CONNECTION_STRING
+ *     is set. Langfuse and Phoenix sinks are NOT active in this mode —
+ *     the distro is the single provider. The §14 manual span tree
+ *     (run.*, evidence.*, reasoning.*) flows into the distro's exporters
+ *     because withSpan() picks up the global tracer.
  *
  * Two instrumentation flavors run side-by-side in this codebase:
  *
@@ -61,7 +71,7 @@ import * as openaiModule from 'openai';
 const TRACER_NAME = 'az-pixiu';
 const TRACER_VERSION = '0.1.0';
 
-export type ObservabilityMode = 'langfuse' | 'memory' | 'noop';
+export type ObservabilityMode = 'langfuse' | 'memory' | 'noop' | 'ms-otel';
 
 export type InstrumentationFlavor = 'langfuse' | 'openinference';
 
@@ -182,6 +192,63 @@ function buildPhoenixProcessor(): SpanProcessor | undefined {
   );
 }
 
+/**
+ * Wire up the Microsoft OTEL Distro and let it own the global tracer
+ * provider. The distro registers exporters internally and (when the
+ * process was started with `node --import @microsoft/opentelemetry/loader`)
+ * patches HTTP / Azure SDK / OpenAI Agents libraries via ESM loader hooks.
+ *
+ * Notes:
+ *   - We do NOT call ensureMcpInstrumented / ensureOpenAIInstrumented in
+ *     this mode. The OpenInference flavor would double-instrument OpenAI
+ *     against the distro's own instrumentation; the Traceloop MCP
+ *     instrumentation isn't needed because MCP HTTP transport calls show
+ *     up as HTTP client spans from the distro's HTTP instrumentation.
+ *   - The model clients still consult currentInstrumentationFlavor() at
+ *     construction time and may wrap OpenAI with @langfuse/openai's
+ *     observeOpenAI(). That wrap is a no-op without a LangfuseSpanProcessor
+ *     on the global provider, so it's harmless here.
+ *   - azureMonitor is gated by APPLICATIONINSIGHTS_CONNECTION_STRING so
+ *     the distro doesn't silently drop telemetry when the env isn't set.
+ *   - a365 is hard-disabled — Az-Pixiu is not a Microsoft Agent 365
+ *     application; that exporter expects tenant/agent IDs we don't have.
+ */
+async function initializeMicrosoftOtelTracing(): Promise<ObservabilityState> {
+  // Lazy import so the distro is only required when this mode is selected
+  // (memory/langfuse/noop runs — including the test suite — never load it).
+  const { useMicrosoftOpenTelemetry, shutdownMicrosoftOpenTelemetry } = await import(
+    '@microsoft/opentelemetry'
+  );
+  // The distro's docstring says the env var alone is enough to enable
+  // Azure Monitor, but in practice we observed POSTs going to a default
+  // endpoint with no usable iKey (200 OK, no data in App Insights) unless
+  // the connection string is passed explicitly via azureMonitorExporterOptions.
+  // So forward APPLICATIONINSIGHTS_CONNECTION_STRING through directly.
+  const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING?.trim();
+  useMicrosoftOpenTelemetry({
+    resource: resourceFromAttributes({
+      [ATTR_SERVICE_NAME]: TRACER_NAME,
+      [ATTR_SERVICE_VERSION]: TRACER_VERSION,
+    }),
+    azureMonitor: {
+      enabled: Boolean(connectionString),
+      ...(connectionString
+        ? { azureMonitorExporterOptions: { connectionString } }
+        : {}),
+    },
+    a365: { enabled: false },
+  });
+  const tracer = trace.getTracer(TRACER_NAME, TRACER_VERSION);
+  return {
+    mode: 'ms-otel',
+    tracer,
+    shutdown: async () => {
+      await shutdownMicrosoftOpenTelemetry();
+      activeState = undefined;
+    },
+  };
+}
+
 export async function initializeTracing(
   config: ObservabilityConfig = { mode: 'noop' },
 ): Promise<ObservabilityState> {
@@ -190,6 +257,14 @@ export async function initializeTracing(
     // Different mode requested — wait for the previous one to flush
     // before installing the new provider, so spans don't get dropped.
     await activeState.shutdown();
+  }
+
+  // The Microsoft OTEL Distro owns provider construction itself; it
+  // doesn't compose with our processors[] / NodeTracerProvider shape.
+  // Branch out before the shared path.
+  if (config.mode === 'ms-otel') {
+    activeState = await initializeMicrosoftOtelTracing();
+    return activeState;
   }
 
   const processors: SpanProcessor[] = [];

@@ -48,8 +48,11 @@ analyze flags:
   --use-playbook                   skip the planner LLM; use the deterministic cost-surprise playbook
   --mock-model                     skip Foundry; use a hard-coded mock model response
   --output-dir <path>              where to write the run subdir (default: runs/)
-  --observability <mode>           noop | memory | langfuse  (default: langfuse — requires
+  --observability <mode>           noop | memory | langfuse | ms-otel  (default: langfuse — requires
                                    LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL)
+                                   ms-otel uses the Microsoft OpenTelemetry Distro; exports to
+                                   Azure Monitor when APPLICATIONINSIGHTS_CONNECTION_STRING is set.
+                                   Langfuse and Phoenix sinks are NOT active in ms-otel mode.
   --credential <mode>              azure-cli | default | mock  (default: azure-cli)
 
 eval flags:
@@ -57,7 +60,7 @@ eval flags:
   --mock-model                     skip Foundry; use a hard-coded mock reasoning response
   --output-dir <path>              where to write per-item runs (default: runs/eval/)
   --fixtures-root <path>           directory containing fixtures (default: fixtures/)
-  --observability <mode>           noop | memory | langfuse  (default: noop for eval runs)
+  --observability <mode>           noop | memory | langfuse | ms-otel  (default: noop for eval runs)
   --credential <mode>              azure-cli | default | mock  (default: mock — eval does not call Azure)
   --models <id1,id2,...>           sweep the dataset against multiple models, one Langfuse Experiment per model.
                                    Each id overrides config.litellm.model (or config.foundry.deployment).
@@ -76,9 +79,16 @@ env vars (observability):
                                                                   spans are also shipped to <base>/v1/traces
                                                                   via OTLP HTTP, in parallel with Langfuse.
   PHOENIX_API_KEY                                                 Optional Phoenix bearer token.
+  APPLICATIONINSIGHTS_CONNECTION_STRING                           Azure App Insights connection string.
+                                                                  Enables the Azure Monitor exporter under
+                                                                  --observability ms-otel. To pick up the
+                                                                  distro's HTTP / OpenAI-Agents auto-
+                                                                  instrumentations, start the process with
+                                                                  \`node --import @microsoft/opentelemetry/loader\`.
   AZ_PIXIU_INSTRUMENTATION                                        langfuse | openinference. Pins the OpenAI/MCP
                                                                   instrumentation flavor for the process.
                                                                   Default is a 50/50 random choice per process.
+                                                                  Ignored under --observability ms-otel.
 `;
 
 interface AnalyzeArgs {
@@ -102,7 +112,7 @@ interface AnalyzeArgs {
   usePlaybook: boolean;
   mockModel: boolean;
   outputDir?: string;
-  observability: 'noop' | 'memory' | 'langfuse';
+  observability: 'noop' | 'memory' | 'langfuse' | 'ms-otel';
   credentialMode: CredentialMode;
 }
 
@@ -561,8 +571,8 @@ function stringArrayOrUndefined(v: unknown): string[] | undefined {
   return arr.length > 0 ? arr : undefined;
 }
 
-function parseObservability(v: unknown): 'noop' | 'memory' | 'langfuse' {
-  if (v === 'noop' || v === 'memory' || v === 'langfuse') return v;
+function parseObservability(v: unknown): 'noop' | 'memory' | 'langfuse' | 'ms-otel' {
+  if (v === 'noop' || v === 'memory' || v === 'langfuse' || v === 'ms-otel') return v;
   return 'langfuse';
 }
 
@@ -588,10 +598,19 @@ function describe(err: unknown): string {
   return String(err);
 }
 
+// Set process.exitCode rather than calling process.exit() so any background
+// I/O queued by the observability stack — notably the Microsoft OTEL Distro
+// exporter, whose shutdown() resolves before the underlying HTTP POST to
+// the Azure Monitor ingestion endpoint completes — gets a chance to drain
+// before Node exits. process.exit() terminates pending requests; this
+// pattern lets them complete and exits with the chosen code once the event
+// loop is empty.
 main().then(
-  (code) => process.exit(code),
+  (code) => {
+    process.exitCode = code;
+  },
   (err) => {
     process.stderr.write(`Unhandled error: ${err}\n`);
-    process.exit(99);
+    process.exitCode = 99;
   },
 );
