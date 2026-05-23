@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util';
 import { loadConfig, ConfigError } from './config.js';
 import { intakeScope } from './run/scope-intake.js';
 import { runAnalysis } from './run/orchestrator.js';
+import { FilesystemRunHistoryStore } from './history/filesystem-store.js';
 import { diagnose, type DiagnoseResult } from './run/diagnose.js';
 import { SubscriptionDiscoveryError } from './run/subscription-discovery.js';
 import {
@@ -273,6 +274,15 @@ async function runAnalyzeCommand(
       );
     }
 
+    // Cross-run continuity (Phase 2.5 — design/cost-summary-depth.md
+    // §Gap 5). The CLI defaults to the filesystem-backed store reading
+    // from the same directory it writes runs to, so prior runs against
+    // the same scope are visible without any extra flag. No prior-run
+    // context exists for the very first run against a given scope; the
+    // store returns [] and the orchestrator behaves as before.
+    const runsDir = args.outputDir ?? 'runs';
+    const runHistoryStore = new FilesystemRunHistoryStore({ runsDir });
+
     const result = await runAnalysis({
       config,
       ...(scope
@@ -291,10 +301,11 @@ async function runAnalyzeCommand(
       modelProvider,
       credentialIdentity,
       usePlaybook: args.usePlaybook,
-      ...(args.outputDir ? { runsDir: args.outputDir } : {}),
+      runsDir,
       observabilityMode: args.observability,
       ...(args.fixture ? { fixtureId: args.fixture } : {}),
       ...(langfusePublisher ? { langfusePublisher } : {}),
+      runHistoryStore,
     });
 
     return result.score.passed_all ? 0 : 3;
