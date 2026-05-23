@@ -641,3 +641,146 @@ describe('renderMarkdownReport — Run Quality enrichment (Phase 3 §S3)', () =>
     expect(md).toContain('cost-scope coverage not derivable from evidence metadata');
   });
 });
+
+describe('renderMarkdownReport — Executive Summary coverage disclosure (Phase 3 §S2)', () => {
+  const subA = '11111111-1111-1111-1111-111111111111';
+  const subB = '22222222-2222-2222-2222-222222222222';
+  const subC = '33333333-3333-3333-3333-333333333333';
+
+  const multiScope: Scope = {
+    subscription_ids: [subA, subB, subC],
+    time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
+    analysis_type: 'cost_summary',
+    effective_scope_summary: '3 subs',
+  };
+
+  const oneCovered: EvidenceRecord[] = [
+    {
+      evidence_id: 'ev-cost-A',
+      source_capability: 'amgmcp_cost_analysis',
+      capability_version: '1.0.0',
+      query_intent: 'cost_breakdown',
+      scope_subset: { subscription_ids: [subA], resource_group_names: null, resource_ids: null },
+      time_window: multiScope.time_window,
+      payload_ref: { kind: 'inline', data: {} },
+      payload_summary: {},
+      caveats: [],
+    },
+  ];
+
+  const twoFailed: TransportSummaryEntry[] = [
+    {
+      logical_request_id: 'req-1',
+      capability: 'amgmcp_cost_analysis',
+      scope_subset: { subscription_ids: [subA], resource_group_names: null, resource_ids: null },
+      parameters_digest: 'a'.repeat(64),
+      attempt_count: 1,
+      retry_count: 0,
+      final_outcome: 'success',
+      pacing_applied: false,
+      cumulative_backoff_ms: 0,
+    },
+    {
+      logical_request_id: 'req-2',
+      capability: 'amgmcp_cost_analysis',
+      scope_subset: { subscription_ids: [subB], resource_group_names: null, resource_ids: null },
+      parameters_digest: 'b'.repeat(64),
+      attempt_count: 4,
+      retry_count: 3,
+      final_outcome: 'rate_limit',
+      failure_category: 'rate_limit',
+      pacing_applied: true,
+      cumulative_backoff_ms: 210_000,
+    },
+    {
+      logical_request_id: 'req-3',
+      capability: 'amgmcp_cost_analysis',
+      scope_subset: { subscription_ids: [subC], resource_group_names: null, resource_ids: null },
+      parameters_digest: 'c'.repeat(64),
+      attempt_count: 4,
+      retry_count: 3,
+      final_outcome: 'rate_limit',
+      failure_category: 'rate_limit',
+      pacing_applied: true,
+      cumulative_backoff_ms: 210_000,
+    },
+  ];
+
+  it('renders Coverage: X of Y when only some subs returned evidence', () => {
+    const md = renderMarkdownReport({
+      scope: multiScope,
+      reasoning,
+      evidence: oneCovered,
+      metadata,
+      transportSummary: twoFailed,
+    });
+    expect(md).toMatch(
+      /\*\*Coverage:\*\* 1 of 3 subscription\(s\) returned cost evidence; 2 had retrieval failures \(rate_limit\)/,
+    );
+    // Coverage line is in the Executive Summary block, above the
+    // top-priority recommendation sentence.
+    const execIdx = md.indexOf('## Executive Summary');
+    const covIdx = md.indexOf('**Coverage:**');
+    const recIdx = md.indexOf('The top-priority item is');
+    expect(execIdx).toBeLessThan(covIdx);
+    expect(covIdx).toBeLessThan(recIdx);
+  });
+
+  it('does not render a coverage line when every sub returned cost evidence', () => {
+    const fullEvidence: EvidenceRecord[] = [
+      oneCovered[0]!,
+      { ...oneCovered[0]!, evidence_id: 'ev-cost-B', scope_subset: { subscription_ids: [subB], resource_group_names: null, resource_ids: null } },
+      { ...oneCovered[0]!, evidence_id: 'ev-cost-C', scope_subset: { subscription_ids: [subC], resource_group_names: null, resource_ids: null } },
+    ];
+    const md = renderMarkdownReport({
+      scope: multiScope,
+      reasoning,
+      evidence: fullEvidence,
+      metadata,
+    });
+    expect(md).not.toContain('**Coverage:**');
+    expect(md).not.toContain('Coverage was incomplete');
+  });
+
+  it('renders a generic incomplete-coverage sentence when scope is non-derivable but transport DQs exist', () => {
+    const emptyScope: Scope = {
+      ...multiScope,
+      subscription_ids: [] as unknown as Scope['subscription_ids'],
+    };
+    const dq: DataQualityFinding = {
+      dq_id: 'dq-throttle-1',
+      category: 'rate_limit',
+      affected_capability: 'amgmcp_cost_analysis',
+      affected_scope_subset: null,
+      consequence_for_analysis: 'rate-limit (429) — retries exhausted',
+      impact_on_recommendations: [],
+      actionable_hint: null,
+    };
+    const md = renderMarkdownReport({
+      scope: emptyScope,
+      reasoning,
+      evidence: [],
+      metadata,
+      inputDataQuality: [dq],
+    });
+    expect(md).toContain('Coverage was incomplete due to retrieval-stage rate_limit finding(s)');
+  });
+
+  it('still renders the coverage line when there are no recommendations', () => {
+    const emptyReasoning: ReasoningOutput = {
+      facts: [],
+      hypotheses: [],
+      recommendations: [],
+      data_quality: [],
+    };
+    const md = renderMarkdownReport({
+      scope: multiScope,
+      reasoning: emptyReasoning,
+      evidence: oneCovered,
+      metadata,
+      transportSummary: twoFailed,
+    });
+    expect(md).toMatch(/\*\*Coverage:\*\* 1 of 3 subscription\(s\) returned cost evidence/);
+    expect(md).toContain('No recommendations were produced.');
+  });
+});

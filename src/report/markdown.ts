@@ -68,7 +68,7 @@ export function renderMarkdownReport(input: RenderReportInput): string {
     scopeAndDataSources(scope, evidence, metadata),
     runQualitySection(inputDataQuality, rollup, coverage),
     costSummaryOverview(scope, evidence),
-    executiveSummary(reasoning, inputDataQuality),
+    executiveSummary(reasoning, inputDataQuality, coverage),
     recommendationsSection(reasoning),
     hypothesesSection(reasoning),
     factsSection(reasoning),
@@ -238,24 +238,65 @@ function scopeAndDataSources(scope: Scope, evidence: EvidenceRecord[], metadata:
 function executiveSummary(
   reasoning: ReasoningOutput,
   inputDataQuality: readonly DataQualityFinding[],
+  coverage: CostCoverage,
 ): string {
   const sorted = sortedRecommendations(reasoning.recommendations);
+  const coverageLine = executiveCoverageLine(coverage, inputDataQuality);
   if (sorted.length === 0) {
-    return [
-      '## Executive Summary',
-      '',
+    const baseLines = ['## Executive Summary', ''];
+    if (coverageLine) baseLines.push(coverageLine, '');
+    baseLines.push(
       'No recommendations were produced. Refer to the Data Quality section for the reasons coverage was bounded.',
-    ].join('\n');
+    );
+    return baseLines.join('\n');
   }
   const top = sorted[0]!;
   const dqLine = formatExecutiveDqLine(reasoning.data_quality, inputDataQuality);
-  return [
-    '## Executive Summary',
-    '',
+  const lines: string[] = ['## Executive Summary', ''];
+  if (coverageLine) lines.push(coverageLine, '');
+  lines.push(
     `${sorted.length} recommendation(s) across this scope. The top-priority item is **${top.priority}/${top.confidence.level}**: ${top.statement}`,
     '',
     dqLine,
-  ].join('\n');
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Phase 3 §S2: deterministic coverage disclosure. The Executive Summary
+ * surfaces incomplete cost-scope coverage as a first-class sentence so
+ * an operator scanning the report header cannot miss that the analysis
+ * was bounded. Renderer-owned, not prompt-owned — the reasoner gets a
+ * scope-honesty rule in its prompt but the line itself is generated
+ * here from scope + evidence + transport_summary.
+ *
+ * Returns null when coverage is fully complete or non-derivable with no
+ * retrieval-stage failures — neither case needs disclosure.
+ */
+function executiveCoverageLine(
+  coverage: CostCoverage,
+  inputDataQuality: readonly DataQualityFinding[],
+): string | null {
+  if (!coverage.derivable) {
+    // No subscription denominator. Surface generic incomplete-coverage
+    // language only when retrieval-stage failure findings exist.
+    const failureFindings = inputDataQuality.filter((d) =>
+      ['rate_limit', 'timeout', 'auth', 'authz_gap', 'unsupported_capability'].includes(d.category),
+    );
+    if (failureFindings.length === 0) return null;
+    const categories = Array.from(new Set(failureFindings.map((d) => d.category))).sort();
+    return `Coverage was incomplete due to retrieval-stage ${categories.join(', ')} finding(s); see Run Quality.`;
+  }
+  if (isFullCoverage(coverage)) return null;
+  const covered = coverage.covered_ids.length;
+  const expected = coverage.expected_ids.length;
+  const unavailable = coverage.unavailable_ids.length;
+  if (unavailable > 0) {
+    const categories = Object.keys(coverage.unavailable_by_category).sort().join(', ');
+    return `**Coverage:** ${covered} of ${expected} subscription(s) returned cost evidence; ${unavailable} had retrieval failures (${categories}).`;
+  }
+  const unknown = coverage.unknown_ids.length;
+  return `**Coverage:** ${covered} of ${expected} subscription(s) returned cost evidence; ${unknown} returned neither evidence nor a classified failure.`;
 }
 
 function formatExecutiveDqLine(
