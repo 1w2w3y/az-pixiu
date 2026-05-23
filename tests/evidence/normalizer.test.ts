@@ -72,6 +72,102 @@ describe('EvidenceNormalizer — happy path', () => {
     expect(records[0]?.scope_subset.subscription_ids).toEqual(subs);
   });
 
+  it('recognises camelCase subscriptionIds (planner-LLM convention)', () => {
+    const n = new EvidenceNormalizer();
+    const subs = [
+      '33333333-3333-3333-3333-333333333333',
+      '44444444-4444-4444-4444-444444444444',
+    ];
+    const { records } = n.normalize(
+      [
+        rawEvidence({
+          request: {
+            capability: 'amgmcp_query_resource_graph',
+            parameters: { subscriptionIds: subs },
+            intent: 'inventory',
+          },
+        }),
+      ],
+      { defaultTimeWindow: defaultWindow },
+    );
+    expect(records[0]?.scope_subset.subscription_ids).toEqual(subs);
+  });
+
+  it('derives cost_analysis scope_subset from response subscriptions[] when request params omit it', () => {
+    const n = new EvidenceNormalizer();
+    const subs = [
+      '55555555-5555-5555-5555-555555555555',
+      '66666666-6666-6666-6666-666666666666',
+    ];
+    const { records } = n.normalize(
+      [
+        rawEvidence({
+          request: {
+            // Planner LLM may pass no scope params at all and let the
+            // capability default to "all visible subs" — coverage must
+            // still be derivable from the response.
+            capability: 'amgmcp_cost_analysis',
+            parameters: {},
+            intent: 'cost_breakdown',
+          },
+          result: {
+            content: {
+              periodStart: '2026-05-01',
+              periodEnd: '2026-05-08',
+              subscriptions: subs.map((id) => ({
+                subscriptionId: id,
+                totalCost: 100,
+                currency: 'USD',
+                byService: [],
+              })),
+            },
+          },
+        }),
+      ],
+      { defaultTimeWindow: defaultWindow },
+    );
+    expect(records[0]?.scope_subset.subscription_ids).toEqual(expect.arrayContaining(subs));
+  });
+
+  it('prefers response subscriptions over request params when payload covers fewer subs', () => {
+    // Codex must-fix #2: when the planner requests [A, B, C] but AMG-MCP
+    // returns a payload covering only [A], the EvidenceRecord's
+    // scope_subset must reflect what the payload actually covers ([A]),
+    // not the request ∪ response union. Otherwise coverage detection
+    // claims full coverage for a partial payload.
+    const subA = '11111111-1111-1111-1111-111111111111';
+    const subB = '22222222-2222-2222-2222-222222222222';
+    const subC = '33333333-3333-3333-3333-333333333333';
+    const n = new EvidenceNormalizer();
+    const { records } = n.normalize(
+      [
+        rawEvidence({
+          request: {
+            capability: 'amgmcp_cost_analysis',
+            parameters: { subscriptionIds: [subA, subB, subC] },
+            intent: 'cost_breakdown',
+          },
+          result: {
+            content: {
+              periodStart: '2026-05-01',
+              periodEnd: '2026-05-08',
+              subscriptions: [
+                {
+                  subscriptionId: subA,
+                  totalCost: 100,
+                  currency: 'USD',
+                  byService: [],
+                },
+              ],
+            },
+          },
+        }),
+      ],
+      { defaultTimeWindow: defaultWindow },
+    );
+    expect(records[0]?.scope_subset.subscription_ids).toEqual([subA]);
+  });
+
   it('uses request.parameters.time_window when present', () => {
     const customWindow = { start: '2026-04-01T00:00:00Z', end: '2026-04-08T00:00:00Z' };
     const n = new EvidenceNormalizer();

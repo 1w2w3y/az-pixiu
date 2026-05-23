@@ -1,4 +1,4 @@
-import type { AnalysisType } from '../schemas/index.js';
+import type { AnalysisType, TransportRollup } from '../schemas/index.js';
 
 /**
  * Cross-run continuity (Phase 2.5 — design/cost-summary-depth.md §Gap 5).
@@ -29,6 +29,14 @@ export interface RunSummary {
    * surfaced — the full reasoning output stays in run.json on disk.
    */
   recommendations: PriorRecommendationSummary[];
+  /**
+   * Transport-level rollup derived from the prior run's per-request
+   * transport_summary. Indexed here (not the raw per-request entries) so
+   * cross-run continuity can answer "this capability has been throttled
+   * in N of last M runs" without re-reading every run.json. Absent for
+   * artefacts written before the Phase 3 §S4 substrate landed.
+   */
+  transport_rollup?: TransportRollup;
 }
 
 export interface PriorRecommendationSummary {

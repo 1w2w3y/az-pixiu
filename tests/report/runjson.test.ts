@@ -9,6 +9,7 @@ import type {
   RunMetadata,
   EvidenceRecord,
   DataQualityFinding,
+  TransportSummaryEntry,
 } from '../../src/schemas/index.js';
 
 const subId = '11111111-1111-1111-1111-111111111111';
@@ -83,6 +84,29 @@ describe('buildRunArtifact', () => {
   it('omits input_data_quality when the array is empty', () => {
     const a = buildRunArtifact(metadata, scope, evidence, reasoning, []);
     expect(a.input_data_quality).toBeUndefined();
+  });
+
+  it('persists transport_summary (per-request rollup) when supplied', () => {
+    const ts: TransportSummaryEntry[] = [
+      {
+        logical_request_id: 'req-1',
+        capability: 'amgmcp_cost_analysis',
+        scope_subset: { subscription_ids: [subId], resource_group_names: null, resource_ids: null },
+        parameters_digest: 'a'.repeat(64),
+        attempt_count: 1,
+        retry_count: 0,
+        final_outcome: 'success',
+        pacing_applied: false,
+        cumulative_backoff_ms: 0,
+      },
+    ];
+    const a = buildRunArtifact(metadata, scope, evidence, reasoning, undefined, ts);
+    expect(a.transport_summary).toEqual(ts);
+  });
+
+  it('omits transport_summary when the array is empty', () => {
+    const a = buildRunArtifact(metadata, scope, evidence, reasoning, undefined, []);
+    expect(a.transport_summary).toBeUndefined();
   });
 });
 

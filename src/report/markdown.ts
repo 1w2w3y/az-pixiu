@@ -7,8 +7,20 @@ import type {
   Hypothesis,
   Recommendation,
   DataQualityFinding,
+  TransportSummaryEntry,
 } from '../schemas/index.js';
 import { extractSubscriptions } from '../run/subscription-discovery.js';
+import {
+  rollupTransportSummary,
+  type TransportCapabilityRollup,
+  type TransportRollup,
+} from '../schemas/transport.js';
+import {
+  computeCostCoverage,
+  hasIncompleteCoverage,
+  isFullCoverage,
+  type CostCoverage,
+} from './coverage.js';
 
 /**
  * Markdown report assembler (design §4.8 / §10.2). Deterministic template
@@ -30,16 +42,33 @@ export interface RenderReportInput {
    * the array is empty or undefined.
    */
   inputDataQuality?: DataQualityFinding[];
+  /**
+   * Per-logical-request transport summary from the EvidenceExecutor
+   * (Phase 3 — cron-comparison §S4). Used by the Run Quality section to
+   * render recovered/exhausted throttle lines and the quantified clean
+   * baseline. Optional so older call sites that have not yet been
+   * threaded continue to compile.
+   */
+  transportSummary?: TransportSummaryEntry[];
 }
 
 export function renderMarkdownReport(input: RenderReportInput): string {
-  const { scope, reasoning, evidence, metadata, inputDataQuality = [] } = input;
+  const {
+    scope,
+    reasoning,
+    evidence,
+    metadata,
+    inputDataQuality = [],
+    transportSummary = [],
+  } = input;
+  const coverage = computeCostCoverage({ scope, evidence, transportSummary });
+  const rollup = rollupTransportSummary(transportSummary);
   const sections = [
     title(scope),
     scopeAndDataSources(scope, evidence, metadata),
-    runQualitySection(inputDataQuality),
+    runQualitySection(inputDataQuality, rollup, coverage),
     costSummaryOverview(scope, evidence),
-    executiveSummary(reasoning, inputDataQuality),
+    executiveSummary(reasoning, inputDataQuality, coverage),
     recommendationsSection(reasoning),
     hypothesesSection(reasoning),
     factsSection(reasoning),
@@ -88,17 +117,79 @@ const RUN_QUALITY_CATEGORIES: ReadonlySet<DataQualityFinding['category']> = new 
   'freshness_uniform_drop',
 ]);
 
-function runQualitySection(inputDataQuality: readonly DataQualityFinding[]): string {
+function runQualitySection(
+  inputDataQuality: readonly DataQualityFinding[],
+  rollup: TransportRollup,
+  coverage: CostCoverage,
+): string {
   const findings = inputDataQuality.filter((d) => RUN_QUALITY_CATEGORIES.has(d.category));
-  if (findings.length === 0) {
-    return [
-      '## Run Quality',
-      '',
-      'No transport-level or freshness findings observed during retrieval.',
-    ].join('\n');
+  const freshnessCount = inputDataQuality.filter(
+    (d) => d.category === 'freshness_partial_window' || d.category === 'freshness_uniform_drop',
+  ).length;
+  const lines: string[] = ['## Run Quality', ''];
+
+  // Quantified baseline (Phase 3 §S3): describes the *retrieval pass*,
+  // not the analysis. The reference cron's footer ("0 throttles, all 8
+  // queries succeeded") is the design referent.
+  lines.push(runQualityBaselineLine(rollup, coverage, freshnessCount));
+
+  // Per-capability throttle rendering: surfaces recovered retries even
+  // when no DQ finding exists (recovered throttles are not DQs by
+  // design — see PR 2 commit message).
+  const capabilityLines = recoveredCapabilityLines(rollup);
+  if (capabilityLines.length > 0) {
+    lines.push('');
+    lines.push(...capabilityLines);
   }
-  const blocks = findings.map(renderRunQualityFinding);
-  return ['## Run Quality', ...blocks].join('\n\n');
+
+  if (findings.length > 0) {
+    const blocks = findings.map(renderRunQualityFinding);
+    lines.push('', blocks.join('\n\n'));
+  }
+
+  return lines.join('\n');
+}
+
+function runQualityBaselineLine(
+  rollup: TransportRollup,
+  coverage: CostCoverage,
+  freshnessCount: number,
+): string {
+  const transportErrors = rollup.exhausted_count;
+  const retries = rollup.retry_count;
+  const total = rollup.total_calls;
+  const callCountClause = `${transportErrors} transport error(s), ${retries} retry attempt(s), ${freshnessCount} freshness finding(s) across ${total} evidence request(s)`;
+  let coverageClause: string;
+  if (!coverage.derivable) {
+    coverageClause = 'cost-scope coverage not derivable from evidence metadata';
+  } else if (isFullCoverage(coverage)) {
+    coverageClause = `full cost-scope coverage (${coverage.covered_ids.length} of ${coverage.expected_ids.length} subscription(s) returned cost evidence)`;
+  } else {
+    const covered = coverage.covered_ids.length;
+    const expected = coverage.expected_ids.length;
+    coverageClause = `partial cost-scope coverage (${covered} of ${expected} subscription(s) returned cost evidence)`;
+  }
+  return `${callCountClause}; ${coverageClause}.`;
+}
+
+function recoveredCapabilityLines(rollup: TransportRollup): string[] {
+  const entries: Array<[string, TransportCapabilityRollup]> = Object.entries(
+    rollup.by_capability,
+  ).sort((a, b) => a[0].localeCompare(b[0]));
+  const lines: string[] = [];
+  for (const [name, c] of entries) {
+    if (c.retry_count === 0 && !c.rate_limit_seen) continue;
+    const backoffSeconds = Math.round(c.cumulative_backoff_ms / 1000);
+    const outcome = (() => {
+      if (c.exhausted_count === 0) return 'all attempts ultimately succeeded';
+      if (c.recovered_count === 0) return 'all retries exhausted';
+      return `${c.recovered_count} recovered, ${c.exhausted_count} exhausted`;
+    })();
+    lines.push(
+      `- **${name}:** ${c.retry_count} retry attempt(s), ${backoffSeconds}s cumulative backoff, ${outcome}.`,
+    );
+  }
+  return lines;
 }
 
 function renderRunQualityFinding(d: DataQualityFinding): string {
@@ -147,24 +238,65 @@ function scopeAndDataSources(scope: Scope, evidence: EvidenceRecord[], metadata:
 function executiveSummary(
   reasoning: ReasoningOutput,
   inputDataQuality: readonly DataQualityFinding[],
+  coverage: CostCoverage,
 ): string {
   const sorted = sortedRecommendations(reasoning.recommendations);
+  const coverageLine = executiveCoverageLine(coverage, inputDataQuality);
   if (sorted.length === 0) {
-    return [
-      '## Executive Summary',
-      '',
+    const baseLines = ['## Executive Summary', ''];
+    if (coverageLine) baseLines.push(coverageLine, '');
+    baseLines.push(
       'No recommendations were produced. Refer to the Data Quality section for the reasons coverage was bounded.',
-    ].join('\n');
+    );
+    return baseLines.join('\n');
   }
   const top = sorted[0]!;
   const dqLine = formatExecutiveDqLine(reasoning.data_quality, inputDataQuality);
-  return [
-    '## Executive Summary',
-    '',
+  const lines: string[] = ['## Executive Summary', ''];
+  if (coverageLine) lines.push(coverageLine, '');
+  lines.push(
     `${sorted.length} recommendation(s) across this scope. The top-priority item is **${top.priority}/${top.confidence.level}**: ${top.statement}`,
     '',
     dqLine,
-  ].join('\n');
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Phase 3 §S2: deterministic coverage disclosure. The Executive Summary
+ * surfaces incomplete cost-scope coverage as a first-class sentence so
+ * an operator scanning the report header cannot miss that the analysis
+ * was bounded. Renderer-owned, not prompt-owned — the reasoner gets a
+ * scope-honesty rule in its prompt but the line itself is generated
+ * here from scope + evidence + transport_summary.
+ *
+ * Returns null when coverage is fully complete or non-derivable with no
+ * retrieval-stage failures — neither case needs disclosure.
+ */
+function executiveCoverageLine(
+  coverage: CostCoverage,
+  inputDataQuality: readonly DataQualityFinding[],
+): string | null {
+  if (!coverage.derivable) {
+    // No subscription denominator. Surface generic incomplete-coverage
+    // language only when retrieval-stage failure findings exist.
+    const failureFindings = inputDataQuality.filter((d) =>
+      ['rate_limit', 'timeout', 'auth', 'authz_gap', 'unsupported_capability'].includes(d.category),
+    );
+    if (failureFindings.length === 0) return null;
+    const categories = Array.from(new Set(failureFindings.map((d) => d.category))).sort();
+    return `Coverage was incomplete due to retrieval-stage ${categories.join(', ')} finding(s); see Run Quality.`;
+  }
+  if (isFullCoverage(coverage)) return null;
+  const covered = coverage.covered_ids.length;
+  const expected = coverage.expected_ids.length;
+  const unavailable = coverage.unavailable_ids.length;
+  if (unavailable > 0) {
+    const categories = Object.keys(coverage.unavailable_by_category).sort().join(', ');
+    return `**Coverage:** ${covered} of ${expected} subscription(s) returned cost evidence; ${unavailable} had retrieval failures (${categories}).`;
+  }
+  const unknown = coverage.unknown_ids.length;
+  return `**Coverage:** ${covered} of ${expected} subscription(s) returned cost evidence; ${unknown} returned neither evidence nor a classified failure.`;
 }
 
 function formatExecutiveDqLine(

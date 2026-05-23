@@ -112,12 +112,26 @@ export class EvidenceNormalizer {
         }
       }
 
+      // For cost-analysis evidence, the response payload carries the
+      // subscription set it *actually* covers (`subscriptions[].subscriptionId`
+      // in the live AMG-MCP shape). When that set is present, the
+      // EvidenceRecord's scope_subset must reflect the response — not the
+      // union of request ∪ response. Otherwise a multi-sub request that
+      // returns only one sub's data (the other two were rate-limited /
+      // dropped upstream) would claim coverage for all three. Request-
+      // derived scope still lives on TransportSummaryEntry.scope_subset
+      // for the failure-attribution path.
+      const enrichedScope =
+        raw.request.capability === 'amgmcp_cost_analysis' || raw.request.capability === 'cost_analysis'
+          ? scopeFromCostPayload(scope_subset, decoded)
+          : scope_subset;
+
       const record = EvidenceRecordSchema.parse({
         evidence_id,
         source_capability: raw.request.capability,
         capability_version: raw.capability_version,
         query_intent: raw.request.intent,
-        scope_subset,
+        scope_subset: enrichedScope,
         time_window,
         payload_ref: { kind: 'inline', data: decoded },
         payload_summary: summarize(raw.request.capability, decoded),
@@ -138,22 +152,85 @@ function extractScopeSubset(params: Record<string, unknown>): ScopeSubset {
   let resource_group_names: string[] | null = null;
   let resource_ids: string[] | null = null;
 
-  if (typeof params.subscription_id === 'string') {
-    subscription_ids = [params.subscription_id];
-  } else if (Array.isArray(params.subscription_ids)) {
-    subscription_ids = params.subscription_ids.filter((s): s is string => typeof s === 'string');
+  // Recognise both snake_case (the playbook convention and the agent's
+  // internal canonical form) and camelCase (the planner LLM convention,
+  // mirroring AMG-MCP's published JSON schema). This dual recognition is
+  // the correct layer: AMG-MCP requires camelCase on the wire for the
+  // cost-analysis capability (subscriptionId / startTime / endTime), so
+  // the executor sends through whatever the planner emitted. A previous
+  // attempt to canonicalise to snake_case at the planner boundary broke
+  // live retrieval with `Unknown argument(s) on amgmcp_cost_analysis:
+  // subscription_id` — the wire format and the agent's internal naming
+  // can't be unified, so this helper bridges both worlds.
+  for (const key of ['subscription_id', 'subscriptionId']) {
+    const v = params[key];
+    if (typeof v === 'string') {
+      subscription_ids = subscription_ids ?? [];
+      subscription_ids.push(v);
+    }
   }
-  if (typeof params.resource_group_name === 'string') {
-    resource_group_names = [params.resource_group_name];
-  } else if (Array.isArray(params.resource_group_names)) {
-    resource_group_names = params.resource_group_names.filter(
-      (s): s is string => typeof s === 'string',
-    );
+  for (const key of ['subscription_ids', 'subscriptionIds']) {
+    const v = params[key];
+    if (Array.isArray(v)) {
+      subscription_ids = subscription_ids ?? [];
+      for (const s of v) if (typeof s === 'string') subscription_ids.push(s);
+    }
   }
-  if (Array.isArray(params.resource_ids)) {
-    resource_ids = params.resource_ids.filter((s): s is string => typeof s === 'string');
+  for (const key of ['resource_group_name', 'resourceGroupName']) {
+    const v = params[key];
+    if (typeof v === 'string') {
+      resource_group_names = resource_group_names ?? [];
+      resource_group_names.push(v);
+    }
   }
-  return { subscription_ids, resource_group_names, resource_ids };
+  for (const key of ['resource_group_names', 'resourceGroupNames']) {
+    const v = params[key];
+    if (Array.isArray(v)) {
+      resource_group_names = resource_group_names ?? [];
+      for (const s of v) if (typeof s === 'string') resource_group_names.push(s);
+    }
+  }
+  for (const key of ['resource_ids', 'resourceIds']) {
+    const v = params[key];
+    if (Array.isArray(v)) {
+      resource_ids = resource_ids ?? [];
+      for (const s of v) if (typeof s === 'string') resource_ids.push(s);
+    }
+  }
+  return {
+    subscription_ids: subscription_ids ? Array.from(new Set(subscription_ids)) : null,
+    resource_group_names: resource_group_names ? Array.from(new Set(resource_group_names)) : null,
+    resource_ids: resource_ids ? Array.from(new Set(resource_ids)) : null,
+  };
+}
+
+/**
+ * Replace the cost-evidence scope_subset's subscription_ids with the
+ * set the response payload actually returned. The live AMG-MCP shape is
+ * `{ subscriptions: [{ subscriptionId, ... }, ...] }`. Tabular fixture
+ * payloads (rows/columns) don't expose a per-row subscription id, so we
+ * only mine the structured field — when no usable payload subscriptions
+ * are present (e.g. tabular cost rows), the request-derived scope is
+ * returned unchanged. resource_group_names / resource_ids are left
+ * untouched because the response payload doesn't redescribe them.
+ */
+function scopeFromCostPayload(initial: ScopeSubset, payload: unknown): ScopeSubset {
+  if (typeof payload !== 'object' || payload === null) return initial;
+  const obj = payload as Record<string, unknown>;
+  if (!Array.isArray(obj.subscriptions)) return initial;
+  const ids: string[] = [];
+  for (const sub of obj.subscriptions) {
+    if (typeof sub !== 'object' || sub === null) continue;
+    const s = sub as Record<string, unknown>;
+    const v = s.subscriptionId ?? s.subscription_id ?? s.id;
+    if (typeof v === 'string' && v.length > 0) ids.push(v);
+  }
+  if (ids.length === 0) return initial;
+  return {
+    subscription_ids: Array.from(new Set(ids)),
+    resource_group_names: initial.resource_group_names,
+    resource_ids: initial.resource_ids,
+  };
 }
 
 function extractTimeWindow(params: Record<string, unknown>): TimeWindow | undefined {

@@ -62,6 +62,17 @@ export const ATTR = {
   discoverySelectedCount: 'az_pixiu.discovery.selected_count',
   discoveryShapeHint: 'az_pixiu.discovery.shape_hint',
   instrumentationFlavor: 'az_pixiu.instrumentation.flavor',
+  // Transport-level retry observability (Phase 3 §Gap 7 / §S4). Attached
+  // to the evidence_retrieval span as run-level aggregates; per-attempt
+  // detail surfaces as `transport.retry_scheduled` / `transport.pacing_applied`
+  // span events on the same span (emitted from src/run/orchestrator.ts
+  // via EvidenceExecutor.onEvent).
+  transportRetryCount: 'az_pixiu.transport.retry_count',
+  transportCumulativeBackoffMs: 'az_pixiu.transport.cumulative_backoff_ms',
+  transportFinalOutcome: 'az_pixiu.transport.final_outcome',
+  transportRateLimitSeen: 'az_pixiu.transport.rate_limit_seen',
+  transportRecoveredCount: 'az_pixiu.transport.recovered_count',
+  transportExhaustedCount: 'az_pixiu.transport.exhausted_count',
 } as const;
 
 /**

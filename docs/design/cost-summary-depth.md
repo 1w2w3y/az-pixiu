@@ -29,6 +29,8 @@ The same constraints that shaped Phase 1 and Phase 2 still apply:
 
 Each gap names the observation, the rough size of the work, and the slot in the roadmap where it lands.
 
+> **2026-05-23 follow-up note.** A live cross-comparison against the same reference workflow, captured in [cron-comparison-improvements.md](cron-comparison-improvements.md), confirms that the six gaps below are the right gaps. The follow-up adds a **§Gap 7 (429 / rate-limit handling)** that this document only assumes happens, plus four smaller report-tightening items (§S1–§S4). Readers planning the Phase 3 implementation should treat that note as a sibling to this document; §Gap 7 lands *before* the waste-lane work in [Implementation sequencing](#implementation-sequencing) step 6.
+
 ### Gap 1 — Zombie / waste detection as a separate analysis lane
 
 **Observation.** The reference report enumerates specific zombie categories — orphaned public IPs, "restored-*" PostgreSQL servers, stopped or failed AKS clusters, unattached disks, deallocated VMs, unused container registries — naming individual resources, counting them per subscription, and presenting them as a cleanup backlog. The current `cost-summary` playbook only fetches "top 15 resource types overall" and has no concept of "this resource looks like waste."

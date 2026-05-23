@@ -46,6 +46,14 @@ describe('classifyFailure — HTTP status codes', () => {
     [403, 'authz_gap'],
     [404, 'unsupported_capability'],
     [408, 'timeout'],
+    // 502 (Bad Gateway) and 503 (Service Unavailable) are treated as
+    // timeout-class on the read-only Azure surface — both are transient
+    // upstream conditions retriable with the same backoff strategy.
+    // Asserted explicitly so a future refactor cannot silently demote
+    // them to schema_mismatch / other (which is_RetriableCategory does
+    // not cover).
+    [502, 'timeout'],
+    [503, 'timeout'],
     [504, 'timeout'],
     [429, 'rate_limit'],
     [400, 'invalid_scope'],
@@ -96,6 +104,18 @@ describe('classifyFailure — default', () => {
     expect(classifyFailure('plain string', ctx).category).toBe('schema_mismatch');
     expect(classifyFailure(42, ctx).category).toBe('schema_mismatch');
     expect(classifyFailure(null, ctx).category).toBe('schema_mismatch');
+  });
+});
+
+describe('classifyFailure + isRetriableCategory — 502/503 are retriable transient-upstream errors', () => {
+  it('502/503/504 all map to retriable categories', async () => {
+    const { isRetriableCategory } = await import('../../src/evidence/retry-policy.js');
+    for (const status of [502, 503, 504]) {
+      const err = Object.assign(new Error(`status ${status}`), { status });
+      const classified = classifyFailure(err, ctx);
+      expect(classified.category).toBe('timeout');
+      expect(isRetriableCategory(classified.category)).toBe(true);
+    }
   });
 });
 

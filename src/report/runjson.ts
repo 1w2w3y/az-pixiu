@@ -6,6 +6,7 @@ import type {
   RunMetadata,
   EvidenceRecord,
   DataQualityFinding,
+  TransportSummaryEntry,
 } from '../schemas/index.js';
 
 /**
@@ -33,6 +34,14 @@ export interface RunArtifact {
    * before this field existed still parse.
    */
   input_data_quality?: DataQualityFinding[];
+  /**
+   * Per-logical-request transport summary (Phase 3 — design/cron-comparison-improvements.md §S4).
+   * One entry per evidence request, capturing attempt/retry counts,
+   * cumulative backoff, and final outcome. Phase 3 PR 1 emits single-
+   * attempt rows; PR 2 (§Gap 7 retry) fills in real retry counts. Older
+   * artefacts written before this field existed continue to parse.
+   */
+  transport_summary?: TransportSummaryEntry[];
 }
 
 export interface WriteRunArtifactOptions {
@@ -67,6 +76,7 @@ export function buildRunArtifact(
   evidence: EvidenceRecord[],
   reasoning: ReasoningOutput,
   inputDataQuality?: DataQualityFinding[],
+  transportSummary?: TransportSummaryEntry[],
 ): RunArtifact {
   return {
     schema_version: RUN_JSON_SCHEMA_VERSION,
@@ -76,6 +86,9 @@ export function buildRunArtifact(
     reasoning,
     ...(inputDataQuality && inputDataQuality.length > 0
       ? { input_data_quality: inputDataQuality }
+      : {}),
+    ...(transportSummary && transportSummary.length > 0
+      ? { transport_summary: transportSummary }
       : {}),
   };
 }
