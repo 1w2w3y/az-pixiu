@@ -50,6 +50,7 @@ function makeReasoning(recommendationCount: number, dqCategories: string[] = [])
       false_positive_considerations: [],
       suggested_audience: 'platform_engineer' as const,
       suggested_human_actions: ['review evidence'],
+      recommendation_signature: `expectations-test-${i + 1}`,
     })),
     data_quality: dqCategories.map((category, i) => ({
       dq_id: `dq-${i + 1}` as ReasoningOutput['data_quality'][number]['dq_id'],

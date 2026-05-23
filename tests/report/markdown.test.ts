@@ -72,6 +72,7 @@ const reasoning: ReasoningOutput = {
       false_positive_considerations: ['legitimate workload growth'],
       suggested_audience: 'platform_engineer',
       suggested_human_actions: ['review the deployment timeline', 'examine workload telemetry'],
+      recommendation_signature: 'pg-deployment-investigation',
     },
   ],
   data_quality: [
@@ -106,12 +107,19 @@ describe('renderMarkdownReport', () => {
     const md = renderMarkdownReport({ scope, reasoning, evidence, metadata });
     expect(md).toContain('# Az-Pixiu Cost-Surprise Report');
     expect(md).toContain('## Scope & Data Sources');
+    expect(md).toContain('## Run Quality');
     expect(md).toContain('## Executive Summary');
     expect(md).toContain('## Recommendations');
     expect(md).toContain('## Hypotheses');
     expect(md).toContain('## Observed Facts');
     expect(md).toContain('## Data Quality');
     expect(md).toContain('## Run Metadata');
+  });
+
+  it('renders Run Quality before Executive Summary and Recommendations', () => {
+    const md = renderMarkdownReport({ scope, reasoning, evidence, metadata });
+    expect(md.indexOf('## Run Quality')).toBeGreaterThan(md.indexOf('## Scope & Data Sources'));
+    expect(md.indexOf('## Run Quality')).toBeLessThan(md.indexOf('## Executive Summary'));
   });
 
   it('includes the scope-confirmation echo (effective_scope_summary)', () => {
@@ -333,14 +341,22 @@ describe('renderMarkdownReport — retrieval-stage data quality', () => {
     impact_on_recommendations: [],
     actionable_hint: 'apply a tagging policy',
   };
-  const authzFinding: DataQualityFinding = {
+  // Second analytical finding (was authz_gap before Phase 2.5 — that
+  // category moved to the new "Run Quality" section §Gap 6, so the
+  // retrieval-stage section now exercises a different analytical
+  // category to keep the two-finding shape of these assertions intact).
+  // partial_coverage is chosen because the reasoning fixture above
+  // already carries a missing_telemetry finding, which would cause the
+  // "echo match" code path instead of the "not echoed" one this test
+  // is asserting.
+  const partialCoverageFinding: DataQualityFinding = {
     dq_id: 'dq-2',
-    category: 'authz_gap',
-    affected_capability: 'amgmcp_query_activity_log',
+    category: 'partial_coverage',
+    affected_capability: 'amgmcp_cost_analysis',
     affected_scope_subset: null,
-    consequence_for_analysis: 'activity log access denied — change attribution unreliable',
+    consequence_for_analysis: 'cost evidence available only at the subscription-level aggregate',
     impact_on_recommendations: [],
-    actionable_hint: 'grant the AMG identity Activity Log Reader on the scope',
+    actionable_hint: 'retrieve resource-level cost breakdown for the same window',
   };
 
   it('omits the retrieval-stage section when inputDataQuality is empty', () => {
@@ -354,17 +370,19 @@ describe('renderMarkdownReport — retrieval-stage data quality', () => {
       reasoning, // reasoning.data_quality is empty in the fixture
       evidence,
       metadata,
-      inputDataQuality: [taggingFinding, authzFinding],
+      inputDataQuality: [taggingFinding, partialCoverageFinding],
     });
     expect(md).toContain('## Data Quality — Retrieval Stage');
     expect(md).toContain('### dq-1 — tagging_gap');
-    expect(md).toContain('### dq-2 — authz_gap');
+    expect(md).toContain('### dq-2 — partial_coverage');
     // Both categories are absent from reasoning.data_quality, so each is
     // tagged as not-echoed.
     expect(md).toMatch(/dq-1 — tagging_gap[\s\S]*Status:_ not echoed by the reasoner/);
-    expect(md).toMatch(/dq-2 — authz_gap[\s\S]*Status:_ not echoed by the reasoner/);
+    expect(md).toMatch(/dq-2 — partial_coverage[\s\S]*Status:_ not echoed by the reasoner/);
     // Executive summary should call out the dropped categories.
-    expect(md).toContain('Retrieval-stage findings not echoed by the reasoner: tagging_gap (1), authz_gap (1).');
+    expect(md).toContain(
+      'Retrieval-stage findings not echoed by the reasoner: tagging_gap (1), partial_coverage (1).',
+    );
   });
 
   it('does not mark a finding as dropped when the reasoner echoes the same category', () => {
@@ -387,6 +405,91 @@ describe('renderMarkdownReport — retrieval-stage data quality', () => {
     });
     expect(md).toContain('## Data Quality — Retrieval Stage');
     expect(md).not.toMatch(/dq-1 — tagging_gap[\s\S]*Status:_ not echoed/);
+    expect(md).not.toContain('Retrieval-stage findings not echoed');
+  });
+});
+
+describe('renderMarkdownReport — Run Quality section (Phase 2.5 §Gap 6)', () => {
+  const rateLimitFinding: DataQualityFinding = {
+    dq_id: 'dq-throttle-1',
+    category: 'rate_limit',
+    affected_capability: 'amgmcp_cost_analysis',
+    affected_scope_subset: null,
+    consequence_for_analysis: 'one query throttled — recovered after 120s backoff',
+    impact_on_recommendations: [],
+    actionable_hint: 'increase the inter-subscription pacing to 60s if recurrent',
+  };
+  const authzFinding: DataQualityFinding = {
+    dq_id: 'dq-rbac-1',
+    category: 'authz_gap',
+    affected_capability: 'amgmcp_query_activity_log',
+    affected_scope_subset: null,
+    consequence_for_analysis: 'activity log access denied — change attribution unreliable',
+    impact_on_recommendations: [],
+    actionable_hint: 'grant the AMG identity Activity Log Reader on the scope',
+  };
+  const taggingFinding: DataQualityFinding = {
+    dq_id: 'dq-tagging-1',
+    category: 'tagging_gap',
+    affected_capability: 'amgmcp_query_resource_graph',
+    affected_scope_subset: null,
+    consequence_for_analysis: 'half the inventoried resources lack tags',
+    impact_on_recommendations: [],
+    actionable_hint: 'apply a tagging policy',
+  };
+
+  it('renders a no-issues line when no transport / freshness findings are present', () => {
+    const md = renderMarkdownReport({ scope, reasoning, evidence, metadata });
+    expect(md).toContain('## Run Quality');
+    expect(md).toContain('No transport-level or freshness findings observed during retrieval.');
+  });
+
+  it('lists transport findings (rate_limit, authz_gap) in the Run Quality section', () => {
+    const md = renderMarkdownReport({
+      scope,
+      reasoning,
+      evidence,
+      metadata,
+      inputDataQuality: [rateLimitFinding, authzFinding],
+    });
+    expect(md).toMatch(/## Run Quality[\s\S]*dq-throttle-1 — rate_limit/);
+    expect(md).toMatch(/## Run Quality[\s\S]*dq-rbac-1 — authz_gap/);
+  });
+
+  it('does not duplicate transport findings into the retrieval-stage data-quality section', () => {
+    const md = renderMarkdownReport({
+      scope,
+      reasoning,
+      evidence,
+      metadata,
+      inputDataQuality: [rateLimitFinding],
+    });
+    // The retrieval-stage section should not render at all when the only
+    // pre-reasoner finding is transport-level — Run Quality owns it.
+    expect(md).not.toContain('## Data Quality — Retrieval Stage');
+  });
+
+  it('keeps analytical findings (tagging_gap) in the retrieval-stage section even when transport findings exist', () => {
+    const md = renderMarkdownReport({
+      scope,
+      reasoning,
+      evidence,
+      metadata,
+      inputDataQuality: [rateLimitFinding, taggingFinding],
+    });
+    expect(md).toMatch(/## Run Quality[\s\S]*rate_limit/);
+    expect(md).toMatch(/## Data Quality — Retrieval Stage[\s\S]*tagging_gap/);
+  });
+
+  it('does not flag transport findings as "dropped by reasoner" in the executive summary', () => {
+    const md = renderMarkdownReport({
+      scope,
+      reasoning,
+      evidence,
+      metadata,
+      inputDataQuality: [rateLimitFinding],
+    });
+    expect(md).not.toContain('rate_limit (1)');
     expect(md).not.toContain('Retrieval-stage findings not echoed');
   });
 });

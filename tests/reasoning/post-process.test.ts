@@ -74,6 +74,7 @@ const wellFormed: ReasoningOutput = {
       false_positive_considerations: ['legitimate workload increase'],
       suggested_audience: 'platform_engineer',
       suggested_human_actions: ['review the most recent deployment record'],
+      recommendation_signature: 'deployment-workload-review',
     },
   ],
   data_quality: [],

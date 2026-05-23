@@ -90,6 +90,7 @@ function buildCannedReasoningOutput(evidenceId: string): unknown {
         false_positive_considerations: ['this is a mock; treat as a wiring smoke test only'],
         suggested_audience: 'platform_engineer',
         suggested_human_actions: ['review the recorded evidence before relying on this output'],
+        recommendation_signature: 'mock-smoke-test',
       },
     ],
     data_quality: [],

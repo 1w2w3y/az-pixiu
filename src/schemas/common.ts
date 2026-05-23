@@ -102,5 +102,11 @@ export const QueryIntentSchema = z.enum([
   'activity',
   'health',
   'metric_definition',
+  // Cross-run continuity (Phase 2.5 — design/cost-summary-depth.md §Gap 5).
+  // The orchestrator injects EvidenceRecord(s) summarising prior runs against
+  // the same scope_signature so the reasoner can recognise carry-forward and
+  // recurring patterns. The records are *not* fetched from AMG-MCP; their
+  // source_capability is 'az_pixiu_run_history'.
+  'prior_run_context',
 ]);
 export type QueryIntent = z.infer<typeof QueryIntentSchema>;

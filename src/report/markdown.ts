@@ -37,6 +37,7 @@ export function renderMarkdownReport(input: RenderReportInput): string {
   const sections = [
     title(scope),
     scopeAndDataSources(scope, evidence, metadata),
+    runQualitySection(inputDataQuality),
     costSummaryOverview(scope, evidence),
     executiveSummary(reasoning, inputDataQuality),
     recommendationsSection(reasoning),
@@ -47,6 +48,65 @@ export function renderMarkdownReport(input: RenderReportInput): string {
     metadataFooter(metadata),
   ].filter((section) => section.length > 0);
   return sections.join('\n\n').trimEnd() + '\n';
+}
+
+/**
+ * Run Quality (Phase 2.5 — design/cost-summary-depth.md §Gap 6).
+ *
+ * Surfaces transport- and protocol-level findings as a first-class
+ * report section between Scope & Data Sources and the analytical
+ * content, so the operator reading the report sees the operational
+ * health of the run before the conclusions that depend on it.
+ *
+ * This is distinct from the existing "Data Quality" sections, which
+ * describe analytical coverage gaps (missing telemetry, tagging gaps,
+ * partial coverage) the reasoner is asked to caveat its conclusions
+ * with. Run Quality is about how the retrieval pass went, not about
+ * what the resulting data does or does not cover.
+ *
+ * Phase 2.5 promotes a fixed set of categories: rate-limit and timeout
+ * (transport-level), auth and authz_gap (call was made but rejected),
+ * schema_mismatch (capability returned an unparseable shape),
+ * unsupported_capability (planner asked for something the catalog does
+ * not offer), and stale_data (closest current proxy for the Phase 3
+ * freshness findings designed in §Gap 4). When none of these fire, a
+ * one-line "no issues observed" rendering makes the section's silence
+ * legible — the reference cron workflow's "0 throttles, all queries
+ * returned valid data" footer is the design referent.
+ */
+const RUN_QUALITY_CATEGORIES: ReadonlySet<DataQualityFinding['category']> = new Set<
+  DataQualityFinding['category']
+>([
+  'rate_limit',
+  'timeout',
+  'auth',
+  'authz_gap',
+  'schema_mismatch',
+  'unsupported_capability',
+  'stale_data',
+]);
+
+function runQualitySection(inputDataQuality: readonly DataQualityFinding[]): string {
+  const findings = inputDataQuality.filter((d) => RUN_QUALITY_CATEGORIES.has(d.category));
+  if (findings.length === 0) {
+    return [
+      '## Run Quality',
+      '',
+      'No transport-level or freshness findings observed during retrieval.',
+    ].join('\n');
+  }
+  const blocks = findings.map(renderRunQualityFinding);
+  return ['## Run Quality', ...blocks].join('\n\n');
+}
+
+function renderRunQualityFinding(d: DataQualityFinding): string {
+  return [
+    `### ${d.dq_id} — ${d.category}`,
+    '',
+    d.consequence_for_analysis,
+    ...(d.affected_capability ? [`**Affected capability:** ${d.affected_capability}`] : []),
+    ...(d.actionable_hint ? [`**Actionable hint:** ${d.actionable_hint}`] : []),
+  ].join('\n');
 }
 
 // ---------------- sections ----------------
@@ -119,12 +179,16 @@ function formatExecutiveDqLine(
       `Data-quality concerns: ${Object.entries(byCategory).map(([k, v]) => `${k} (${v})`).join(', ')}.`,
     );
   }
-  // Surface categories the retrieval stage flagged but the reasoner did
-  // not echo forward. Same-category matches are treated as endorsed; new
-  // categories highlight that the reasoner silently dropped them.
+  // Surface analytical categories the retrieval stage flagged but the
+  // reasoner did not echo forward. Same-category matches are treated as
+  // endorsed; new categories highlight that the reasoner silently dropped
+  // them. Run-quality categories (transport / freshness) are not expected
+  // to be echoed by the reasoner and are excluded here so they don't
+  // appear as "dropped".
   const reasonerCategories = new Set(reasonerDq.map((d) => d.category));
   const droppedByCategory: Record<string, number> = {};
   for (const f of inputDq) {
+    if (RUN_QUALITY_CATEGORIES.has(f.category)) continue;
     if (!reasonerCategories.has(f.category)) {
       droppedByCategory[f.category] = (droppedByCategory[f.category] ?? 0) + 1;
     }
@@ -281,9 +345,14 @@ function retrievalStageDataQualitySection(
   inputDataQuality: readonly DataQualityFinding[],
   reasoning: ReasoningOutput,
 ): string {
-  if (inputDataQuality.length === 0) return '';
+  // Findings already rendered in the top-level Run Quality section
+  // (transport / freshness) are not duplicated here; this section is for
+  // analytical coverage gaps the reasoner is asked to caveat its
+  // conclusions with.
+  const analyticalFindings = inputDataQuality.filter((d) => !RUN_QUALITY_CATEGORIES.has(d.category));
+  if (analyticalFindings.length === 0) return '';
   const reasonerCategories = new Set(reasoning.data_quality.map((d) => d.category));
-  const blocks = inputDataQuality.map((d) => {
+  const blocks = analyticalFindings.map((d) => {
     const rendered = renderDataQuality(d);
     return reasonerCategories.has(d.category)
       ? rendered

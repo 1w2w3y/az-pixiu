@@ -49,6 +49,7 @@ const validRecommendation = {
   false_positive_considerations: ['legitimate traffic spike on a scheduled batch'],
   suggested_audience: 'finops_engineer',
   suggested_human_actions: ['investigate the 2026-05-03 deployment'],
+  recommendation_signature: 'pg-flexible-server-review',
 };
 
 describe('ConfidenceSchema', () => {
@@ -155,6 +156,18 @@ describe('RecommendationSchema', () => {
   it('rejects an unknown audience', () => {
     expect(
       RecommendationSchema.safeParse({ ...validRecommendation, suggested_audience: 'cto' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects a recommendation missing recommendation_signature', () => {
+    const { recommendation_signature: _sig, ...withoutSig } = validRecommendation;
+    expect(RecommendationSchema.safeParse(withoutSig).success).toBe(false);
+  });
+
+  it('rejects an empty recommendation_signature', () => {
+    expect(
+      RecommendationSchema.safeParse({ ...validRecommendation, recommendation_signature: '' })
         .success,
     ).toBe(false);
   });

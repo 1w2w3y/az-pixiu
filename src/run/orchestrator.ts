@@ -38,6 +38,9 @@ import {
   formatSubscription,
 } from './subscription-discovery.js';
 import { intakeScope, type ScopeIntakeInput } from './scope-intake.js';
+import { computeScopeSignature } from './scope-signature.js';
+import { buildPriorRunContextEvidence } from './prior-run-evidence.js';
+import { NoopRunHistoryStore, type RunHistoryStore } from '../history/store.js';
 import type {
   Config,
   Scope,
@@ -98,6 +101,15 @@ export interface RunOptions {
    * are warnings only and never change the analysis result.
    */
   langfusePublisher?: AnalyzeScorePublisher;
+  /**
+   * Cross-run continuity store (Phase 2.5 — design/cost-summary-depth.md
+   * §Gap 5). When supplied, the orchestrator queries it for prior runs
+   * against the same scope_signature and analysis_type, and injects a
+   * synthetic `prior_run_context` EvidenceRecord into the reasoner's
+   * input. Defaults to a no-op store so offline / mock-model / test
+   * paths see no behaviour change unless the operator opts in.
+   */
+  runHistoryStore?: RunHistoryStore;
 }
 
 export interface AnalyzeScorePublisher {
@@ -580,11 +592,31 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     `  normalized ${records.length} evidence record(s); ${allDq.length} data-quality finding(s) so far\n`,
   );
 
+  // Cross-run continuity (Phase 2.5 — design/cost-summary-depth.md §Gap 5).
+  // Query the run-history store for prior runs against the same scope and
+  // analysis type, and inject them as a synthetic prior_run_context
+  // EvidenceRecord. Defaults to a no-op store so the no-history path is
+  // byte-identical to the pre-Phase-2.5 behaviour.
+  const runHistoryStore = ctx.runHistoryStore ?? new NoopRunHistoryStore();
+  const scopeSignature = computeScopeSignature(ctx.scope);
+  const priorRuns = await runHistoryStore.findPriorRuns({
+    scope_signature: scopeSignature,
+    analysis_type: ctx.scope.analysis_type,
+    excludeRunId: ctx.runId,
+  });
+  const priorRunEvidence = buildPriorRunContextEvidence({ priorRuns, scope: ctx.scope });
+  const recordsWithPrior = [...records, ...priorRunEvidence];
+  if (priorRunEvidence.length > 0) {
+    process.stdout.write(
+      `  found ${priorRuns.length} prior run(s) against this scope — injecting prior_run_context\n`,
+    );
+  }
+
   // Reason
   process.stdout.write(`→ reasoning over evidence...\n`);
   const reasoner = new Reasoner({ model: ctx.model, systemPrompt: reasonerPrompt.content });
   const { output: reasoning, issues } = await withSpan(SpanNames.Reasoning, async (span) => {
-    const r = await reasoner.reason({ scope: ctx.scope, evidence: records, data_quality: allDq });
+    const r = await reasoner.reason({ scope: ctx.scope, evidence: recordsWithPrior, data_quality: allDq });
     span.setAttribute(ATTR.reasoningFactsProduced, r.output.facts.length);
     span.setAttribute(ATTR.reasoningHypothesesProduced, r.output.hypotheses.length);
     span.setAttribute(ATTR.reasoningRecommendationsProduced, r.output.recommendations.length);
@@ -627,7 +659,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     const md = renderMarkdownReport({
       scope: ctx.scope,
       reasoning,
-      evidence: records,
+      evidence: recordsWithPrior,
       metadata,
       inputDataQuality: allDq,
     });
@@ -635,7 +667,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     await writeFile(ctx.reportPath, md, 'utf8');
     await writeRunArtifact({
       path: ctx.runJsonPath,
-      artifact: buildRunArtifact(metadata, ctx.scope, records, reasoning, allDq),
+      artifact: buildRunArtifact(metadata, ctx.scope, recordsWithPrior, reasoning, allDq),
     });
   });
 

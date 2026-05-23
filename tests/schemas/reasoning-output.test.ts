@@ -44,6 +44,7 @@ const minimalOutput = {
       false_positive_considerations: ['legitimate traffic spike'],
       suggested_audience: 'platform_engineer',
       suggested_human_actions: ['compare against last week'],
+      recommendation_signature: 'deployment-review',
     },
   ],
   data_quality: [],

@@ -67,6 +67,7 @@ const cannedOutput: ReasoningOutput = {
       false_positive_considerations: ['seasonal'],
       suggested_audience: 'finops_engineer',
       suggested_human_actions: ['review workload telemetry'],
+      recommendation_signature: 'workload-investigation',
     },
   ],
   data_quality: [],

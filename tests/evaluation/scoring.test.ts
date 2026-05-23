@@ -47,6 +47,7 @@ const wellFormed: ReasoningOutput = {
       false_positive_considerations: ['seasonal'],
       suggested_audience: 'platform_engineer',
       suggested_human_actions: ['review workload patterns'],
+      recommendation_signature: 'workload-growth-review',
     },
   ],
   data_quality: [],
