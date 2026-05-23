@@ -107,6 +107,54 @@ describe('Planner — happy path', () => {
   });
 });
 
+describe('Planner — parameter canonicalization', () => {
+  it('rewrites camelCase scope-related keys to snake_case before emitting the plan', async () => {
+    // The planner LLM follows the capability inputSchema's camelCase
+    // convention; the rest of the agent uses snake_case. Canonicalising
+    // at the planner boundary means executor / normalizer / coverage
+    // helpers don't have to recognise both.
+    const camelPlan = {
+      requests: [
+        {
+          capability: 'amgmcp_cost_analysis',
+          parameters: JSON.stringify({
+            subscriptionId: subId,
+            timeWindow: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
+            resourceGroupNames: ['rg-a', 'rg-b'],
+          }),
+          intent: 'cost_breakdown',
+        },
+        {
+          capability: 'amgmcp_query_resource_graph',
+          parameters: JSON.stringify({
+            subscriptionIds: [subId],
+            resourceIds: ['/subscriptions/x/resourceGroups/y/providers/z/foo'],
+            query: 'Resources | take 1',
+          }),
+          intent: 'inventory',
+        },
+      ],
+    };
+    const planner = new Planner({
+      model: new MockModelClient({ responses: camelPlan }),
+      systemPrompt: 'planner',
+    });
+    const plan = await planner.plan(scope, await getCatalog());
+    const p0 = plan.requests[0]!.parameters;
+    expect(p0).toHaveProperty('subscription_id', subId);
+    expect(p0).toHaveProperty('time_window');
+    expect(p0).toHaveProperty('resource_group_names');
+    expect(p0).not.toHaveProperty('subscriptionId');
+    expect(p0).not.toHaveProperty('timeWindow');
+    expect(p0).not.toHaveProperty('resourceGroupNames');
+    const p1 = plan.requests[1]!.parameters;
+    expect(p1).toHaveProperty('subscription_ids', [subId]);
+    expect(p1).toHaveProperty('resource_ids');
+    // Capability-specific keys (e.g. `query`) pass through untouched.
+    expect(p1).toHaveProperty('query', 'Resources | take 1');
+  });
+});
+
 describe('Planner — validation', () => {
   it('rejects a plan that names an unadvertised capability and attempts one repair', async () => {
     const badPlan: EvidencePlan = {

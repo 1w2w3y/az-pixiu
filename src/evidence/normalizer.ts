@@ -148,46 +148,35 @@ export class EvidenceNormalizer {
 // --- helpers ---
 
 function extractScopeSubset(params: Record<string, unknown>): ScopeSubset {
+  // Planner output is canonicalised to snake_case at the planner boundary
+  // (src/reasoning/planner.ts), and playbooks already emit snake_case.
+  // This helper reads one naming convention — never camelCase.
   let subscription_ids: string[] | null = null;
   let resource_group_names: string[] | null = null;
   let resource_ids: string[] | null = null;
 
-  // Accept both the playbook's snake_case naming and the planner LLM's
-  // camelCase (which mirrors AMG-MCP's published JSON schema).
-  for (const key of ['subscription_id', 'subscriptionId']) {
-    const v = params[key];
-    if (typeof v === 'string') {
-      subscription_ids = subscription_ids ?? [];
-      subscription_ids.push(v);
-    }
+  const singleSub = params.subscription_id;
+  if (typeof singleSub === 'string') {
+    subscription_ids = [singleSub];
   }
-  for (const key of ['subscription_ids', 'subscriptionIds']) {
-    const v = params[key];
-    if (Array.isArray(v)) {
-      subscription_ids = subscription_ids ?? [];
-      for (const s of v) if (typeof s === 'string') subscription_ids.push(s);
-    }
+  const multiSub = params.subscription_ids;
+  if (Array.isArray(multiSub)) {
+    subscription_ids = subscription_ids ?? [];
+    for (const s of multiSub) if (typeof s === 'string') subscription_ids.push(s);
   }
-  for (const key of ['resource_group_name', 'resourceGroupName']) {
-    const v = params[key];
-    if (typeof v === 'string') {
-      resource_group_names = resource_group_names ?? [];
-      resource_group_names.push(v);
-    }
+  const singleRg = params.resource_group_name;
+  if (typeof singleRg === 'string') {
+    resource_group_names = [singleRg];
   }
-  for (const key of ['resource_group_names', 'resourceGroupNames']) {
-    const v = params[key];
-    if (Array.isArray(v)) {
-      resource_group_names = resource_group_names ?? [];
-      for (const s of v) if (typeof s === 'string') resource_group_names.push(s);
-    }
+  const multiRg = params.resource_group_names;
+  if (Array.isArray(multiRg)) {
+    resource_group_names = resource_group_names ?? [];
+    for (const s of multiRg) if (typeof s === 'string') resource_group_names.push(s);
   }
-  for (const key of ['resource_ids', 'resourceIds']) {
-    const v = params[key];
-    if (Array.isArray(v)) {
-      resource_ids = resource_ids ?? [];
-      for (const s of v) if (typeof s === 'string') resource_ids.push(s);
-    }
+  const rids = params.resource_ids;
+  if (Array.isArray(rids)) {
+    resource_ids = [];
+    for (const s of rids) if (typeof s === 'string') resource_ids.push(s);
   }
   return {
     subscription_ids: subscription_ids ? Array.from(new Set(subscription_ids)) : null,

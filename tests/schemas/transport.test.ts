@@ -68,11 +68,12 @@ describe('scopeSubsetFromParameters', () => {
     expect(out?.subscription_ids).toEqual([subA, subB]);
   });
 
-  it('recognises camelCase (subscriptionId/subscriptionIds)', () => {
-    const out = scopeSubsetFromParameters({ subscriptionIds: [subA, subB] });
-    expect(out?.subscription_ids).toEqual([subA, subB]);
-    const out2 = scopeSubsetFromParameters({ subscriptionId: subA });
-    expect(out2?.subscription_ids).toEqual([subA]);
+  it('ignores camelCase variants — those are canonicalised at the planner boundary', () => {
+    // src/reasoning/planner.ts rewrites subscriptionId/subscriptionIds to
+    // snake_case before the executor sees the request, so the downstream
+    // helpers only have to recognise one naming convention.
+    expect(scopeSubsetFromParameters({ subscriptionIds: [subA, subB] })).toBeNull();
+    expect(scopeSubsetFromParameters({ subscriptionId: subA })).toBeNull();
   });
 });
 

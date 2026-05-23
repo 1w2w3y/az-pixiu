@@ -204,9 +204,9 @@ export function rollupTransportSummary(
 /**
  * Extract a minimal {@link ScopeSubset} from request parameters. The
  * playbooks pass either `subscription_id: <id>` (per-sub fan-out) or
- * `subscription_ids: [<id>, ...]` (multi-sub queries); both are recognised
- * so PR 5's coverage helper can answer "which subscriptions did this call
- * cover?" without re-parsing parameters at render time.
+ * `subscription_ids: [<id>, ...]` (multi-sub queries). Planner-LLM output
+ * is canonicalised to snake_case at the planner boundary
+ * (src/reasoning/planner.ts), so this helper reads one naming convention.
  *
  * Returns null when no scope context is recoverable — the helper treats
  * `null` as "unknown coverage", not "no coverage".
@@ -215,21 +215,12 @@ export function scopeSubsetFromParameters(
   parameters: Readonly<Record<string, unknown>>,
 ): ScopeSubset | null {
   const subIds: string[] = [];
-  // The deterministic playbooks use snake_case (subscription_id /
-  // subscription_ids) but the planner LLM picks whatever the
-  // capability's JSON schema advertises, which is often camelCase on the
-  // AMG-MCP side (subscriptionId / subscriptionIds). Recognise both so
-  // coverage detection works against either plan source.
-  for (const key of ['subscription_id', 'subscriptionId']) {
-    const v = parameters[key];
-    if (typeof v === 'string' && v.length > 0) subIds.push(v);
-  }
-  for (const key of ['subscription_ids', 'subscriptionIds']) {
-    const v = parameters[key];
-    if (Array.isArray(v)) {
-      for (const item of v) {
-        if (typeof item === 'string' && item.length > 0) subIds.push(item);
-      }
+  const single = parameters.subscription_id;
+  if (typeof single === 'string' && single.length > 0) subIds.push(single);
+  const multi = parameters.subscription_ids;
+  if (Array.isArray(multi)) {
+    for (const item of multi) {
+      if (typeof item === 'string' && item.length > 0) subIds.push(item);
     }
   }
   if (subIds.length === 0) return null;
