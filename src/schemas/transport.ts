@@ -120,6 +120,26 @@ const EMPTY_CAPABILITY_ROLLUP: TransportCapabilityRollup = {
  * §S3 Run Quality enrichment) and the history store's `summarise()` so
  * the rollup definition is identical in both surfaces.
  */
+/**
+ * Run-level final outcome derived from a {@link TransportRollup}. The
+ * three buckets feed the `az_pixiu.transport.final_outcome` span
+ * attribute on the evidence_retrieval span:
+ *
+ *   - `success`: every call landed evidence (whether on attempt 1 or
+ *     after retries).
+ *   - `partial`: some calls landed evidence, some exhausted retries.
+ *   - `exhausted`: zero calls landed evidence.
+ *   - `none`: no calls were made.
+ */
+export type TransportRunOutcome = 'success' | 'partial' | 'exhausted' | 'none';
+
+export function runOutcomeFromRollup(rollup: TransportRollup): TransportRunOutcome {
+  if (rollup.total_calls === 0) return 'none';
+  if (rollup.exhausted_count === 0) return 'success';
+  if (rollup.exhausted_count === rollup.total_calls) return 'exhausted';
+  return 'partial';
+}
+
 export function rollupTransportSummary(
   entries: readonly TransportSummaryEntry[],
 ): TransportRollup {

@@ -124,6 +124,8 @@ export function classifyFailure(
           cause: err,
         };
       case 408:
+      case 502:
+      case 503:
       case 504:
         return {
           category: 'timeout',

@@ -7,6 +7,12 @@ import {
   scopeSubsetFromParameters,
   type TransportSummaryEntry,
 } from '../schemas/transport.js';
+import {
+  computeBackoffMs,
+  DEFAULT_RETRY_POLICY,
+  isRetriableCategory,
+  type RetryPolicy,
+} from './retry-policy.js';
 
 /**
  * Per-request retrieval result before normalization (§7.2 step 5).
@@ -26,9 +32,9 @@ export interface ExecutionResult {
   failures: ClassifiedFailure[];
   /**
    * One {@link TransportSummaryEntry} per logical evidence request, in
-   * plan order. Phase 3 (cron-comparison §S4) substrate: PR 1 emits
-   * single-attempt rows; PR 2 (§Gap 7 retry) fills in retry counts and
-   * cumulative backoff without changing the shape.
+   * plan order. Single-attempt rows when nothing retried; recovered and
+   * exhausted retries fill the same shape with attempt_count > 1 and
+   * cumulative_backoff_ms > 0.
    */
   transport_summary: TransportSummaryEntry[];
 }
@@ -41,6 +47,23 @@ export interface EvidenceExecutorOptions {
    * — overridable in tests for deterministic timestamps.
    */
   now?: () => Date;
+  /**
+   * Retry policy. Defaults to {@link DEFAULT_RETRY_POLICY}. Tests
+   * override `maxAttempts`, `paceAfterRateLimitMs`, etc. to keep tests
+   * fast and deterministic.
+   */
+  retryPolicy?: RetryPolicy;
+  /**
+   * Sleep injection point. Defaults to `setTimeout`-based. Tests pass a
+   * recording no-op so the suite stays fast.
+   */
+  sleep?: (ms: number) => Promise<void>;
+  /**
+   * Jitter source returning a value in `[0, jitterMs)`. Defaults to
+   * `Math.random() * policy.jitterMs`. Tests inject `() => 0` for
+   * reproducible delays.
+   */
+  jitter?: (policy: RetryPolicy) => number;
 }
 
 /**
@@ -51,21 +74,40 @@ export interface EvidenceExecutorOptions {
  * unless an unrecoverable error escapes (e.g., DiscoveryNotPerformedError,
  * which classifyFailure deliberately re-throws).
  *
- * Back-pressure scaffolding: Phase 1 runs requests sequentially because
- * the fixture transport is in-process and free. The scheduling shape is
- * preserved so Phase 2 can introduce per-capability serialization (Cost
- * Management QPU) and metric-call batching without changing the
- * caller-visible interface.
+ * Phase 3 §Gap 7: transient failures (rate_limit, timeout) retry with
+ * exponential backoff + jitter. Recovered retries emit a normal raw
+ * evidence record and NO DataQualityFinding — recommendation confidence
+ * should not weaken when all evidence eventually arrived. Exhausted
+ * retries follow the existing failure path (one ClassifiedFailure that
+ * becomes a `rate_limit` / `timeout` DQ). Per-attempt detail surfaces in
+ * the `transport_summary` substrate (§S4) and Langfuse trace events;
+ * raw call parameters are never persisted.
+ *
+ * Back-pressure: when any rate_limit is observed on a capability,
+ * subsequent calls to that same capability in the same run wait
+ * `paceAfterRateLimitMs` before dispatching. The executor is already
+ * sequential, so this is the practical realisation of "serialize per
+ * subscription on 429" without introducing a queue.
  */
 export class EvidenceExecutor {
   private readonly client: MCPClient;
   private readonly catalog: DiscoveredCatalog;
   private readonly now: () => Date;
+  private readonly retryPolicy: RetryPolicy;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly jitter: (policy: RetryPolicy) => number;
 
   constructor(options: EvidenceExecutorOptions) {
     this.client = options.client;
     this.catalog = options.catalog;
     this.now = options.now ?? (() => new Date());
+    this.retryPolicy = options.retryPolicy ?? DEFAULT_RETRY_POLICY;
+    this.sleep =
+      options.sleep ??
+      ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.jitter =
+      options.jitter ??
+      ((policy) => Math.random() * policy.jitterMs);
   }
 
   async execute(plan: EvidencePlan): Promise<ExecutionResult> {
@@ -73,18 +115,80 @@ export class EvidenceExecutor {
     const failures: ClassifiedFailure[] = [];
     const transport_summary: TransportSummaryEntry[] = [];
 
+    // Per-run scheduler state. rateLimitedCapabilities triggers the
+    // inter-call pace; runBackoffSpentMs caps total cumulative backoff.
+    const rateLimitedCapabilities = new Set<string>();
+    let runBackoffSpentMs = 0;
+
     for (let i = 0; i < plan.requests.length; i++) {
       const request = plan.requests[i]!;
       const parameters_digest = parameterDigest(request.parameters);
       const logical_request_id = `req-${i + 1}`;
-      try {
-        const result = await this.client.invoke(request.capability, request.parameters);
+
+      const pacing =
+        rateLimitedCapabilities.has(request.capability) &&
+        this.retryPolicy.paceAfterRateLimitMs > 0;
+      if (pacing) {
+        const remaining = Math.max(
+          0,
+          this.retryPolicy.totalBudgetMs - runBackoffSpentMs,
+        );
+        const wait = Math.min(this.retryPolicy.paceAfterRateLimitMs, remaining);
+        if (wait > 0) {
+          await this.sleep(wait);
+          runBackoffSpentMs += wait;
+        }
+      }
+
+      let attempt = 0;
+      let attemptBackoffMs = 0;
+      let success: ToolCallResult | undefined;
+      let lastFailure: ClassifiedFailure | undefined;
+      let lastOutcomeBucket: TransportSummaryEntry['final_outcome'] = 'success';
+
+      while (attempt < this.retryPolicy.maxAttempts) {
+        attempt += 1;
+        try {
+          success = await this.client.invoke(request.capability, request.parameters);
+          lastFailure = undefined;
+          break;
+        } catch (err) {
+          const failure = classifyFailure(err, { capability: request.capability });
+          lastFailure = failure;
+          lastOutcomeBucket = failureCategoryToOutcome(failure.category);
+          if (failure.category === 'rate_limit') {
+            rateLimitedCapabilities.add(request.capability);
+          }
+          const exhausted = attempt >= this.retryPolicy.maxAttempts;
+          const retriable = isRetriableCategory(failure.category);
+          if (!retriable || exhausted) break;
+
+          const jitterMs = this.jitter(this.retryPolicy);
+          const desiredBackoff = computeBackoffMs(
+            attempt - 1,
+            this.retryPolicy,
+            jitterMs,
+          );
+          const remainingBudget = Math.max(
+            0,
+            this.retryPolicy.totalBudgetMs - runBackoffSpentMs - attemptBackoffMs,
+          );
+          if (remainingBudget <= 0) break;
+          const actualBackoff = Math.min(desiredBackoff, remainingBudget);
+          await this.sleep(actualBackoff);
+          attemptBackoffMs += actualBackoff;
+        }
+      }
+
+      runBackoffSpentMs += attemptBackoffMs;
+
+      if (success !== undefined) {
         raw_evidence.push({
           request,
           parameters_digest,
           capability_version:
             this.catalog.capability_versions[request.capability] ?? 'unknown',
-          result,
+          result: success,
           retrieved_at: this.now().toISOString(),
         });
         transport_summary.push({
@@ -92,26 +196,25 @@ export class EvidenceExecutor {
           capability: request.capability,
           scope_subset: scopeSubsetFromParameters(request.parameters),
           parameters_digest,
-          attempt_count: 1,
-          retry_count: 0,
+          attempt_count: attempt,
+          retry_count: attempt - 1,
           final_outcome: 'success',
-          pacing_applied: false,
-          cumulative_backoff_ms: 0,
+          pacing_applied: pacing,
+          cumulative_backoff_ms: attemptBackoffMs,
         });
-      } catch (err) {
-        const failure = classifyFailure(err, { capability: request.capability });
-        failures.push(failure);
+      } else if (lastFailure) {
+        failures.push(lastFailure);
         transport_summary.push({
           logical_request_id,
           capability: request.capability,
           scope_subset: scopeSubsetFromParameters(request.parameters),
           parameters_digest,
-          attempt_count: 1,
-          retry_count: 0,
-          final_outcome: failureCategoryToOutcome(failure.category),
-          failure_category: failure.category,
-          pacing_applied: false,
-          cumulative_backoff_ms: 0,
+          attempt_count: attempt,
+          retry_count: attempt - 1,
+          final_outcome: lastOutcomeBucket,
+          failure_category: lastFailure.category,
+          pacing_applied: pacing,
+          cumulative_backoff_ms: attemptBackoffMs,
         });
       }
     }

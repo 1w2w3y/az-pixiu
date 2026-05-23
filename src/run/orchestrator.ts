@@ -42,6 +42,10 @@ import { computeScopeSignature } from './scope-signature.js';
 import { buildPriorRunContextEvidence } from './prior-run-evidence.js';
 import { checkFreshness } from './freshness.js';
 import { NoopRunHistoryStore, type RunHistoryStore } from '../history/store.js';
+import {
+  rollupTransportSummary,
+  runOutcomeFromRollup,
+} from '../schemas/transport.js';
 import type {
   Config,
   Scope,
@@ -573,11 +577,25 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       const r = await executor.execute(plan);
       span.setAttribute(ATTR.evidenceRecordsProduced, r.raw_evidence.length);
       span.setAttribute(ATTR.evidenceFailuresClassified, r.failures.length);
+      const rollup = rollupTransportSummary(r.transport_summary);
+      span.setAttribute(ATTR.transportRetryCount, rollup.retry_count);
+      span.setAttribute(ATTR.transportCumulativeBackoffMs, rollup.cumulative_backoff_ms);
+      span.setAttribute(ATTR.transportFinalOutcome, runOutcomeFromRollup(rollup));
+      span.setAttribute(ATTR.transportRateLimitSeen, rollup.rate_limit_seen);
+      span.setAttribute(ATTR.transportRecoveredCount, rollup.recovered_count);
+      span.setAttribute(ATTR.transportExhaustedCount, rollup.exhausted_count);
       return r;
     },
   );
+  const transportRollup = rollupTransportSummary(transport_summary);
   process.stdout.write(
-    `  retrieved ${raw_evidence.length} record(s), ${failures.length} failure(s) classified\n`,
+    `  retrieved ${raw_evidence.length} record(s), ${failures.length} failure(s) classified` +
+      (transportRollup.retry_count > 0
+        ? ` (${transportRollup.retry_count} retry attempt(s), ${Math.round(
+            transportRollup.cumulative_backoff_ms / 1000,
+          )}s cumulative backoff)`
+        : '') +
+      '\n',
   );
 
   // Normalize

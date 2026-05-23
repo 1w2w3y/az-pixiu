@@ -129,14 +129,22 @@ describe('EvidenceExecutor — happy path', () => {
 });
 
 describe('EvidenceExecutor — failure paths', () => {
-  it('collects per-request failures as ClassifiedFailures (does not throw)', async () => {
+  const fastSleep = () => Promise.resolve();
+  const noJitter = () => 0;
+
+  it('exhausts retries on persistent 429 and emits one classified failure', async () => {
     const transport = new FakeTransport(phase1Catalog, async (cap) => {
       if (cap === 'amgmcp_cost_analysis') throw Object.assign(new Error('quota'), { status: 429 });
       return { content: 'ok' };
     });
     const client = new MCPClient({ transport });
     const catalog = await client.discover();
-    const executor = new EvidenceExecutor({ client, catalog });
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: fastSleep,
+      jitter: noJitter,
+    });
 
     const plan: EvidencePlan = {
       requests: [
@@ -152,18 +160,27 @@ describe('EvidenceExecutor — failure paths', () => {
     expect(failures[0]?.category).toBe('rate_limit');
     expect(failures[0]?.capability).toBe('amgmcp_cost_analysis');
     expect(transport_summary).toHaveLength(2);
+    expect(transport_summary[0]?.attempt_count).toBe(4);
+    expect(transport_summary[0]?.retry_count).toBe(3);
     expect(transport_summary[0]?.final_outcome).toBe('rate_limit');
     expect(transport_summary[0]?.failure_category).toBe('rate_limit');
+    // 30s + 60s + 120s = 210_000ms with zero jitter
+    expect(transport_summary[0]?.cumulative_backoff_ms).toBe(210_000);
     expect(transport_summary[1]?.final_outcome).toBe('success');
   });
 
-  it('continues after multiple failures so analysis can produce bounded results (§11)', async () => {
+  it('does not retry non-retriable categories (authz_gap)', async () => {
     const transport = new FakeTransport(phase1Catalog, async () => {
       throw Object.assign(new Error('forbidden'), { status: 403 });
     });
     const client = new MCPClient({ transport });
     const catalog = await client.discover();
-    const executor = new EvidenceExecutor({ client, catalog });
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: fastSleep,
+      jitter: noJitter,
+    });
 
     const plan: EvidencePlan = {
       requests: [
@@ -176,8 +193,145 @@ describe('EvidenceExecutor — failure paths', () => {
     expect(failures).toHaveLength(2);
     expect(failures.every((f) => f.category === 'authz_gap')).toBe(true);
     expect(transport_summary).toHaveLength(2);
+    expect(transport_summary.every((s) => s.attempt_count === 1)).toBe(true);
     expect(transport_summary.every((s) => s.final_outcome === 'other')).toBe(true);
     expect(transport_summary.every((s) => s.failure_category === 'authz_gap')).toBe(true);
+  });
+});
+
+describe('EvidenceExecutor — retry semantics (Phase 3 §Gap 7)', () => {
+  const fastSleep = () => Promise.resolve();
+  const noJitter = () => 0;
+
+  function makeRetryingTransport(throwTimes: number, status: number) {
+    let calls = 0;
+    return new FakeTransport(phase1Catalog, async (cap) => {
+      calls += 1;
+      if (calls <= throwTimes) {
+        throw Object.assign(new Error('transient'), { status });
+      }
+      return { content: { capability: cap, attempt: calls } };
+    });
+  }
+
+  it('recovers when 429 clears within the retry budget — no DQ, raw evidence emitted', async () => {
+    const transport = makeRetryingTransport(2, 429);
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const sleeps: number[] = [];
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      jitter: noJitter,
+    });
+    const plan: EvidencePlan = {
+      requests: [
+        { capability: 'amgmcp_cost_analysis', parameters: {}, intent: 'cost_breakdown' },
+      ],
+    };
+    const { raw_evidence, failures, transport_summary } = await executor.execute(plan);
+    expect(raw_evidence).toHaveLength(1);
+    expect(failures).toHaveLength(0);
+    expect(transport_summary[0]?.attempt_count).toBe(3);
+    expect(transport_summary[0]?.retry_count).toBe(2);
+    expect(transport_summary[0]?.final_outcome).toBe('success');
+    expect(transport_summary[0]?.cumulative_backoff_ms).toBe(90_000);
+    expect(sleeps).toEqual([30_000, 60_000]);
+  });
+
+  it('retries timeout-class failures (504)', async () => {
+    const transport = makeRetryingTransport(1, 504);
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: fastSleep,
+      jitter: noJitter,
+    });
+    const { raw_evidence, failures, transport_summary } = await executor.execute({
+      requests: [
+        { capability: 'amgmcp_cost_analysis', parameters: {}, intent: 'cost_breakdown' },
+      ],
+    });
+    expect(raw_evidence).toHaveLength(1);
+    expect(failures).toHaveLength(0);
+    expect(transport_summary[0]?.attempt_count).toBe(2);
+    expect(transport_summary[0]?.retry_count).toBe(1);
+  });
+
+  it('paces subsequent calls to a capability after first observed 429', async () => {
+    // First call: 429 then success. Second call: success on first attempt
+    // but is expected to be preceded by the inter-call pace.
+    let costCalls = 0;
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      if (cap !== 'amgmcp_cost_analysis') return { content: cap };
+      costCalls += 1;
+      if (costCalls === 1) throw Object.assign(new Error('quota'), { status: 429 });
+      return { content: { call: costCalls } };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const sleeps: number[] = [];
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      jitter: noJitter,
+    });
+    const plan: EvidencePlan = {
+      requests: [
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 1 }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 2 }, intent: 'cost_breakdown' },
+      ],
+    };
+    const { raw_evidence, transport_summary } = await executor.execute(plan);
+    expect(raw_evidence).toHaveLength(2);
+    // First call: one retry backoff (30s). Second call: pacing (30s). Total: 60_000.
+    expect(sleeps).toEqual([30_000, 30_000]);
+    expect(transport_summary[1]?.pacing_applied).toBe(true);
+    expect(transport_summary[0]?.pacing_applied).toBe(false);
+  });
+
+  it('honours total run-level backoff budget', async () => {
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      if (cap === 'amgmcp_cost_analysis') throw Object.assign(new Error('quota'), { status: 429 });
+      return { content: cap };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const sleeps: number[] = [];
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      retryPolicy: {
+        maxAttempts: 4,
+        baseDelayMs: 30_000,
+        maxDelayMs: 180_000,
+        jitterMs: 30_000,
+        // Cut the per-run budget below a single full retry tail to prove
+        // the executor doesn't sleep past it.
+        totalBudgetMs: 45_000,
+        paceAfterRateLimitMs: 30_000,
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      jitter: noJitter,
+    });
+    const { failures } = await executor.execute({
+      requests: [
+        { capability: 'amgmcp_cost_analysis', parameters: {}, intent: 'cost_breakdown' },
+      ],
+    });
+    expect(failures).toHaveLength(1);
+    // First retry asks for 30s; second would be 60s but budget allows only 15s.
+    expect(sleeps).toEqual([30_000, 15_000]);
   });
 });
 
