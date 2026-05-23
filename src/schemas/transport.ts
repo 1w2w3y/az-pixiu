@@ -42,6 +42,15 @@ export interface TransportSummaryEntry {
   final_outcome: TransportFinalOutcome;
   /** Failure category from the taxonomy, present iff final_outcome !== 'success'. */
   failure_category?: FailureCategory;
+  /**
+   * Failure categories observed on attempts that were later recovered.
+   * Present on rows where the call ultimately succeeded but at least one
+   * earlier attempt failed with a transient category — populated so the
+   * rollup can distinguish "recovered 429" from "recovered timeout" even
+   * after `final_outcome` flips back to `success`. Empty/absent when the
+   * call succeeded on its first attempt.
+   */
+  observed_failure_categories?: FailureCategory[];
   /** Whether per-capability pacing was applied to this call (PR 2). */
   pacing_applied: boolean;
   /** Sum of backoff slept between retries. PR 1 always emits 0. */
@@ -159,9 +168,15 @@ export function rollupTransportSummary(
     const exhausted = entry.final_outcome !== 'success';
     if (recovered) recovered_count += 1;
     if (exhausted) exhausted_count += 1;
-    if (entry.final_outcome === 'rate_limit' || entry.failure_category === 'rate_limit') {
-      rate_limit_seen = true;
-    }
+    // rate_limit_seen flips true whenever a 429 was observed on any
+    // attempt — terminal or recovered. `final_outcome` alone misses
+    // recovered 429s (the row reads as `success`), so check the
+    // additive `observed_failure_categories` for the recovered path.
+    const sawRateLimit =
+      entry.final_outcome === 'rate_limit' ||
+      entry.failure_category === 'rate_limit' ||
+      entry.observed_failure_categories?.includes('rate_limit') === true;
+    if (sawRateLimit) rate_limit_seen = true;
 
     const cap = by_capability[entry.capability] ?? { ...EMPTY_CAPABILITY_ROLLUP };
     cap.calls += 1;
@@ -170,12 +185,7 @@ export function rollupTransportSummary(
     cap.cumulative_backoff_ms += entry.cumulative_backoff_ms;
     if (recovered) cap.recovered_count += 1;
     if (exhausted) cap.exhausted_count += 1;
-    if (
-      entry.final_outcome === 'rate_limit' ||
-      entry.failure_category === 'rate_limit'
-    ) {
-      cap.rate_limit_seen = true;
-    }
+    if (sawRateLimit) cap.rate_limit_seen = true;
     by_capability[entry.capability] = cap;
   }
 

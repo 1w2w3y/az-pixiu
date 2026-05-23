@@ -145,6 +145,11 @@ export class EvidenceExecutor {
       let success: ToolCallResult | undefined;
       let lastFailure: ClassifiedFailure | undefined;
       let lastOutcomeBucket: TransportSummaryEntry['final_outcome'] = 'success';
+      // Failure categories observed on attempts that did not return the
+      // final outcome — populated as retries happen. On the recovered
+      // path this is what keeps `rate_limit_seen` honest after
+      // `lastFailure` is cleared (see schema/transport.ts).
+      const observed_failure_categories: ClassifiedFailure['category'][] = [];
 
       while (attempt < this.retryPolicy.maxAttempts) {
         attempt += 1;
@@ -156,6 +161,7 @@ export class EvidenceExecutor {
           const failure = classifyFailure(err, { capability: request.capability });
           lastFailure = failure;
           lastOutcomeBucket = failureCategoryToOutcome(failure.category);
+          observed_failure_categories.push(failure.category);
           if (failure.category === 'rate_limit') {
             rateLimitedCapabilities.add(request.capability);
           }
@@ -182,6 +188,13 @@ export class EvidenceExecutor {
 
       runBackoffSpentMs += attemptBackoffMs;
 
+      // Dedupe-preserving order: typically 1–3 distinct categories, so a
+      // simple filter is cheaper than a Set+sort and the observed-order
+      // is informative ("429 then 504 then success" vs "504 then 429
+      // then success").
+      const distinctObserved = observed_failure_categories.filter(
+        (c, i, arr) => arr.indexOf(c) === i,
+      );
       if (success !== undefined) {
         raw_evidence.push({
           request,
@@ -199,11 +212,18 @@ export class EvidenceExecutor {
           attempt_count: attempt,
           retry_count: attempt - 1,
           final_outcome: 'success',
+          ...(distinctObserved.length > 0
+            ? { observed_failure_categories: distinctObserved }
+            : {}),
           pacing_applied: pacing,
           cumulative_backoff_ms: attemptBackoffMs,
         });
       } else if (lastFailure) {
         failures.push(lastFailure);
+        // Pre-terminal categories distinct from the final failure are
+        // included so an exhausted "504 → 504 → 429 → 429" still shows
+        // that 504 was part of the path.
+        const preTerminal = distinctObserved.filter((c) => c !== lastFailure.category);
         transport_summary.push({
           logical_request_id,
           capability: request.capability,
@@ -213,6 +233,7 @@ export class EvidenceExecutor {
           retry_count: attempt - 1,
           final_outcome: lastOutcomeBucket,
           failure_category: lastFailure.category,
+          ...(preTerminal.length > 0 ? { observed_failure_categories: preTerminal } : {}),
           pacing_applied: pacing,
           cumulative_backoff_ms: attemptBackoffMs,
         });

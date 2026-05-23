@@ -240,6 +240,32 @@ describe('EvidenceExecutor — retry semantics (Phase 3 §Gap 7)', () => {
     expect(transport_summary[0]?.final_outcome).toBe('success');
     expect(transport_summary[0]?.cumulative_backoff_ms).toBe(90_000);
     expect(sleeps).toEqual([30_000, 60_000]);
+    // Recovered 429 still flags rate_limit on the row via the additive
+    // observed_failure_categories field — so the rollup's rate_limit_seen
+    // flips true even though final_outcome is `success`.
+    expect(transport_summary[0]?.observed_failure_categories).toEqual(['rate_limit']);
+  });
+
+  it('recovered 429 rolls up to rate_limit_seen === true', async () => {
+    const { rollupTransportSummary } = await import('../../src/schemas/transport.js');
+    const transport = makeRetryingTransport(1, 429);
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: fastSleep,
+      jitter: noJitter,
+    });
+    const { transport_summary } = await executor.execute({
+      requests: [
+        { capability: 'amgmcp_cost_analysis', parameters: {}, intent: 'cost_breakdown' },
+      ],
+    });
+    const rollup = rollupTransportSummary(transport_summary);
+    expect(rollup.recovered_count).toBe(1);
+    expect(rollup.rate_limit_seen).toBe(true);
+    expect(rollup.by_capability['amgmcp_cost_analysis']?.rate_limit_seen).toBe(true);
   });
 
   it('retries timeout-class failures (504)', async () => {

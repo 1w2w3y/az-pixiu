@@ -115,6 +115,23 @@ describe('rollupTransportSummary', () => {
     expect(rollup.by_capability.amgmcp_cost_analysis?.rate_limit_seen).toBe(true);
   });
 
+  it('detects rate_limit_seen on a recovered 429 via observed_failure_categories', () => {
+    // The success row has final_outcome='success' and no failure_category;
+    // the only signal of the pre-recovery 429 is observed_failure_categories.
+    const rollup = rollupTransportSummary([
+      makeEntry({
+        attempt_count: 3,
+        retry_count: 2,
+        final_outcome: 'success',
+        observed_failure_categories: ['rate_limit'],
+        cumulative_backoff_ms: 90_000,
+      }),
+    ]);
+    expect(rollup.recovered_count).toBe(1);
+    expect(rollup.rate_limit_seen).toBe(true);
+    expect(rollup.by_capability.amgmcp_cost_analysis?.rate_limit_seen).toBe(true);
+  });
+
   it('counts retries-that-recovered separately from exhausted retries', () => {
     const rollup = rollupTransportSummary([
       makeEntry({
