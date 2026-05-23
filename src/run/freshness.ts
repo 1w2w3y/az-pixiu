@@ -1,4 +1,8 @@
-import type { DataQualityFinding, EvidenceRecord } from '../schemas/index.js';
+import type {
+  DataQualityFinding,
+  EvidenceRecord,
+  ScopeSubset,
+} from '../schemas/index.js';
 
 /**
  * Freshness check (Phase 3 — design/cost-summary-depth.md §Gap 4).
@@ -59,6 +63,13 @@ const COST_CAPABILITIES: ReadonlySet<string> = new Set([
   'cost_analysis',
 ]);
 
+interface FreshnessGroup {
+  source_capability: string;
+  time_window: EvidenceRecord['time_window'];
+  scope_subsets: ScopeSubset[];
+  representativeStart: string;
+}
+
 export function checkFreshness(
   evidence: readonly EvidenceRecord[],
   options: FreshnessCheckOptions = {},
@@ -69,33 +80,85 @@ export function checkFreshness(
   let counter = options.startingCounter ?? 0;
 
   const costRecords = evidence.filter((e) => COST_CAPABILITIES.has(e.source_capability));
-  const findings: DataQualityFinding[] = [];
 
+  // Group affected records by (source_capability, time_window.end) so a
+  // fan-out call that produces N near-identical findings becomes one
+  // (cron-comparison §S1). source_capability is part of the key so a
+  // future analyzer producing freshness findings from a different
+  // capability with the same end timestamp is not collapsed into this
+  // bucket.
+  const groups = new Map<string, FreshnessGroup>();
   for (const record of costRecords) {
     const endMs = new Date(record.time_window.end).getTime();
     if (!Number.isFinite(endMs)) continue;
     const lagMs = nowMs - endMs;
-    // Within the lag window when the period ended recently (lag is
-    // small) OR has not ended yet (lag is negative — window extends
-    // into the future). Periods whose end is far in the past are
-    // assumed fully posted and skipped.
-    if (lagMs < 0 || lagMs < lagThresholdMs) {
-      counter += 1;
-      findings.push({
-        dq_id: `dq-freshness-${counter}`,
-        category: 'freshness_partial_window',
-        affected_capability: record.source_capability,
-        affected_scope_subset: record.scope_subset,
-        consequence_for_analysis:
-          `Cost-analysis window ${record.time_window.start} → ${record.time_window.end} ends within the cost-API's late-posting threshold (` +
-          `${Math.round(lagThresholdMs / 3_600_000)}h). Totals from this window are expected to revise upward as billing catches up; ` +
-          'hypotheses and recommendations that depend on absolute totals should be caveated.',
-        impact_on_recommendations: [],
-        actionable_hint:
-          'Re-run the analysis after the lag window has elapsed, or treat the current totals as a lower bound.',
+    if (!(lagMs < 0 || lagMs < lagThresholdMs)) continue;
+    const key = `${record.source_capability}::${record.time_window.end}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.scope_subsets.push(record.scope_subset);
+    } else {
+      groups.set(key, {
+        source_capability: record.source_capability,
+        time_window: record.time_window,
+        scope_subsets: [record.scope_subset],
+        representativeStart: record.time_window.start,
       });
     }
   }
 
+  const findings: DataQualityFinding[] = [];
+  for (const group of groups.values()) {
+    counter += 1;
+    findings.push({
+      dq_id: `dq-freshness-${counter}`,
+      category: 'freshness_partial_window',
+      affected_capability: group.source_capability,
+      affected_scope_subset: mergeScopeSubsets(group.scope_subsets),
+      consequence_for_analysis:
+        `Cost-analysis window ${group.representativeStart} → ${group.time_window.end} ends within the cost-API's late-posting threshold (` +
+        `${Math.round(lagThresholdMs / 3_600_000)}h). Totals from this window are expected to revise upward as billing catches up; ` +
+        'hypotheses and recommendations that depend on absolute totals should be caveated.',
+      impact_on_recommendations: [],
+      actionable_hint:
+        'Re-run the analysis after the lag window has elapsed, or treat the current totals as a lower bound.',
+    });
+  }
   return findings;
+}
+
+/**
+ * Merge the affected scope subsets of every record contributing to a
+ * deduplicated freshness finding. Subscription ids and resource ids are
+ * unioned; resource group names are unioned. When no member carries a
+ * given field, the merged field stays `null` so the renderer does not
+ * fabricate coverage. When every member has the same field present, the
+ * union still reflects honest coverage.
+ */
+function mergeScopeSubsets(subsets: readonly ScopeSubset[]): ScopeSubset {
+  const subs = new Set<string>();
+  const rgs = new Set<string>();
+  const ids = new Set<string>();
+  let sawSubs = false;
+  let sawRgs = false;
+  let sawIds = false;
+  for (const s of subsets) {
+    if (s.subscription_ids && s.subscription_ids.length > 0) {
+      sawSubs = true;
+      for (const v of s.subscription_ids) subs.add(v);
+    }
+    if (s.resource_group_names && s.resource_group_names.length > 0) {
+      sawRgs = true;
+      for (const v of s.resource_group_names) rgs.add(v);
+    }
+    if (s.resource_ids && s.resource_ids.length > 0) {
+      sawIds = true;
+      for (const v of s.resource_ids) ids.add(v);
+    }
+  }
+  return {
+    subscription_ids: sawSubs ? Array.from(subs) : null,
+    resource_group_names: sawRgs ? Array.from(rgs) : null,
+    resource_ids: sawIds ? Array.from(ids) : null,
+  };
 }

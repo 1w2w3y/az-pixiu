@@ -53,7 +53,7 @@ describe('checkFreshness — partial-window heuristic', () => {
     expect(findings).toHaveLength(0);
   });
 
-  it('emits one finding per affected cost-analysis record', () => {
+  it('emits one finding per distinct end timestamp', () => {
     const records = [
       makeCostRecord({
         evidence_id: 'ev-cost-1',
@@ -69,6 +69,43 @@ describe('checkFreshness — partial-window heuristic', () => {
         evidence_id: 'ev-cost-3',
         start: '2026-05-01T00:00:00Z',
         end: '2026-05-08T00:00:00Z', // stale, not flagged
+      }),
+    ];
+    const findings = checkFreshness(records, { now });
+    expect(findings).toHaveLength(2);
+  });
+
+  it('dedupes per (source_capability, time_window.end) across fan-out records (§S1)', () => {
+    const subB = '22222222-2222-2222-2222-222222222222';
+    const subC = '33333333-3333-3333-3333-333333333333';
+    const records: EvidenceRecord[] = [
+      {
+        ...makeCostRecord({ evidence_id: 'ev-cost-1', start: '2026-05-08T00:00:00Z', end: '2026-05-15T00:00:00Z' }),
+      },
+      {
+        ...makeCostRecord({ evidence_id: 'ev-cost-2', start: '2026-05-08T00:00:00Z', end: '2026-05-15T00:00:00Z' }),
+        scope_subset: { subscription_ids: [subB], resource_group_names: null, resource_ids: null },
+      },
+      {
+        ...makeCostRecord({ evidence_id: 'ev-cost-3', start: '2026-05-08T00:00:00Z', end: '2026-05-15T00:00:00Z' }),
+        scope_subset: { subscription_ids: [subC], resource_group_names: null, resource_ids: null },
+      },
+    ];
+    const findings = checkFreshness(records, { now });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.affected_scope_subset?.subscription_ids).toEqual(
+      expect.arrayContaining([subId, subB, subC]),
+    );
+  });
+
+  it('does not collapse findings from different source capabilities sharing an end timestamp', () => {
+    const records = [
+      makeCostRecord({ evidence_id: 'ev-1', start: '2026-05-08T00:00:00Z', end: '2026-05-15T00:00:00Z' }),
+      makeCostRecord({
+        evidence_id: 'ev-2',
+        start: '2026-05-08T00:00:00Z',
+        end: '2026-05-15T00:00:00Z',
+        source_capability: 'cost_analysis',
       }),
     ];
     const findings = checkFreshness(records, { now });
