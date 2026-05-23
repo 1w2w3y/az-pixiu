@@ -205,14 +205,21 @@ export function scopeSubsetFromParameters(
   parameters: Readonly<Record<string, unknown>>,
 ): ScopeSubset | null {
   const subIds: string[] = [];
-  const single = parameters.subscription_id;
-  if (typeof single === 'string' && single.length > 0) {
-    subIds.push(single);
+  // The deterministic playbooks use snake_case (subscription_id /
+  // subscription_ids) but the planner LLM picks whatever the
+  // capability's JSON schema advertises, which is often camelCase on the
+  // AMG-MCP side (subscriptionId / subscriptionIds). Recognise both so
+  // coverage detection works against either plan source.
+  for (const key of ['subscription_id', 'subscriptionId']) {
+    const v = parameters[key];
+    if (typeof v === 'string' && v.length > 0) subIds.push(v);
   }
-  const multi = parameters.subscription_ids;
-  if (Array.isArray(multi)) {
-    for (const v of multi) {
-      if (typeof v === 'string' && v.length > 0) subIds.push(v);
+  for (const key of ['subscription_ids', 'subscriptionIds']) {
+    const v = parameters[key];
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (typeof item === 'string' && item.length > 0) subIds.push(item);
+      }
     }
   }
   if (subIds.length === 0) return null;

@@ -112,12 +112,24 @@ export class EvidenceNormalizer {
         }
       }
 
+      // For cost-analysis evidence, the response payload always carries
+      // the subscription set it actually covers (`subscriptions[].subscriptionId`
+      // in the live AMG-MCP shape). Promote those into scope_subset when
+      // the request parameters didn't already, so coverage detection
+      // (src/report/coverage.ts) works against any plan source —
+      // playbook (snake_case params), planner LLM (camelCase), or future
+      // multi-sub fan-in.
+      const enrichedScope =
+        raw.request.capability === 'amgmcp_cost_analysis' || raw.request.capability === 'cost_analysis'
+          ? mergeScopeFromCostPayload(scope_subset, decoded)
+          : scope_subset;
+
       const record = EvidenceRecordSchema.parse({
         evidence_id,
         source_capability: raw.request.capability,
         capability_version: raw.capability_version,
         query_intent: raw.request.intent,
-        scope_subset,
+        scope_subset: enrichedScope,
         time_window,
         payload_ref: { kind: 'inline', data: decoded },
         payload_summary: summarize(raw.request.capability, decoded),
@@ -138,22 +150,77 @@ function extractScopeSubset(params: Record<string, unknown>): ScopeSubset {
   let resource_group_names: string[] | null = null;
   let resource_ids: string[] | null = null;
 
-  if (typeof params.subscription_id === 'string') {
-    subscription_ids = [params.subscription_id];
-  } else if (Array.isArray(params.subscription_ids)) {
-    subscription_ids = params.subscription_ids.filter((s): s is string => typeof s === 'string');
+  // Accept both the playbook's snake_case naming and the planner LLM's
+  // camelCase (which mirrors AMG-MCP's published JSON schema).
+  for (const key of ['subscription_id', 'subscriptionId']) {
+    const v = params[key];
+    if (typeof v === 'string') {
+      subscription_ids = subscription_ids ?? [];
+      subscription_ids.push(v);
+    }
   }
-  if (typeof params.resource_group_name === 'string') {
-    resource_group_names = [params.resource_group_name];
-  } else if (Array.isArray(params.resource_group_names)) {
-    resource_group_names = params.resource_group_names.filter(
-      (s): s is string => typeof s === 'string',
-    );
+  for (const key of ['subscription_ids', 'subscriptionIds']) {
+    const v = params[key];
+    if (Array.isArray(v)) {
+      subscription_ids = subscription_ids ?? [];
+      for (const s of v) if (typeof s === 'string') subscription_ids.push(s);
+    }
   }
-  if (Array.isArray(params.resource_ids)) {
-    resource_ids = params.resource_ids.filter((s): s is string => typeof s === 'string');
+  for (const key of ['resource_group_name', 'resourceGroupName']) {
+    const v = params[key];
+    if (typeof v === 'string') {
+      resource_group_names = resource_group_names ?? [];
+      resource_group_names.push(v);
+    }
   }
-  return { subscription_ids, resource_group_names, resource_ids };
+  for (const key of ['resource_group_names', 'resourceGroupNames']) {
+    const v = params[key];
+    if (Array.isArray(v)) {
+      resource_group_names = resource_group_names ?? [];
+      for (const s of v) if (typeof s === 'string') resource_group_names.push(s);
+    }
+  }
+  for (const key of ['resource_ids', 'resourceIds']) {
+    const v = params[key];
+    if (Array.isArray(v)) {
+      resource_ids = resource_ids ?? [];
+      for (const s of v) if (typeof s === 'string') resource_ids.push(s);
+    }
+  }
+  return {
+    subscription_ids: subscription_ids ? Array.from(new Set(subscription_ids)) : null,
+    resource_group_names: resource_group_names ? Array.from(new Set(resource_group_names)) : null,
+    resource_ids: resource_ids ? Array.from(new Set(resource_ids)) : null,
+  };
+}
+
+/**
+ * Walk the cost_analysis response payload and union the subscriptions
+ * it actually covers into the request-derived scope_subset. The live
+ * AMG-MCP shape is `{ subscriptions: [{ subscriptionId, ... }, ...] }`;
+ * the tabular fixture shape uses `{ rows: [[..., subscriptionId, ...]] }`
+ * less often, so we only mine the structured field. When no usable
+ * payload subscriptions are present, the original scope_subset is
+ * returned unchanged.
+ */
+function mergeScopeFromCostPayload(initial: ScopeSubset, payload: unknown): ScopeSubset {
+  if (typeof payload !== 'object' || payload === null) return initial;
+  const obj = payload as Record<string, unknown>;
+  if (!Array.isArray(obj.subscriptions)) return initial;
+  const ids: string[] = [];
+  for (const sub of obj.subscriptions) {
+    if (typeof sub !== 'object' || sub === null) continue;
+    const s = sub as Record<string, unknown>;
+    const v = s.subscriptionId ?? s.subscription_id ?? s.id;
+    if (typeof v === 'string' && v.length > 0) ids.push(v);
+  }
+  if (ids.length === 0) return initial;
+  const merged = new Set<string>([...(initial.subscription_ids ?? []), ...ids]);
+  return {
+    subscription_ids: Array.from(merged),
+    resource_group_names: initial.resource_group_names,
+    resource_ids: initial.resource_ids,
+  };
 }
 
 function extractTimeWindow(params: Record<string, unknown>): TimeWindow | undefined {

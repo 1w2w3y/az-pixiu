@@ -67,6 +67,13 @@ describe('scopeSubsetFromParameters', () => {
     });
     expect(out?.subscription_ids).toEqual([subA, subB]);
   });
+
+  it('recognises camelCase (subscriptionId/subscriptionIds)', () => {
+    const out = scopeSubsetFromParameters({ subscriptionIds: [subA, subB] });
+    expect(out?.subscription_ids).toEqual([subA, subB]);
+    const out2 = scopeSubsetFromParameters({ subscriptionId: subA });
+    expect(out2?.subscription_ids).toEqual([subA]);
+  });
 });
 
 describe('rollupTransportSummary', () => {
