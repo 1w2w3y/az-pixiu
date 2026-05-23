@@ -78,6 +78,7 @@ The team inspects evaluation coverage by scenario type, resource type, data qual
 - FR-13: Dataset items must be versioned or otherwise stable enough for meaningful historical comparison.
 - FR-14: The framework must support adding new cases from production-like traces or user feedback after sanitization.
 - FR-15: The evaluation framework must be reusable by future Az-Pixiu agents with domain-specific additions.
+- FR-16: As the agent gains analyzer capabilities beyond Phase 1's descriptive surface, the framework must add rubrics that measure those capabilities specifically — at minimum a waste-classification grounding rubric that each waste candidate cites the evidence that classified it, a calibrated-impact rubric that each estimated weekly cost impact renders as a range with a cited rate source, and a continuity-grounded rubric that each cross-run marker cites the prior-run evidence that justifies it. These are additive to the Phase 1 structural rubrics, not replacements; the Phase 2 score taxonomy continues to apply.
 
 ## Non-Functional Requirements
 

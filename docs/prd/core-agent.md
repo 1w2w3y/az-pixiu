@@ -87,6 +87,11 @@ The review produces either acceptance, rejection, or a quality issue that can be
 - FR-13: The agent must expose data access failures, partial results, rate limits, and unsupported resource types as first-class findings rather than silently omitting them.
 - FR-14: The agent must support repeat runs over the same scenario so output changes can be compared across prompt, model, and data-collection changes.
 - FR-15: The agent must maintain a clear separation between user-supplied context and evidence retrieved from Azure operational sources.
+- FR-16: The agent must support enumeration of waste candidates by category (orphaned, unattached, deallocated, stopped, failed, expired-by-naming-convention, unused) where the category can be defined by an unambiguous evidence predicate. Each candidate must be backed by the specific evidence that classified it and must carry the false-positive considerations relevant to its category.
+- FR-17: The agent must, where supported by an evidence-cited rate source, attach an estimated weekly cost impact to each waste candidate or candidate cluster. Estimates must be rendered as calibrated ranges with the rate source identified, never as point figures presented with implicit certainty. Candidates whose SKU is not covered by the rate source must be marked as "rate unavailable" rather than silently omitted or zeroed.
+- FR-18: The agent must recognize when cost evidence is likely incomplete due to data-source posting lag (for example, a cost-analysis window ending within the cost API's known late-posting window, or a cross-subscription uniform drop pattern that does not match plausible workload behaviour) and caveat any hypothesis or recommendation that depends on the affected totals.
+- FR-19: The agent must be able to consult its own prior runs against the same scope and analysis type when available, and use prior-run context as evidence to mark waste candidates whose IDs persist across runs (continuity markers), to recognize recurring patterns whose names match a previously resolved cluster, and to label recommendations as new or carrying forward across runs. Where prior-run context is not available, the agent must operate without it rather than fabricate continuity claims.
+- FR-20: The agent must produce a stable, deterministic identifier for each recommendation that survives LLM rewriting of the recommendation text, so the same recommendation can be recognized across runs for de-duplication, continuity tracking, and longitudinal evaluation.
 
 ## Non-Functional Requirements
 
@@ -117,8 +122,10 @@ The review produces either acceptance, rejection, or a quality issue that can be
 - How should the agent represent cost impact when exact savings cannot be computed from available data?
 - Which user-provided business context should the agent accept, and how should it distinguish that context from retrieved evidence?
 - What output schema is stable enough for evaluations without prematurely constraining the product?
-- How should repeated recommendations be de-duplicated across runs or review periods?
-- What level of local state is needed to support comparison over time without creating a hidden data store requirement?
+- How should repeated recommendations be de-duplicated across runs or review periods? *(FR-19 / FR-20 commit to a deterministic `recommendation_signature` plus a `RunHistoryStore`; substrate choices are designed in [cost-summary depth](../design/cost-summary-depth.md) §Gap 5.)*
+- What level of local state is needed to support comparison over time without creating a hidden data store requirement? *(Phase 2.5 starts with a filesystem index over the existing `runs/` artefacts; the interface is shaped so SQLite or Langfuse Datasets can be swapped in later.)*
+- How aggressive should waste-classification heuristics be when the underlying predicate is structural (provisioning state, ipConfiguration emptiness) versus naming-convention-based ("restored-*", "test-*"), given that structural predicates have a clearer false-positive boundary?
+- How should scope drift between runs (a subscription becomes inaccessible, a resource group is added) interact with cross-run continuity matching?
 
 ## Future Considerations
 

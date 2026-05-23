@@ -26,7 +26,7 @@ Second, it is an open exploration of AI observability. The project is intentiona
 
 ## Project status
 
-Phase 1 ("minimum viable agent") is complete. The agent runs end-to-end against live AMG-MCP and Azure AI Foundry, produces an evidence-cited markdown report plus a `run.json` artefact for each invocation, and lands a Langfuse trace for every run. A first 3-item evaluation dataset (`eval/phase-1.json`) plus four scoring rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence) are in place. The project is moving into **Phase 2 — Langfuse depth**: managed prompts, Langfuse-hosted datasets, scores pushed back as Langfuse Scores, and prompt/model experiments on real workloads. See the [roadmap](docs/roadmap.md) for the full direction of travel.
+Phase 1 ("minimum viable agent") is complete. The agent runs end-to-end against live AMG-MCP and Azure AI Foundry, produces an evidence-cited markdown report plus a `run.json` artefact for each invocation, and lands a Langfuse trace for every run. A first 3-item evaluation dataset (`eval/phase-1.json`) plus four scoring rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence) are in place. The project is in **Phase 2 — Langfuse depth**: managed prompts, Langfuse-hosted datasets, scores pushed back as Langfuse Scores, and prompt/model experiments on real workloads. A new foundational **Phase 2.5 — cross-run continuity** slot has been added to unblock Phase 3's analyzer breadth (waste detection, calibrated impact estimates, recurring-pattern recall); see the [roadmap](docs/roadmap.md) for the full direction of travel and the [cost-summary depth design](docs/design/cost-summary-depth.md) for the analyzer plan.
 
 ## Getting started
 
@@ -83,6 +83,7 @@ Run `npx pixiu --help` for the full flag set. Per-run artefacts land in `runs/<r
 
 - [Phase 1 design](docs/design/phase-1.md) — the minimum viable agent: component decomposition, data shapes, reasoning loop, trace vocabulary, and option sets for deliberately-open tech decisions.
 - [Phase 2 design](docs/design/phase-2.md) — Langfuse depth: scores, datasets, prompt management, experiments, LLM-as-judge, human review, and a calibration loop, with the eval architecture as the centerpiece.
+- [Cost-summary depth](docs/design/cost-summary-depth.md) — Phase 2.5 cross-run continuity foundations and Phase 3 cost-summary analyzer extensions: waste-detection lanes, naming-pattern clustering, calibrated weekly impact estimates, freshness reasoning, and continuity markers.
 
 ## Audience
 

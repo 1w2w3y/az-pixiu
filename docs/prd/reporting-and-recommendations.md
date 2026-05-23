@@ -86,6 +86,10 @@ The manager can edit the narrative while preserving links to underlying evidence
 - FR-13: Reports must make false-positive considerations visible for recommendations that could be dangerous if accepted blindly.
 - FR-14: Reports must be structured enough for evaluation and comparison across runs.
 - FR-15: Reports should support multiple audience depths over time, such as summary, engineering detail, and audit appendix, without changing the underlying evidence contract.
+- FR-16: When the analysis produces waste candidates, the report must include a dedicated waste-candidates section that groups candidates by category, names individual resources, cites the predicate that classified each candidate, and presents naming-pattern clusters as a single grouped recommendation rather than as many independent items.
+- FR-17: When the analysis produces estimated weekly cost impacts, the report must render them as ranges with the rate source identified in a footnote, never as point figures presented with implicit certainty, and must visibly mark candidates whose SKU has no matching rate as "rate unavailable" rather than silently omitting them from totals.
+- FR-18: Reports must include a "Run Quality" section that surfaces transport-level findings (rate limits, retries, partial failures) and data-freshness findings (period-end within posting-lag threshold, cross-subscription uniform-drop heuristic) as first-class report content, distinct from the existing data-quality section which describes coverage gaps in retrieved evidence.
+- FR-19: When prior-run context is available for the same scope and analysis type, the report must mark waste candidates and recommendations with continuity indicators (for example, "unchanged for N weeks", "recurring from run X", "first appearance", "carrying forward week N") and must cite the prior-run evidence that justifies each marker. When prior-run context is not available, continuity markers must be absent rather than asserted by default.
 
 ## Non-Functional Requirements
 
@@ -111,10 +115,10 @@ The manager can edit the narrative while preserving links to underlying evidence
 ## Open Questions
 
 - What confidence vocabulary should be used consistently across reports?
-- How should estimated cost impact be represented when only directional evidence is available?
+- How should estimated cost impact be represented when only directional evidence is available? *(FR-17 commits to calibrated ranges with cited rate sources; the design in [cost-summary depth](../design/cost-summary-depth.md) §Gap 3 names the in-repo rate-card approach.)*
 - Which report sections should be mandatory for every analysis type?
 - Should the agent produce a single report format first or separate formats for investigation, review, and governance?
-- How should recommendation identifiers persist across repeated runs?
+- How should recommendation identifiers persist across repeated runs? *(FR-19 commits to continuity markers backed by a deterministic recommendation signature; the design in [cost-summary depth](../design/cost-summary-depth.md) §Gap 5 names the substrate options.)*
 - What is the right balance between inline evidence and trace-linked evidence?
 - How should accepted, rejected, or deferred recommendations be captured for future learning?
 
