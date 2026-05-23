@@ -294,4 +294,63 @@ describe('FilesystemRunHistoryStore', () => {
       'orphan-ip-cleanup-liftrtools',
     );
   });
+
+  it('omits transport_rollup for artefacts without transport_summary (back-compat)', async () => {
+    await writeRun(
+      tmp,
+      makeArtifact({
+        run_id: '00000000-0000-0000-0000-000000000001',
+        started_at: '2026-05-01T00:00:00Z',
+      }),
+    );
+    const store = new FilesystemRunHistoryStore({ runsDir: tmp });
+    const result = await store.findPriorRuns({
+      scope_signature: computeScopeSignature(baseScope),
+      analysis_type: 'cost_summary',
+    });
+    expect(result[0]?.transport_rollup).toBeUndefined();
+  });
+
+  it('rolls up transport_summary entries when present on the artefact', async () => {
+    const artifact = makeArtifact({
+      run_id: '00000000-0000-0000-0000-000000000002',
+      started_at: '2026-05-02T00:00:00Z',
+    });
+    artifact.transport_summary = [
+      {
+        logical_request_id: 'req-1',
+        capability: 'amgmcp_cost_analysis',
+        scope_subset: null,
+        parameters_digest: 'a'.repeat(64),
+        attempt_count: 1,
+        retry_count: 0,
+        final_outcome: 'success',
+        pacing_applied: false,
+        cumulative_backoff_ms: 0,
+      },
+      {
+        logical_request_id: 'req-2',
+        capability: 'amgmcp_cost_analysis',
+        scope_subset: null,
+        parameters_digest: 'b'.repeat(64),
+        attempt_count: 1,
+        retry_count: 0,
+        final_outcome: 'rate_limit',
+        failure_category: 'rate_limit',
+        pacing_applied: false,
+        cumulative_backoff_ms: 0,
+      },
+    ];
+    await writeRun(tmp, artifact);
+    const store = new FilesystemRunHistoryStore({ runsDir: tmp });
+    const result = await store.findPriorRuns({
+      scope_signature: computeScopeSignature(baseScope),
+      analysis_type: 'cost_summary',
+    });
+    const rollup = result[0]?.transport_rollup;
+    expect(rollup?.total_calls).toBe(2);
+    expect(rollup?.exhausted_count).toBe(1);
+    expect(rollup?.rate_limit_seen).toBe(true);
+    expect(rollup?.by_capability.amgmcp_cost_analysis?.calls).toBe(2);
+  });
 });

@@ -567,7 +567,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   // Execute
   process.stdout.write(`→ retrieving evidence from AMG-MCP...\n`);
   const executor = new EvidenceExecutor({ client, catalog });
-  const { raw_evidence, failures } = await withSpan(
+  const { raw_evidence, failures, transport_summary } = await withSpan(
     SpanNames.EvidenceRetrieval,
     async (span) => {
       const r = await executor.execute(plan);
@@ -678,7 +678,14 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     await writeFile(ctx.reportPath, md, 'utf8');
     await writeRunArtifact({
       path: ctx.runJsonPath,
-      artifact: buildRunArtifact(metadata, ctx.scope, recordsWithPrior, reasoning, allDq),
+      artifact: buildRunArtifact(
+        metadata,
+        ctx.scope,
+        recordsWithPrior,
+        reasoning,
+        allDq,
+        transport_summary,
+      ),
     });
   });
 

@@ -9,6 +9,7 @@ import type {
 } from './store.js';
 import { computeScopeSignature } from '../run/scope-signature.js';
 import type { RunArtifact } from '../report/runjson.js';
+import { rollupTransportSummary } from '../schemas/transport.js';
 
 /**
  * Filesystem-backed {@link RunHistoryStore}. Indexes the existing
@@ -139,12 +140,17 @@ function summarise(artifact: RunArtifact): RunSummary {
       priority: r.priority,
     }),
   );
+  const transport_rollup =
+    artifact.transport_summary && artifact.transport_summary.length > 0
+      ? rollupTransportSummary(artifact.transport_summary)
+      : undefined;
   return {
     run_id: artifact.metadata.run_id,
     scope_signature: computeScopeSignature(artifact.scope),
     analysis_type: artifact.scope.analysis_type,
     started_at: artifact.metadata.started_at,
     recommendations,
+    ...(transport_rollup ? { transport_rollup } : {}),
   };
 }
 

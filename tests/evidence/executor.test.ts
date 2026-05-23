@@ -49,13 +49,25 @@ describe('EvidenceExecutor — happy path', () => {
       ],
     };
 
-    const { raw_evidence, failures } = await executor.execute(plan);
+    const { raw_evidence, failures, transport_summary } = await executor.execute(plan);
     expect(failures).toHaveLength(0);
     expect(raw_evidence).toHaveLength(2);
     expect(raw_evidence[0]?.capability_version).toBe('1.0.0');
     expect(raw_evidence[1]?.capability_version).toBe('1.2.0');
     expect(raw_evidence[0]?.parameters_digest).toMatch(/^[0-9a-f]{64}$/);
     expect(raw_evidence[0]?.retrieved_at).toBe('2026-05-18T12:00:00.000Z');
+    // Phase 3 §S4: one transport summary row per logical request,
+    // single-attempt for PR 1.
+    expect(transport_summary).toHaveLength(2);
+    expect(transport_summary[0]).toMatchObject({
+      logical_request_id: 'req-1',
+      capability: 'amgmcp_cost_analysis',
+      attempt_count: 1,
+      retry_count: 0,
+      final_outcome: 'success',
+      cumulative_backoff_ms: 0,
+    });
+    expect(transport_summary[0]?.parameters_digest).toBe(raw_evidence[0]?.parameters_digest);
   });
 
   it('preserves the request order in raw_evidence', async () => {
@@ -76,6 +88,31 @@ describe('EvidenceExecutor — happy path', () => {
       'amgmcp_cost_analysis',
       'amgmcp_query_resource_graph',
     ]);
+  });
+
+  it('captures the per-call subscription scope on transport_summary entries', async () => {
+    const transport = new FakeTransport(phase1Catalog, async () => ({ content: 'ok' }));
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const executor = new EvidenceExecutor({ client, catalog });
+    const subId = '11111111-1111-1111-1111-111111111111';
+    const plan: EvidencePlan = {
+      requests: [
+        {
+          capability: 'amgmcp_cost_analysis',
+          parameters: { subscription_id: subId, time_window: {} },
+          intent: 'cost_breakdown',
+        },
+        {
+          capability: 'amgmcp_query_resource_graph',
+          parameters: { query: 'select *' },
+          intent: 'inventory',
+        },
+      ],
+    };
+    const { transport_summary } = await executor.execute(plan);
+    expect(transport_summary[0]?.scope_subset?.subscription_ids).toEqual([subId]);
+    expect(transport_summary[1]?.scope_subset).toBeNull();
   });
 
   it('falls back to "unknown" capability_version when discovery did not record one', async () => {
@@ -108,12 +145,16 @@ describe('EvidenceExecutor — failure paths', () => {
       ],
     };
 
-    const { raw_evidence, failures } = await executor.execute(plan);
+    const { raw_evidence, failures, transport_summary } = await executor.execute(plan);
     expect(raw_evidence).toHaveLength(1);
     expect(raw_evidence[0]?.request.capability).toBe('amgmcp_query_resource_graph');
     expect(failures).toHaveLength(1);
     expect(failures[0]?.category).toBe('rate_limit');
     expect(failures[0]?.capability).toBe('amgmcp_cost_analysis');
+    expect(transport_summary).toHaveLength(2);
+    expect(transport_summary[0]?.final_outcome).toBe('rate_limit');
+    expect(transport_summary[0]?.failure_category).toBe('rate_limit');
+    expect(transport_summary[1]?.final_outcome).toBe('success');
   });
 
   it('continues after multiple failures so analysis can produce bounded results (§11)', async () => {
@@ -130,10 +171,13 @@ describe('EvidenceExecutor — failure paths', () => {
         { capability: 'amgmcp_query_resource_graph', parameters: {}, intent: 'inventory' },
       ],
     };
-    const { raw_evidence, failures } = await executor.execute(plan);
+    const { raw_evidence, failures, transport_summary } = await executor.execute(plan);
     expect(raw_evidence).toHaveLength(0);
     expect(failures).toHaveLength(2);
     expect(failures.every((f) => f.category === 'authz_gap')).toBe(true);
+    expect(transport_summary).toHaveLength(2);
+    expect(transport_summary.every((s) => s.final_outcome === 'other')).toBe(true);
+    expect(transport_summary.every((s) => s.failure_category === 'authz_gap')).toBe(true);
   });
 });
 
