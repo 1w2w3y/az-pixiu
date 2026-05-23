@@ -570,10 +570,36 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
 
   // Execute
   process.stdout.write(`→ retrieving evidence from AMG-MCP...\n`);
-  const executor = new EvidenceExecutor({ client, catalog });
   const { raw_evidence, failures, transport_summary } = await withSpan(
     SpanNames.EvidenceRetrieval,
     async (span) => {
+      // Per-attempt detail (Codex should-fix #3 / self-review #1): emit
+      // transport.retry_scheduled and transport.pacing_applied events on
+      // the retrieval span so operator debugging "which attempt of which
+      // call burned 180s?" stays answerable in Langfuse without reading
+      // run.json. The aggregate attributes below remain for cheap
+      // run-level rollups.
+      const executor = new EvidenceExecutor({
+        client,
+        catalog,
+        onEvent: (event) => {
+          if (event.kind === 'retry_scheduled') {
+            emitEvent(span, 'transport.retry_scheduled', {
+              logical_request_id: event.logical_request_id,
+              capability: event.capability,
+              attempt: event.attempt,
+              failure_category: event.failure_category,
+              backoff_ms: event.backoff_ms,
+            });
+          } else if (event.kind === 'pacing_applied') {
+            emitEvent(span, 'transport.pacing_applied', {
+              logical_request_id: event.logical_request_id,
+              capability: event.capability,
+              pacing_ms: event.pacing_ms,
+            });
+          }
+        },
+      });
       const r = await executor.execute(plan);
       span.setAttribute(ATTR.evidenceRecordsProduced, r.raw_evidence.length);
       span.setAttribute(ATTR.evidenceFailuresClassified, r.failures.length);

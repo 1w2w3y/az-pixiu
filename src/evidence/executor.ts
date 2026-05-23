@@ -39,6 +39,36 @@ export interface ExecutionResult {
   transport_summary: TransportSummaryEntry[];
 }
 
+/**
+ * Per-attempt observability event emitted as retries happen. The
+ * executor stays OTEL-naive — the orchestrator wires this callback to
+ * the active evidence_retrieval span via emitEvent(). Tests can inject
+ * a recorder to assert per-attempt detail without standing up a tracer.
+ *
+ *   - `retry_scheduled`: a transient failure was observed and a retry
+ *     was scheduled. `backoff_ms` is the slept-or-to-be-slept delay
+ *     before the next attempt; `failure_category` is the classified
+ *     transient category. The terminal outcome is unknown at this point.
+ *   - `pacing_applied`: a per-capability pacing sleep ran before the
+ *     first attempt because an earlier call to the same capability had
+ *     been rate-limited.
+ */
+export type ExecutorEvent =
+  | {
+      kind: 'retry_scheduled';
+      logical_request_id: string;
+      capability: string;
+      attempt: number;
+      failure_category: ClassifiedFailure['category'];
+      backoff_ms: number;
+    }
+  | {
+      kind: 'pacing_applied';
+      logical_request_id: string;
+      capability: string;
+      pacing_ms: number;
+    };
+
 export interface EvidenceExecutorOptions {
   client: MCPClient;
   catalog: DiscoveredCatalog;
@@ -64,6 +94,13 @@ export interface EvidenceExecutorOptions {
    * reproducible delays.
    */
   jitter?: (policy: RetryPolicy) => number;
+  /**
+   * Per-attempt observability sink. Called synchronously inside the
+   * retry loop so events land on the active retrieval span. Optional;
+   * unit tests pass a recorder, the orchestrator wires it to
+   * emitEvent().
+   */
+  onEvent?: (event: ExecutorEvent) => void;
 }
 
 /**
@@ -96,6 +133,7 @@ export class EvidenceExecutor {
   private readonly retryPolicy: RetryPolicy;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly jitter: (policy: RetryPolicy) => number;
+  private readonly onEvent: (event: ExecutorEvent) => void;
 
   constructor(options: EvidenceExecutorOptions) {
     this.client = options.client;
@@ -108,6 +146,7 @@ export class EvidenceExecutor {
     this.jitter =
       options.jitter ??
       ((policy) => Math.random() * policy.jitterMs);
+    this.onEvent = options.onEvent ?? (() => undefined);
   }
 
   async execute(plan: EvidencePlan): Promise<ExecutionResult> {
@@ -137,6 +176,12 @@ export class EvidenceExecutor {
         if (wait > 0) {
           await this.sleep(wait);
           runBackoffSpentMs += wait;
+          this.onEvent({
+            kind: 'pacing_applied',
+            logical_request_id,
+            capability: request.capability,
+            pacing_ms: wait,
+          });
         }
       }
 
@@ -181,6 +226,14 @@ export class EvidenceExecutor {
           );
           if (remainingBudget <= 0) break;
           const actualBackoff = Math.min(desiredBackoff, remainingBudget);
+          this.onEvent({
+            kind: 'retry_scheduled',
+            logical_request_id,
+            capability: request.capability,
+            attempt,
+            failure_category: failure.category,
+            backoff_ms: actualBackoff,
+          });
           await this.sleep(actualBackoff);
           attemptBackoffMs += actualBackoff;
         }

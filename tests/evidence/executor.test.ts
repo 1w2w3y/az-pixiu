@@ -289,6 +289,55 @@ describe('EvidenceExecutor — retry semantics (Phase 3 §Gap 7)', () => {
     expect(transport_summary[0]?.retry_count).toBe(1);
   });
 
+  it('emits per-attempt onEvent hooks for retry and pacing', async () => {
+    // Codex should-fix #3 / self-review #1: per-attempt observability
+    // is what the §Gap 7 design called for so operator debugging "which
+    // attempt of which call burned 180s?" stays answerable in the trace.
+    let costCalls = 0;
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      if (cap !== 'amgmcp_cost_analysis') return { content: cap };
+      costCalls += 1;
+      if (costCalls === 1) throw Object.assign(new Error('quota'), { status: 429 });
+      return { content: { call: costCalls } };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const events: Array<Record<string, unknown>> = [];
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: fastSleep,
+      jitter: noJitter,
+      onEvent: (e) => events.push({ ...e }),
+    });
+    const plan: EvidencePlan = {
+      requests: [
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 1 }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 2 }, intent: 'cost_breakdown' },
+      ],
+    };
+    await executor.execute(plan);
+    // First request: one retry_scheduled event (429 → backoff → success).
+    // Second request: one pacing_applied event (capability was rate-
+    // limited earlier in the run).
+    const retries = events.filter((e) => e.kind === 'retry_scheduled');
+    const paces = events.filter((e) => e.kind === 'pacing_applied');
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toMatchObject({
+      logical_request_id: 'req-1',
+      capability: 'amgmcp_cost_analysis',
+      attempt: 1,
+      failure_category: 'rate_limit',
+      backoff_ms: 30_000,
+    });
+    expect(paces).toHaveLength(1);
+    expect(paces[0]).toMatchObject({
+      logical_request_id: 'req-2',
+      capability: 'amgmcp_cost_analysis',
+      pacing_ms: 30_000,
+    });
+  });
+
   it('paces subsequent calls to a capability after first observed 429', async () => {
     // First call: 429 then success. Second call: success on first attempt
     // but is expected to be preceded by the inter-call pace.
