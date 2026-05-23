@@ -6,6 +6,7 @@ import type {
   RunMetadata,
   EvidenceRecord,
   DataQualityFinding,
+  TransportSummaryEntry,
 } from '../../src/schemas/index.js';
 
 const subId = '11111111-1111-1111-1111-111111111111';
@@ -438,10 +439,12 @@ describe('renderMarkdownReport — Run Quality section (Phase 2.5 §Gap 6)', () 
     actionable_hint: 'apply a tagging policy',
   };
 
-  it('renders a no-issues line when no transport / freshness findings are present', () => {
+  it('renders a quantified baseline when no transport / freshness findings are present', () => {
     const md = renderMarkdownReport({ scope, reasoning, evidence, metadata });
     expect(md).toContain('## Run Quality');
-    expect(md).toContain('No transport-level or freshness findings observed during retrieval.');
+    expect(md).toMatch(
+      /0 transport error\(s\), 0 retry attempt\(s\), 0 freshness finding\(s\) across 0 evidence request\(s\)/,
+    );
   });
 
   it('lists transport findings (rate_limit, authz_gap) in the Run Quality section', () => {
@@ -491,5 +494,150 @@ describe('renderMarkdownReport — Run Quality section (Phase 2.5 §Gap 6)', () 
     });
     expect(md).not.toContain('rate_limit (1)');
     expect(md).not.toContain('Retrieval-stage findings not echoed');
+  });
+});
+
+describe('renderMarkdownReport — Run Quality enrichment (Phase 3 §S3)', () => {
+  const subId = '11111111-1111-1111-1111-111111111111';
+  const cs: Scope = {
+    subscription_ids: [subId],
+    time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
+    analysis_type: 'cost_summary',
+    effective_scope_summary: '1 sub, 7-day cost summary',
+  };
+  const costEvidence: EvidenceRecord[] = [
+    {
+      evidence_id: 'ev-amgmcp_cost_analysis-aaa',
+      source_capability: 'amgmcp_cost_analysis',
+      capability_version: '1.0.0',
+      query_intent: 'cost_breakdown',
+      scope_subset: { subscription_ids: [subId], resource_group_names: null, resource_ids: null },
+      time_window: cs.time_window,
+      payload_ref: {
+        kind: 'inline',
+        data: { rows: [], total: { cost: 0, currency: 'USD' } },
+      },
+      payload_summary: {},
+      caveats: [],
+    },
+  ];
+
+  it('asserts full cost-scope coverage when every scoped sub returned cost evidence', () => {
+    const ts: TransportSummaryEntry[] = [
+      {
+        logical_request_id: 'req-1',
+        capability: 'amgmcp_cost_analysis',
+        scope_subset: { subscription_ids: [subId], resource_group_names: null, resource_ids: null },
+        parameters_digest: 'a'.repeat(64),
+        attempt_count: 1,
+        retry_count: 0,
+        final_outcome: 'success',
+        pacing_applied: false,
+        cumulative_backoff_ms: 0,
+      },
+    ];
+    const md = renderMarkdownReport({
+      scope: cs,
+      reasoning: { facts: [], hypotheses: [], recommendations: [], data_quality: [] },
+      evidence: costEvidence,
+      metadata,
+      transportSummary: ts,
+    });
+    expect(md).toMatch(/full cost-scope coverage \(1 of 1 subscription\(s\) returned cost evidence\)/);
+  });
+
+  it('renders a recovered-throttle capability line WITHOUT requiring a DQ finding', () => {
+    const ts: TransportSummaryEntry[] = [
+      {
+        logical_request_id: 'req-1',
+        capability: 'amgmcp_cost_analysis',
+        scope_subset: { subscription_ids: [subId], resource_group_names: null, resource_ids: null },
+        parameters_digest: 'a'.repeat(64),
+        attempt_count: 3,
+        retry_count: 2,
+        final_outcome: 'success',
+        failure_category: 'rate_limit',
+        pacing_applied: false,
+        cumulative_backoff_ms: 90_000,
+      },
+    ];
+    const md = renderMarkdownReport({
+      scope: cs,
+      reasoning: { facts: [], hypotheses: [], recommendations: [], data_quality: [] },
+      evidence: costEvidence,
+      metadata,
+      transportSummary: ts,
+    });
+    expect(md).toMatch(
+      /amgmcp_cost_analysis:\*\* 2 retry attempt\(s\), 90s cumulative backoff, all attempts ultimately succeeded\./,
+    );
+    // Recovered throttles don't generate DQ findings.
+    expect(md).not.toContain('### dq-throttle');
+  });
+
+  it('renders exhausted throttle with rate_limit DQ above it', () => {
+    const subB = '22222222-2222-2222-2222-222222222222';
+    const multiScope: Scope = { ...cs, subscription_ids: [subId, subB] };
+    const ts: TransportSummaryEntry[] = [
+      {
+        logical_request_id: 'req-1',
+        capability: 'amgmcp_cost_analysis',
+        scope_subset: { subscription_ids: [subId], resource_group_names: null, resource_ids: null },
+        parameters_digest: 'a'.repeat(64),
+        attempt_count: 1,
+        retry_count: 0,
+        final_outcome: 'success',
+        pacing_applied: false,
+        cumulative_backoff_ms: 0,
+      },
+      {
+        logical_request_id: 'req-2',
+        capability: 'amgmcp_cost_analysis',
+        scope_subset: { subscription_ids: [subB], resource_group_names: null, resource_ids: null },
+        parameters_digest: 'b'.repeat(64),
+        attempt_count: 4,
+        retry_count: 3,
+        final_outcome: 'rate_limit',
+        failure_category: 'rate_limit',
+        pacing_applied: true,
+        cumulative_backoff_ms: 210_000,
+      },
+    ];
+    const dq: DataQualityFinding = {
+      dq_id: 'dq-failure-1',
+      category: 'rate_limit',
+      affected_capability: 'amgmcp_cost_analysis',
+      affected_scope_subset: null,
+      consequence_for_analysis: 'rate-limit (429) calling amgmcp_cost_analysis after retries exhausted',
+      impact_on_recommendations: [],
+      actionable_hint: 'Back off and serialize calls per subscription.',
+    };
+    const md = renderMarkdownReport({
+      scope: multiScope,
+      reasoning: { facts: [], hypotheses: [], recommendations: [], data_quality: [] },
+      evidence: costEvidence,
+      metadata,
+      inputDataQuality: [dq],
+      transportSummary: ts,
+    });
+    expect(md).toMatch(/partial cost-scope coverage \(1 of 2 subscription\(s\) returned cost evidence\)/);
+    expect(md).toMatch(/amgmcp_cost_analysis:\*\* 3 retry attempt\(s\), 210s cumulative backoff,/);
+    expect(md).toContain('### dq-failure-1 — rate_limit');
+  });
+
+  it('falls back to non-derivable when the scope has no subscription ids', () => {
+    // Scope with no subs is unusual but possible (e.g. tagging hygiene
+    // surveys); the renderer must not invent counts.
+    const odd: Scope = {
+      ...cs,
+      subscription_ids: [] as unknown as Scope['subscription_ids'],
+    };
+    const md = renderMarkdownReport({
+      scope: odd,
+      reasoning: { facts: [], hypotheses: [], recommendations: [], data_quality: [] },
+      evidence: [],
+      metadata,
+    });
+    expect(md).toContain('cost-scope coverage not derivable from evidence metadata');
   });
 });

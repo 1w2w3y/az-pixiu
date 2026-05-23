@@ -691,6 +691,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       evidence: recordsWithPrior,
       metadata,
       inputDataQuality: allDq,
+      transportSummary: transport_summary,
     });
     await mkdir(ctx.runDir, { recursive: true });
     await writeFile(ctx.reportPath, md, 'utf8');
