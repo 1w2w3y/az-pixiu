@@ -40,6 +40,7 @@ import {
 import { intakeScope, type ScopeIntakeInput } from './scope-intake.js';
 import { computeScopeSignature } from './scope-signature.js';
 import { buildPriorRunContextEvidence } from './prior-run-evidence.js';
+import { checkFreshness } from './freshness.js';
 import { NoopRunHistoryStore, type RunHistoryStore } from '../history/store.js';
 import type {
   Config,
@@ -587,7 +588,17 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
 
   // Merge failure-classified DQs alongside normalizer DQs
   const failureDqs = failures.map((f, i) => failureToDq(f, i));
-  const allDq = [...normalizerDq, ...failureDqs];
+
+  // Freshness check (Phase 3 — design/cost-summary-depth.md §Gap 4):
+  // emit a freshness_partial_window finding when any cost-analysis
+  // window ends within the cost-API's late-posting threshold (default
+  // 48h). Findings flow into allDq, then surface in the Run Quality
+  // report section because freshness categories are in
+  // RUN_QUALITY_CATEGORIES (src/report/markdown.ts).
+  const freshnessDqs = checkFreshness(records, {
+    startingCounter: failureDqs.length,
+  });
+  const allDq = [...normalizerDq, ...failureDqs, ...freshnessDqs];
   process.stdout.write(
     `  normalized ${records.length} evidence record(s); ${allDq.length} data-quality finding(s) so far\n`,
   );

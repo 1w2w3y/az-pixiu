@@ -24,6 +24,14 @@ export const DataQualityCategorySchema = z.enum([
   'partial_coverage',
   'tagging_gap',
   'missing_telemetry',
+  // Phase 3 §Gap 4 (freshness): cost-API posting lag. partial_window is
+  // emitted when the analysis time_window ends within the API's known
+  // late-posting threshold (default 48h) and the totals are therefore
+  // expected to revise upward. uniform_drop is reserved for the
+  // cross-subscription artefact heuristic that lands with the broader
+  // Phase 3 work.
+  'freshness_partial_window',
+  'freshness_uniform_drop',
 ]);
 
 export type DataQualityCategory = z.infer<typeof DataQualityCategorySchema>;

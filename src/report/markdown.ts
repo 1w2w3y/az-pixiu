@@ -84,6 +84,8 @@ const RUN_QUALITY_CATEGORIES: ReadonlySet<DataQualityFinding['category']> = new 
   'schema_mismatch',
   'unsupported_capability',
   'stale_data',
+  'freshness_partial_window',
+  'freshness_uniform_drop',
 ]);
 
 function runQualitySection(inputDataQuality: readonly DataQualityFinding[]): string {
