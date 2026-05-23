@@ -110,6 +110,21 @@ describe('computeCostCoverage', () => {
     expect(out.unavailable_ids).toEqual([]);
   });
 
+  it('renders 1 of 3 when a multi-sub request returns evidence for only one sub', () => {
+    // Codex must-fix #2: scope [A, B, C], evidence record covers only
+    // [A] (because the payload only carried [A] — the normalizer derives
+    // scope_subset from the payload, not the request). Coverage should
+    // be 1 of 3 with the other two as unknown, not full coverage.
+    const out = computeCostCoverage({
+      scope,
+      evidence: [costRecord(subA)],
+    });
+    expect(out.covered_ids).toEqual([subA]);
+    expect(out.unknown_ids).toEqual([subB, subC]);
+    expect(isFullCoverage(out)).toBe(false);
+    expect(hasIncompleteCoverage(out)).toBe(true);
+  });
+
   it('does not mark a sub as unavailable if it also has successful cost evidence', () => {
     // Recovered retry case: sub had a rate_limit early in retries but
     // eventually got evidence — final_outcome should be 'success' but

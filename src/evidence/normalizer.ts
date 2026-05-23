@@ -112,16 +112,18 @@ export class EvidenceNormalizer {
         }
       }
 
-      // For cost-analysis evidence, the response payload always carries
-      // the subscription set it actually covers (`subscriptions[].subscriptionId`
-      // in the live AMG-MCP shape). Promote those into scope_subset when
-      // the request parameters didn't already, so coverage detection
-      // (src/report/coverage.ts) works against any plan source —
-      // playbook (snake_case params), planner LLM (camelCase), or future
-      // multi-sub fan-in.
+      // For cost-analysis evidence, the response payload carries the
+      // subscription set it *actually* covers (`subscriptions[].subscriptionId`
+      // in the live AMG-MCP shape). When that set is present, the
+      // EvidenceRecord's scope_subset must reflect the response — not the
+      // union of request ∪ response. Otherwise a multi-sub request that
+      // returns only one sub's data (the other two were rate-limited /
+      // dropped upstream) would claim coverage for all three. Request-
+      // derived scope still lives on TransportSummaryEntry.scope_subset
+      // for the failure-attribution path.
       const enrichedScope =
         raw.request.capability === 'amgmcp_cost_analysis' || raw.request.capability === 'cost_analysis'
-          ? mergeScopeFromCostPayload(scope_subset, decoded)
+          ? scopeFromCostPayload(scope_subset, decoded)
           : scope_subset;
 
       const record = EvidenceRecordSchema.parse({
@@ -195,15 +197,16 @@ function extractScopeSubset(params: Record<string, unknown>): ScopeSubset {
 }
 
 /**
- * Walk the cost_analysis response payload and union the subscriptions
- * it actually covers into the request-derived scope_subset. The live
- * AMG-MCP shape is `{ subscriptions: [{ subscriptionId, ... }, ...] }`;
- * the tabular fixture shape uses `{ rows: [[..., subscriptionId, ...]] }`
- * less often, so we only mine the structured field. When no usable
- * payload subscriptions are present, the original scope_subset is
- * returned unchanged.
+ * Replace the cost-evidence scope_subset's subscription_ids with the
+ * set the response payload actually returned. The live AMG-MCP shape is
+ * `{ subscriptions: [{ subscriptionId, ... }, ...] }`. Tabular fixture
+ * payloads (rows/columns) don't expose a per-row subscription id, so we
+ * only mine the structured field — when no usable payload subscriptions
+ * are present (e.g. tabular cost rows), the request-derived scope is
+ * returned unchanged. resource_group_names / resource_ids are left
+ * untouched because the response payload doesn't redescribe them.
  */
-function mergeScopeFromCostPayload(initial: ScopeSubset, payload: unknown): ScopeSubset {
+function scopeFromCostPayload(initial: ScopeSubset, payload: unknown): ScopeSubset {
   if (typeof payload !== 'object' || payload === null) return initial;
   const obj = payload as Record<string, unknown>;
   if (!Array.isArray(obj.subscriptions)) return initial;
@@ -215,9 +218,8 @@ function mergeScopeFromCostPayload(initial: ScopeSubset, payload: unknown): Scop
     if (typeof v === 'string' && v.length > 0) ids.push(v);
   }
   if (ids.length === 0) return initial;
-  const merged = new Set<string>([...(initial.subscription_ids ?? []), ...ids]);
   return {
-    subscription_ids: Array.from(merged),
+    subscription_ids: Array.from(new Set(ids)),
     resource_group_names: initial.resource_group_names,
     resource_ids: initial.resource_ids,
   };

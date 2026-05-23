@@ -129,6 +129,45 @@ describe('EvidenceNormalizer — happy path', () => {
     expect(records[0]?.scope_subset.subscription_ids).toEqual(expect.arrayContaining(subs));
   });
 
+  it('prefers response subscriptions over request params when payload covers fewer subs', () => {
+    // Codex must-fix #2: when the planner requests [A, B, C] but AMG-MCP
+    // returns a payload covering only [A], the EvidenceRecord's
+    // scope_subset must reflect what the payload actually covers ([A]),
+    // not the request ∪ response union. Otherwise coverage detection
+    // claims full coverage for a partial payload.
+    const subA = '11111111-1111-1111-1111-111111111111';
+    const subB = '22222222-2222-2222-2222-222222222222';
+    const subC = '33333333-3333-3333-3333-333333333333';
+    const n = new EvidenceNormalizer();
+    const { records } = n.normalize(
+      [
+        rawEvidence({
+          request: {
+            capability: 'amgmcp_cost_analysis',
+            parameters: { subscriptionIds: [subA, subB, subC] },
+            intent: 'cost_breakdown',
+          },
+          result: {
+            content: {
+              periodStart: '2026-05-01',
+              periodEnd: '2026-05-08',
+              subscriptions: [
+                {
+                  subscriptionId: subA,
+                  totalCost: 100,
+                  currency: 'USD',
+                  byService: [],
+                },
+              ],
+            },
+          },
+        }),
+      ],
+      { defaultTimeWindow: defaultWindow },
+    );
+    expect(records[0]?.scope_subset.subscription_ids).toEqual([subA]);
+  });
+
   it('uses request.parameters.time_window when present', () => {
     const customWindow = { start: '2026-04-01T00:00:00Z', end: '2026-04-08T00:00:00Z' };
     const n = new EvidenceNormalizer();
