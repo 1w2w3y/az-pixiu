@@ -63,7 +63,19 @@ const COST_CAPABILITIES: ReadonlySet<string> = new Set([
   'cost_analysis',
 ]);
 
+/**
+ * Category included in the dedupe key so that, when the cross-subscription
+ * `freshness_uniform_drop` heuristic lands (Phase 3 §Gap 4), a
+ * partial-window finding and a uniform-drop finding from the same
+ * capability and end timestamp don't collapse into one rendered finding.
+ * Today's only category is `freshness_partial_window` — the test
+ * `freshness.test.ts` captures the intent so when the second category
+ * lands the dedupe semantics don't quietly regress.
+ */
+type FreshnessCategory = 'freshness_partial_window' | 'freshness_uniform_drop';
+
 interface FreshnessGroup {
+  category: FreshnessCategory;
   source_capability: string;
   time_window: EvidenceRecord['time_window'];
   scope_subsets: ScopeSubset[];
@@ -81,24 +93,28 @@ export function checkFreshness(
 
   const costRecords = evidence.filter((e) => COST_CAPABILITIES.has(e.source_capability));
 
-  // Group affected records by (source_capability, time_window.end) so a
-  // fan-out call that produces N near-identical findings becomes one
+  // Group affected records by (category, source_capability, time_window.end)
+  // so a fan-out call that produces N near-identical findings becomes one
   // (cron-comparison §S1). source_capability is part of the key so a
   // future analyzer producing freshness findings from a different
   // capability with the same end timestamp is not collapsed into this
-  // bucket.
+  // bucket; category is part of the key so the Phase 3
+  // `freshness_uniform_drop` heuristic will not collapse with
+  // `freshness_partial_window` once it lands.
+  const partialCategory: FreshnessCategory = 'freshness_partial_window';
   const groups = new Map<string, FreshnessGroup>();
   for (const record of costRecords) {
     const endMs = new Date(record.time_window.end).getTime();
     if (!Number.isFinite(endMs)) continue;
     const lagMs = nowMs - endMs;
     if (!(lagMs < 0 || lagMs < lagThresholdMs)) continue;
-    const key = `${record.source_capability}::${record.time_window.end}`;
+    const key = `${partialCategory}::${record.source_capability}::${record.time_window.end}`;
     const existing = groups.get(key);
     if (existing) {
       existing.scope_subsets.push(record.scope_subset);
     } else {
       groups.set(key, {
+        category: partialCategory,
         source_capability: record.source_capability,
         time_window: record.time_window,
         scope_subsets: [record.scope_subset],
@@ -112,7 +128,7 @@ export function checkFreshness(
     counter += 1;
     findings.push({
       dq_id: `dq-freshness-${counter}`,
-      category: 'freshness_partial_window',
+      category: group.category,
       affected_capability: group.source_capability,
       affected_scope_subset: mergeScopeSubsets(group.scope_subsets),
       consequence_for_analysis:

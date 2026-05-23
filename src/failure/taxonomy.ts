@@ -30,6 +30,31 @@ export const FAILURE_CATEGORIES = [
 
 export type FailureCategory = (typeof FAILURE_CATEGORIES)[number];
 
+/**
+ * A single failed call's classification — what category it belongs to,
+ * which capability raised it, and operator-facing diagnostic text.
+ *
+ * Deliberately does NOT carry scope context (subscription ids,
+ * resource group names). The cron-comparison-improvements convergence
+ * note proposed adding scope to ClassifiedFailure so coverage detection
+ * could attribute partial failures to specific subscriptions, but the
+ * implementation took a different path: scope context is carried on
+ * {@link import('../schemas/transport.js').TransportSummaryEntry.scope_subset}
+ * instead. Two reasons:
+ *
+ *   1. The executor already extracts scope from the request parameters
+ *      when it writes the TransportSummaryEntry — adding the same field
+ *      to ClassifiedFailure would duplicate it.
+ *   2. Scope is a property of the *call*, not the *classification* —
+ *      the same FailureCategory can arise from a single-sub call or a
+ *      multi-sub call, and ClassifiedFailure stays small and category-
+ *      shaped this way.
+ *
+ * If a future analyzer needs scope alongside a failure (e.g. for a
+ * recommendation tied to one subscription), it should join through
+ * TransportSummaryEntry by capability + parameters_digest, not by
+ * widening this type.
+ */
 export interface ClassifiedFailure {
   category: FailureCategory & DataQualityCategory;
   capability: string;

@@ -98,6 +98,31 @@ describe('checkFreshness — partial-window heuristic', () => {
     );
   });
 
+  it('groups by (category, source_capability, time_window.end) — captures intent for future categories', () => {
+    // Today's only category is freshness_partial_window, so this test
+    // proves the *current* shape: two records with the same capability
+    // and same end timestamp collapse, and a third record with a
+    // different start (but matching end) merges into the same group.
+    // When Phase 3 §Gap 4 lands `freshness_uniform_drop`, the
+    // category-in-the-key contract this test asserts keeps the two
+    // category-families from colliding.
+    const subB = '22222222-2222-2222-2222-222222222222';
+    const records = [
+      makeCostRecord({ evidence_id: 'ev-1', start: '2026-05-08T00:00:00Z', end: '2026-05-15T00:00:00Z' }),
+      {
+        ...makeCostRecord({ evidence_id: 'ev-2', start: '2026-05-09T00:00:00Z', end: '2026-05-15T00:00:00Z' }),
+        scope_subset: { subscription_ids: [subB], resource_group_names: null, resource_ids: null },
+      },
+    ];
+    const findings = checkFreshness(records, { now });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.category).toBe('freshness_partial_window');
+    // The merged scope reflects every input subscription.
+    expect(findings[0]?.affected_scope_subset?.subscription_ids).toEqual(
+      expect.arrayContaining([subId, subB]),
+    );
+  });
+
   it('does not collapse findings from different source capabilities sharing an end timestamp', () => {
     const records = [
       makeCostRecord({ evidence_id: 'ev-1', start: '2026-05-08T00:00:00Z', end: '2026-05-15T00:00:00Z' }),
