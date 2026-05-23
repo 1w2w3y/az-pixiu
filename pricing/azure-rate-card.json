@@ -1,0 +1,74 @@
+{
+  "schema_version": "1",
+  "captured_at": "2026-05-23",
+  "currency": "USD",
+  "notes": [
+    "List-price approximations for the SKUs covered by the Phase 3 waste-detection lanes (design/cost-summary-depth.md §Gap 3).",
+    "Each entry's list_price_weekly_usd is computed from the Azure pricing pages as (hourly * 168) or (monthly / 4.345), rounded to two decimals.",
+    "Reservations, savings plans, hybrid benefit, negotiated discounts, and consumption variability are NOT modelled — see the design's calibrated-estimate guardrails.",
+    "Region is optional: an entry with region omitted is a fallback used when no exact-region match exists.",
+    "This file is the seed Phase 3 ships; SKUs are added when new waste lanes need them, not speculatively."
+  ],
+  "entries": [
+    {
+      "sku": "PublicIPAddress_Standard_Static_IPv4",
+      "list_price_weekly_usd": 0.84,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/ip-addresses/",
+      "notes": "$0.005/hr × 168h. Region-flat for most regions."
+    },
+    {
+      "sku": "PublicIPAddress_Standard_Static_IPv6",
+      "list_price_weekly_usd": 0.84,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/ip-addresses/",
+      "notes": "$0.005/hr × 168h. Region-flat for most regions."
+    },
+    {
+      "sku": "ManagedDisks_Premium_LRS_P4_32GB",
+      "list_price_weekly_usd": 1.16,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/managed-disks/",
+      "notes": "P4 (32 GiB) Premium SSD ~$5.04/mo / 4.345 wk per month."
+    },
+    {
+      "sku": "ManagedDisks_Premium_LRS_P10_128GB",
+      "list_price_weekly_usd": 4.41,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/managed-disks/",
+      "notes": "P10 (128 GiB) Premium SSD ~$19.20/mo / 4.345."
+    },
+    {
+      "sku": "ManagedDisks_StandardSSD_LRS_E10_128GB",
+      "list_price_weekly_usd": 2.13,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/managed-disks/",
+      "notes": "E10 (128 GiB) Standard SSD ~$9.60/mo / 4.345."
+    },
+    {
+      "sku": "AzureDatabaseForPostgreSQL_FlexibleServer_MemoryOptimized_E4s_v3",
+      "list_price_weekly_usd": 72.91,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/postgresql/flexible-server/",
+      "notes": "$0.434/hr × 168h. Compute only — storage / backup not included. Pattern referenced by the 'restored-*' waste lane."
+    },
+    {
+      "sku": "VirtualMachines_Standard_D2as_v4",
+      "list_price_weekly_usd": 14.62,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/virtual-machines/linux/",
+      "notes": "$0.087/hr × 168h. Deallocated VMs do not accrue compute charges; the disks they leave behind do (see ManagedDisks_* entries). Kept here as a reference for waste-lane reporting."
+    },
+    {
+      "sku": "AzureKubernetesService_Control_Plane_Standard",
+      "list_price_weekly_usd": 16.80,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/kubernetes-service/",
+      "notes": "Standard tier control plane: $0.10/hr × 168h. Free tier is $0."
+    },
+    {
+      "sku": "ContainerRegistry_Standard",
+      "list_price_weekly_usd": 4.60,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/container-registry/",
+      "notes": "$20/mo / 4.345."
+    },
+    {
+      "sku": "ContainerRegistry_Premium",
+      "list_price_weekly_usd": 11.51,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/container-registry/",
+      "notes": "$50/mo / 4.345."
+    }
+  ]
+}
