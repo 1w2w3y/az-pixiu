@@ -155,27 +155,37 @@ export class EvidenceExecutor {
     const transport_summary: TransportSummaryEntry[] = [];
 
     // Per-run scheduler state. rateLimitedCapabilities triggers the
-    // inter-call pace; runBackoffSpentMs caps total cumulative backoff.
+    // inter-call pace; runBackoffSpentMs caps total cumulative retry
+    // backoff; runPacingSpentMs caps total cumulative pacing sleeps.
+    // The two budgets are tracked separately so a long retry tail on
+    // one capability does not silently disable pacing on subsequent
+    // calls (Codex should-fix #2).
     const rateLimitedCapabilities = new Set<string>();
     let runBackoffSpentMs = 0;
+    let runPacingSpentMs = 0;
 
     for (let i = 0; i < plan.requests.length; i++) {
       const request = plan.requests[i]!;
       const parameters_digest = parameterDigest(request.parameters);
       const logical_request_id = `req-${i + 1}`;
 
-      const pacing =
+      const wantPacing =
         rateLimitedCapabilities.has(request.capability) &&
         this.retryPolicy.paceAfterRateLimitMs > 0;
-      if (pacing) {
-        const remaining = Math.max(
-          0,
-          this.retryPolicy.totalBudgetMs - runBackoffSpentMs,
-        );
+      let pacing = false;
+      if (wantPacing) {
+        // 0 totalPacingBudgetMs means "no aggregate cap" — pace every
+        // eligible call as long as the per-call value is set.
+        const pacingBudget = this.retryPolicy.totalPacingBudgetMs;
+        const remaining =
+          pacingBudget === 0
+            ? this.retryPolicy.paceAfterRateLimitMs
+            : Math.max(0, pacingBudget - runPacingSpentMs);
         const wait = Math.min(this.retryPolicy.paceAfterRateLimitMs, remaining);
         if (wait > 0) {
           await this.sleep(wait);
-          runBackoffSpentMs += wait;
+          runPacingSpentMs += wait;
+          pacing = true;
           this.onEvent({
             kind: 'pacing_applied',
             logical_request_id,

@@ -22,11 +22,15 @@ export interface RetryPolicy {
   maxAttempts: number;
   /** Base delay for the first retry (before jitter). Default 30s. */
   baseDelayMs: number;
-  /** Cap on the exponential delay (before jitter). Default 180s. */
+  /** Cap on the (exponential + jitter) delay per attempt. Default 180s. */
   maxDelayMs: number;
   /** Width of the jitter window [0, jitterMs). Default 30s. */
   jitterMs: number;
-  /** Per-run cumulative backoff ceiling. Default 540s (9 min). */
+  /**
+   * Per-run cumulative *retry-backoff* ceiling. Counts only backoff
+   * sleeps inside the retry loop; per-capability pacing sleeps are
+   * tracked separately by {@link totalPacingBudgetMs}. Default 540s (9 min).
+   */
   totalBudgetMs: number;
   /**
    * Inter-call pacing applied to subsequent calls of a capability after
@@ -34,6 +38,15 @@ export interface RetryPolicy {
    * 0 disables pacing.
    */
   paceAfterRateLimitMs: number;
+  /**
+   * Per-run cumulative *pacing* ceiling. A run with many cost calls and
+   * one early 429 can otherwise spend the whole runtime pacing. Defaults
+   * to 5× the per-call pace (150s) — generous enough for ~5 paced calls
+   * but tight enough that runaway pacing falls through to a no-pace
+   * dispatch rather than blocking the run indefinitely. 0 disables the
+   * pacing budget (pace every call as long as the per-call value is set).
+   */
+  totalPacingBudgetMs: number;
 }
 
 export const DEFAULT_RETRY_POLICY: RetryPolicy = {
@@ -43,6 +56,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   jitterMs: 30_000,
   totalBudgetMs: 540_000,
   paceAfterRateLimitMs: 30_000,
+  totalPacingBudgetMs: 150_000,
 };
 
 /**
@@ -67,16 +81,17 @@ export function isRetriableCategory(category: FailureCategory): boolean {
  * the delay between the first attempt and the first retry. Pure: jitter
  * is passed in (in [0, jitterMs)) so tests can supply 0 and assert
  * deterministic delays.
+ *
+ * The cap is applied to the full exponential + jitter sum, not just the
+ * exponential portion, so operator-facing language ("retries are capped
+ * at maxDelayMs per attempt") is literal at every retry index.
  */
 export function computeBackoffMs(
   retryIndex: number,
   policy: RetryPolicy,
   jitter: number,
 ): number {
-  const exp = Math.min(
-    policy.baseDelayMs * Math.pow(2, retryIndex),
-    policy.maxDelayMs,
-  );
+  const exp = policy.baseDelayMs * Math.pow(2, retryIndex);
   const j = Math.max(0, Math.min(jitter, policy.jitterMs));
-  return exp + j;
+  return Math.min(exp + j, policy.maxDelayMs);
 }

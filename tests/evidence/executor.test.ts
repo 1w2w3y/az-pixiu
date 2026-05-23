@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { EvidenceExecutor } from '../../src/evidence/executor.js';
+import { DEFAULT_RETRY_POLICY } from '../../src/evidence/retry-policy.js';
 import { MCPClient, type DiscoveredCatalog } from '../../src/mcp/client.js';
 import { FixtureMCPTransport } from '../../src/mcp/fixture.js';
 import type { MCPTransport } from '../../src/mcp/transport.js';
@@ -371,6 +372,94 @@ describe('EvidenceExecutor — retry semantics (Phase 3 §Gap 7)', () => {
     expect(sleeps).toEqual([30_000, 30_000]);
     expect(transport_summary[1]?.pacing_applied).toBe(true);
     expect(transport_summary[0]?.pacing_applied).toBe(false);
+  });
+
+  it('paces independently of the retry-backoff budget (Codex should-fix #2)', async () => {
+    // Prior behaviour: pacing sleeps were charged against totalBudgetMs,
+    // so a long retry tail on capability A could silently disable
+    // pacing on subsequent calls of capability B. Now: pacing has its
+    // own totalPacingBudgetMs and retry backoff is unaffected.
+    let costCalls = 0;
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      if (cap !== 'amgmcp_cost_analysis') return { content: cap };
+      costCalls += 1;
+      if (costCalls === 1) throw Object.assign(new Error('quota'), { status: 429 });
+      return { content: { call: costCalls } };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const sleeps: number[] = [];
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      retryPolicy: {
+        maxAttempts: 4,
+        baseDelayMs: 30_000,
+        maxDelayMs: 180_000,
+        jitterMs: 30_000,
+        // Tiny backoff budget — would have starved pacing under the old
+        // semantics — but pacing has its own pool now.
+        totalBudgetMs: 30_000,
+        paceAfterRateLimitMs: 30_000,
+        totalPacingBudgetMs: 150_000,
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      jitter: noJitter,
+    });
+    const { transport_summary } = await executor.execute({
+      requests: [
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 1 }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 2 }, intent: 'cost_breakdown' },
+      ],
+    });
+    // Backoff for req-1 (30s) + pacing for req-2 (30s) — pacing was not
+    // skipped despite backoff budget being fully consumed by req-1.
+    expect(sleeps).toEqual([30_000, 30_000]);
+    expect(transport_summary[1]?.pacing_applied).toBe(true);
+  });
+
+  it('stops pacing once totalPacingBudgetMs is exhausted', async () => {
+    // Three calls, all paced after an initial 429. Budget allows only
+    // two pacing sleeps; the third request dispatches with no pace.
+    let firstFailed = false;
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      if (cap !== 'amgmcp_cost_analysis') return { content: cap };
+      if (!firstFailed) {
+        firstFailed = true;
+        throw Object.assign(new Error('quota'), { status: 429 });
+      }
+      return { content: 'ok' };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const sleeps: number[] = [];
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      retryPolicy: {
+        ...DEFAULT_RETRY_POLICY,
+        // Two pacings worth of budget.
+        totalPacingBudgetMs: 60_000,
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      jitter: noJitter,
+    });
+    const { transport_summary } = await executor.execute({
+      requests: [
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 1 }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 2 }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 3 }, intent: 'cost_breakdown' },
+        { capability: 'amgmcp_cost_analysis', parameters: { i: 4 }, intent: 'cost_breakdown' },
+      ],
+    });
+    // 30s backoff (req-1) + 30s pace (req-2) + 30s pace (req-3); req-4
+    // would have paced but budget is exhausted, so no fourth sleep.
+    expect(sleeps).toEqual([30_000, 30_000, 30_000]);
+    expect(transport_summary[3]?.pacing_applied).toBe(false);
   });
 
   it('honours total run-level backoff budget', async () => {
