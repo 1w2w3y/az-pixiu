@@ -204,9 +204,9 @@ export function rollupTransportSummary(
 /**
  * Extract a minimal {@link ScopeSubset} from request parameters. The
  * playbooks pass either `subscription_id: <id>` (per-sub fan-out) or
- * `subscription_ids: [<id>, ...]` (multi-sub queries). Planner-LLM output
- * is canonicalised to snake_case at the planner boundary
- * (src/reasoning/planner.ts), so this helper reads one naming convention.
+ * `subscription_ids: [<id>, ...]` (multi-sub queries); both are recognised
+ * so PR 5's coverage helper can answer "which subscriptions did this call
+ * cover?" without re-parsing parameters at render time.
  *
  * Returns null when no scope context is recoverable — the helper treats
  * `null` as "unknown coverage", not "no coverage".
@@ -215,12 +215,22 @@ export function scopeSubsetFromParameters(
   parameters: Readonly<Record<string, unknown>>,
 ): ScopeSubset | null {
   const subIds: string[] = [];
-  const single = parameters.subscription_id;
-  if (typeof single === 'string' && single.length > 0) subIds.push(single);
-  const multi = parameters.subscription_ids;
-  if (Array.isArray(multi)) {
-    for (const item of multi) {
-      if (typeof item === 'string' && item.length > 0) subIds.push(item);
+  // Dual recognition (snake_case + camelCase) is intentional and matches
+  // what {@link extractScopeSubset} does on the EvidenceRecord side. The
+  // playbooks emit snake_case; the planner LLM emits camelCase to satisfy
+  // AMG-MCP's published inputSchema. AMG-MCP requires camelCase on the
+  // wire for cost-analysis, so the executor cannot rewrite keys before
+  // sending — this helper bridges both naming conventions instead.
+  for (const key of ['subscription_id', 'subscriptionId']) {
+    const v = parameters[key];
+    if (typeof v === 'string' && v.length > 0) subIds.push(v);
+  }
+  for (const key of ['subscription_ids', 'subscriptionIds']) {
+    const v = parameters[key];
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (typeof item === 'string' && item.length > 0) subIds.push(item);
+      }
     }
   }
   if (subIds.length === 0) return null;

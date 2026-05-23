@@ -129,7 +129,7 @@ export class Planner {
       }
       const req: EvidenceRequest = {
         capability: r.capability,
-        parameters: canonicalizeParameters(parameters),
+        parameters,
         intent: r.intent,
         ...(r.expected_role ? { expected_role: r.expected_role } : {}),
       };
@@ -138,41 +138,6 @@ export class Planner {
 
     return EvidencePlanSchema.parse({ requests });
   }
-}
-
-/**
- * Canonicalize known camelCase scope-related parameter keys emitted by
- * the planner LLM (mirroring AMG-MCP's published JSON-schema convention)
- * into the snake_case the rest of the agent treats as the contract. The
- * playbooks already emit snake_case, so after this pass executor /
- * normalizer / transport-summary scope extraction only need to recognise
- * one naming. AMG-MCP itself accepts either form on the wire (the
- * playbook-driven runs that emit snake_case work against live), so this
- * does not change what the upstream sees.
- *
- * The set is intentionally narrow — only keys the agent reads downstream
- * for coverage and scope reasoning. Capability-specific parameters
- * (queries, grouping fields, granularity) pass through untouched.
- */
-const PLANNER_CAMEL_TO_SNAKE: Readonly<Record<string, string>> = {
-  subscriptionId: 'subscription_id',
-  subscriptionIds: 'subscription_ids',
-  resourceGroupName: 'resource_group_name',
-  resourceGroupNames: 'resource_group_names',
-  resourceIds: 'resource_ids',
-  timeWindow: 'time_window',
-};
-
-function canonicalizeParameters(
-  parameters: Record<string, unknown>,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(parameters)) {
-    const target = PLANNER_CAMEL_TO_SNAKE[key] ?? key;
-    if (target in out) continue;
-    out[target] = value;
-  }
-  return out;
 }
 
 function buildUserPrompt(scope: Scope, catalog: CapabilityCatalog): string {

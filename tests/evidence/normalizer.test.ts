@@ -72,11 +72,7 @@ describe('EvidenceNormalizer — happy path', () => {
     expect(records[0]?.scope_subset.subscription_ids).toEqual(subs);
   });
 
-  it('ignores camelCase subscriptionIds — canonicalised at the planner boundary', () => {
-    // src/reasoning/planner.ts rewrites subscriptionIds to subscription_ids
-    // before the executor sees the request, so the normalizer reads one
-    // naming convention. Anything still camelCase at this layer (e.g. a
-    // bypassed playbook) is intentionally not recognised.
+  it('recognises camelCase subscriptionIds (planner-LLM convention)', () => {
     const n = new EvidenceNormalizer();
     const subs = [
       '33333333-3333-3333-3333-333333333333',
@@ -94,7 +90,7 @@ describe('EvidenceNormalizer — happy path', () => {
       ],
       { defaultTimeWindow: defaultWindow },
     );
-    expect(records[0]?.scope_subset.subscription_ids).toBeNull();
+    expect(records[0]?.scope_subset.subscription_ids).toEqual(subs);
   });
 
   it('derives cost_analysis scope_subset from response subscriptions[] when request params omit it', () => {
