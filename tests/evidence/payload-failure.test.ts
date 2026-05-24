@@ -22,6 +22,11 @@ describe('inspectPayloadForFailure — unknown capability', () => {
     expect(inspectPayloadForFailure('amgmcp_query_activity_log', null)).toBeUndefined();
     expect(inspectPayloadForFailure('made_up_capability', { subscriptions: [{ error: 'rate limit (429)' }] })).toBeUndefined();
   });
+
+  it('does not treat Object prototype property names as registered inspectors', () => {
+    const payload = { subscriptions: [{ error: 'rate limit (429)', totalCost: 0, byService: [] }] };
+    expect(inspectPayloadForFailure('toString', payload)).toBeUndefined();
+  });
 });
 
 describe('inspectPayloadForFailure — amgmcp_cost_analysis', () => {
@@ -157,6 +162,25 @@ describe('inspectPayloadForFailure — amgmcp_cost_analysis', () => {
     expect(failure).toBeUndefined();
   });
 
+  it('treats whitespace-only error fields as empty', () => {
+    const failure = inspectPayloadForFailure('amgmcp_cost_analysis', {
+      subscriptions: [
+        { subscriptionId: 'a', totalCost: 0, byService: [], error: '   \n\t  ' },
+      ],
+    });
+    expect(failure).toBeUndefined();
+  });
+
+  it('trims matched embedded error text before carrying it as the failure message', () => {
+    const failure = inspectPayloadForFailure('amgmcp_cost_analysis', {
+      subscriptions: [
+        { subscriptionId: 'a', totalCost: 0, byService: [], error: '  rate limit (429) hit  ' },
+      ],
+    });
+    expect(failure?.category).toBe('rate_limit');
+    expect(failure?.message).toBe('rate limit (429) hit');
+  });
+
   it('prioritises rate_limit over auth/authz/schema_mismatch when both are present', () => {
     const failure = inspectPayloadForFailure('amgmcp_cost_analysis', {
       subscriptions: [
@@ -274,6 +298,13 @@ describe('inspectToolCallResultForFailure — decodes MCP envelope', () => {
       content: [{ type: 'text', text: 'this would otherwise match a rate-limit pattern' }],
     };
     expect(inspectToolCallResultForFailure('amgmcp_query_resource_graph', result)).toBeUndefined();
+  });
+
+  it('does not dispatch inherited Object prototype names as inspectors', () => {
+    const result: ToolCallResult = {
+      content: [{ type: 'text', text: '{"subscriptions":[{"error":"rate limit (429)"}]}' }],
+    };
+    expect(inspectToolCallResultForFailure('toString', result)).toBeUndefined();
   });
 
   it('returns undefined when the text envelope is not valid JSON', () => {

@@ -49,6 +49,10 @@ const AUTH_PATTERNS: readonly RegExp[] = [/\bunauthor/i];
 
 const AUTHZ_PATTERNS: readonly RegExp[] = [/forbidden|access denied/i];
 
+function hasInspector(capability: string): capability is keyof typeof INSPECTORS {
+  return Object.hasOwn(INSPECTORS, capability);
+}
+
 /**
  * Inspect a successful `amgmcp_cost_analysis` payload for upstream
  * failures encoded as `subscriptions[*].error`. The live shape is
@@ -81,25 +85,27 @@ const costAnalysisInspector: PayloadInspector = (payload) => {
     if (sub === null || typeof sub !== 'object') continue;
     const s = sub as Record<string, unknown>;
     const err = s.error;
-    if (typeof err !== 'string' || err.length === 0) continue;
+    if (typeof err !== 'string') continue;
+    const errorText = err.trim();
+    if (errorText.length === 0) continue;
 
-    if (RATE_LIMIT_PATTERNS.some((p) => p.test(err))) {
+    if (RATE_LIMIT_PATTERNS.some((p) => p.test(errorText))) {
       return {
         category: 'rate_limit',
         capability: 'amgmcp_cost_analysis',
-        message: err,
+        message: errorText,
         actionable_hint:
           'Back off and retry; if persistent, narrow the analysis scope or stagger calls across subscriptions.',
         source: 'payload-embedded',
         cause: { subscriptionId: stringOrUndefined(s.subscriptionId) },
       };
     }
-    if (!firstAuth && AUTH_PATTERNS.some((p) => p.test(err))) {
-      firstAuth = { sub: s, text: err };
-    } else if (!firstAuthz && AUTHZ_PATTERNS.some((p) => p.test(err))) {
-      firstAuthz = { sub: s, text: err };
+    if (!firstAuth && AUTH_PATTERNS.some((p) => p.test(errorText))) {
+      firstAuth = { sub: s, text: errorText };
+    } else if (!firstAuthz && AUTHZ_PATTERNS.some((p) => p.test(errorText))) {
+      firstAuthz = { sub: s, text: errorText };
     } else if (!firstUnclassified && hasEmptyData(s)) {
-      firstUnclassified = { sub: s, text: err };
+      firstUnclassified = { sub: s, text: errorText };
     }
   }
 
@@ -153,8 +159,8 @@ export function inspectPayloadForFailure(
   capability: string,
   payload: unknown,
 ): ClassifiedFailure | undefined {
-  const inspector = INSPECTORS[capability];
-  if (!inspector) return undefined;
+  if (!hasInspector(capability)) return undefined;
+  const inspector = INSPECTORS[capability] as PayloadInspector;
   return inspector(payload);
 }
 
@@ -169,7 +175,7 @@ export function inspectToolCallResultForFailure(
   capability: string,
   result: ToolCallResult,
 ): ClassifiedFailure | undefined {
-  if (!(capability in INSPECTORS)) return undefined;
+  if (!hasInspector(capability)) return undefined;
   const decoded = decodeForInspection(result);
   return inspectPayloadForFailure(capability, decoded);
 }
