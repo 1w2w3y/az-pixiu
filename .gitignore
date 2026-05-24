@@ -6,8 +6,12 @@ config.json
 node_modules/
 dist/
 
-# Per-run output (per design doc §15.6)
+# Per-run output (per design doc §15.6) — both the canonical `runs/`
+# directory and operator-chosen sibling directories (e.g.
+# `runs-pr1pr2-verify/`, `runs-modelcompare/`) used for ad-hoc
+# verification or cross-model sweeps.
 runs/
+runs-*/
 
 # Local environment overrides
 .env

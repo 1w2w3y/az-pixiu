@@ -1,0 +1,15 @@
+{
+  "_comment": "Anonymized recording of a live amgmcp_cost_analysis payload-embedded 429. Original anchor: runs-modelcompare/gpt-5_4/98bda740-…/run.json evidence[0].payload_ref.data. Subscription IDs replaced with synthetic UUIDs; upstream error wording preserved verbatim for inspector contract testing.",
+  "periodStart": "2026-05-17",
+  "periodEnd": "2026-05-24",
+  "subscriptions": [
+    {
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "totalCost": 0,
+      "byService": [],
+      "byRegion": [],
+      "byResourceType": [],
+      "error": "Cost Management API rate limit (429) hit for subscription '00000000-0000-0000-0000-000000000001' through data source 'azure-monitor-oob'. See https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/manage-automation for QPU quota details."
+    }
+  ]
+}

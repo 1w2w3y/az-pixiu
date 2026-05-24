@@ -160,6 +160,11 @@ describe('EvidenceExecutor — failure paths', () => {
     expect(failures).toHaveLength(1);
     expect(failures[0]?.category).toBe('rate_limit');
     expect(failures[0]?.capability).toBe('amgmcp_cost_analysis');
+    // Wire 429s carry no `source` — the field is reserved for embedded-
+    // payload failures from `inspectPayloadForFailure`, so downstream
+    // surfaces can distinguish "transport 429" from "payload-embedded
+    // 429" without parsing the message.
+    expect(failures[0]?.source).toBeUndefined();
     expect(transport_summary).toHaveLength(2);
     expect(transport_summary[0]?.attempt_count).toBe(4);
     expect(transport_summary[0]?.retry_count).toBe(3);
@@ -496,6 +501,236 @@ describe('EvidenceExecutor — retry semantics (Phase 3 §Gap 7)', () => {
     expect(failures).toHaveLength(1);
     // First retry asks for 30s; second would be 60s but budget allows only 15s.
     expect(sleeps).toEqual([30_000, 15_000]);
+  });
+});
+
+describe('EvidenceExecutor — embedded payload failures (design/embedded-rate-limit.md)', () => {
+  const fastSleep = () => Promise.resolve();
+  const noJitter = () => 0;
+
+  function embeddedRateLimitPayload(subscriptionId: string): Record<string, unknown> {
+    return {
+      periodStart: '2026-05-17',
+      periodEnd: '2026-05-24',
+      subscriptions: [
+        {
+          subscriptionId,
+          totalCost: 0,
+          byService: [],
+          byRegion: [],
+          byResourceType: [],
+          error: `Cost Management API rate limit (429) hit for subscription '${subscriptionId}'.`,
+        },
+      ],
+    };
+  }
+
+  function cleanCostPayload(subscriptionId: string): Record<string, unknown> {
+    return {
+      periodStart: '2026-05-17',
+      periodEnd: '2026-05-24',
+      subscriptions: [
+        {
+          subscriptionId,
+          totalCost: 42.5,
+          byService: [{ service: 'Storage', cost: 42.5 }],
+          byRegion: [],
+          byResourceType: [],
+        },
+      ],
+    };
+  }
+
+  it('is a no-op on clean cost-analysis payloads — first-attempt success, no inspector-induced retry', async () => {
+    // Guards the "no behavior change for clean payloads" invariant: the
+    // executor now invokes the cost-analysis inspector on every successful
+    // `amgmcp_cost_analysis` call, but a payload with real cost data must
+    // still flow straight to raw_evidence on attempt 1.
+    const subId = '00000000-0000-0000-0000-00000000dddd';
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      if (cap !== 'amgmcp_cost_analysis') return { content: cap };
+      return { content: cleanCostPayload(subId), isError: false };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const sleeps: number[] = [];
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      jitter: noJitter,
+    });
+    const { raw_evidence, failures, transport_summary } = await executor.execute({
+      requests: [
+        {
+          capability: 'amgmcp_cost_analysis',
+          parameters: { subscriptionId: subId },
+          intent: 'cost_breakdown',
+        },
+      ],
+    });
+    expect(failures).toHaveLength(0);
+    expect(raw_evidence).toHaveLength(1);
+    expect(transport_summary[0]?.attempt_count).toBe(1);
+    expect(transport_summary[0]?.retry_count).toBe(0);
+    expect(transport_summary[0]?.final_outcome).toBe('success');
+    expect(transport_summary[0]?.observed_failure_categories).toBeUndefined();
+    expect(transport_summary[0]?.cumulative_backoff_ms).toBe(0);
+    expect(sleeps).toEqual([]);
+  });
+
+  it('treats embedded-429 payloads as retriable rate_limit failures (recovers on attempt 3)', async () => {
+    const subId = '00000000-0000-0000-0000-00000000aaaa';
+    let calls = 0;
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      calls += 1;
+      if (cap !== 'amgmcp_cost_analysis') return { content: cap };
+      if (calls <= 2) return { content: embeddedRateLimitPayload(subId), isError: false };
+      return { content: cleanCostPayload(subId), isError: false };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: fastSleep,
+      jitter: noJitter,
+    });
+
+    const { raw_evidence, failures, transport_summary } = await executor.execute({
+      requests: [
+        {
+          capability: 'amgmcp_cost_analysis',
+          parameters: { subscriptionId: subId },
+          intent: 'cost_breakdown',
+        },
+      ],
+    });
+
+    // Recovered: raw evidence pushed once (the clean payload), no
+    // terminal failure, transport row reflects the retry path.
+    expect(raw_evidence).toHaveLength(1);
+    expect(failures).toHaveLength(0);
+    expect(transport_summary).toHaveLength(1);
+    expect(transport_summary[0]?.attempt_count).toBe(3);
+    expect(transport_summary[0]?.retry_count).toBe(2);
+    expect(transport_summary[0]?.final_outcome).toBe('success');
+    expect(transport_summary[0]?.observed_failure_categories).toEqual(['rate_limit']);
+    // Only the clean payload should have made it into raw_evidence.
+    const evContent = raw_evidence[0]?.result.content as Record<string, unknown> | undefined;
+    expect(evContent?.subscriptions).toBeDefined();
+    const subs = evContent?.subscriptions as Array<Record<string, unknown>>;
+    expect(subs[0]?.totalCost).toBe(42.5);
+  });
+
+  it('exhausts retries on persistent embedded-429 and emits a rate_limit failure with no raw_evidence', async () => {
+    const subId = '00000000-0000-0000-0000-00000000bbbb';
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      if (cap !== 'amgmcp_cost_analysis') return { content: cap };
+      return { content: embeddedRateLimitPayload(subId), isError: false };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: fastSleep,
+      jitter: noJitter,
+    });
+
+    const { raw_evidence, failures, transport_summary } = await executor.execute({
+      requests: [
+        {
+          capability: 'amgmcp_cost_analysis',
+          parameters: { subscriptionId: subId },
+          intent: 'cost_breakdown',
+        },
+      ],
+    });
+
+    expect(raw_evidence).toHaveLength(0);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.category).toBe('rate_limit');
+    expect(failures[0]?.source).toBe('payload-embedded');
+    expect(transport_summary).toHaveLength(1);
+    expect(transport_summary[0]?.attempt_count).toBe(4);
+    expect(transport_summary[0]?.retry_count).toBe(3);
+    expect(transport_summary[0]?.final_outcome).toBe('rate_limit');
+    expect(transport_summary[0]?.failure_category).toBe('rate_limit');
+    expect(transport_summary[0]?.observed_failure_categories ?? []).not.toContain('rate_limit');
+    // 30s + 60s + 120s = 210_000 with zero jitter
+    expect(transport_summary[0]?.cumulative_backoff_ms).toBe(210_000);
+  });
+
+  it('rolls up exhausted embedded-429 as rate_limit_seen=true and run outcome exhausted', async () => {
+    const { rollupTransportSummary, runOutcomeFromRollup } = await import(
+      '../../src/schemas/transport.js'
+    );
+    const subId = '00000000-0000-0000-0000-00000000cccc';
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      if (cap !== 'amgmcp_cost_analysis') return { content: cap };
+      return { content: embeddedRateLimitPayload(subId), isError: false };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: fastSleep,
+      jitter: noJitter,
+    });
+    const { transport_summary } = await executor.execute({
+      requests: [
+        {
+          capability: 'amgmcp_cost_analysis',
+          parameters: { subscriptionId: subId },
+          intent: 'cost_breakdown',
+        },
+      ],
+    });
+    const rollup = rollupTransportSummary(transport_summary);
+    expect(rollup.rate_limit_seen).toBe(true);
+    expect(rollup.exhausted_count).toBe(1);
+    expect(runOutcomeFromRollup(rollup)).toBe('exhausted');
+  });
+
+  it('does not retry embedded auth failures (not retriable)', async () => {
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      if (cap !== 'amgmcp_cost_analysis') return { content: cap };
+      return {
+        content: {
+          subscriptions: [
+            {
+              subscriptionId: 'sub-x',
+              totalCost: 0,
+              byService: [],
+              error: 'Unauthorized: token expired',
+            },
+          ],
+        },
+        isError: false,
+      };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: fastSleep,
+      jitter: noJitter,
+    });
+    const { raw_evidence, failures, transport_summary } = await executor.execute({
+      requests: [
+        { capability: 'amgmcp_cost_analysis', parameters: {}, intent: 'cost_breakdown' },
+      ],
+    });
+    expect(raw_evidence).toHaveLength(0);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.category).toBe('auth');
+    expect(transport_summary[0]?.attempt_count).toBe(1);
+    expect(transport_summary[0]?.retry_count).toBe(0);
   });
 });
 
