@@ -177,6 +177,60 @@ describe('inspectPayloadForFailure — amgmcp_cost_analysis', () => {
     expect(failure?.category).toBe('rate_limit');
   });
 
+  it('prioritises auth over authz_gap and schema_mismatch when no rate_limit is present', () => {
+    // Locks in the remainder of the design's priority chain (rate_limit
+    // is already covered above): auth > authz_gap > schema_mismatch.
+    const failure = inspectPayloadForFailure('amgmcp_cost_analysis', {
+      subscriptions: [
+        {
+          subscriptionId: 'sub-weird',
+          totalCost: 0,
+          byService: [],
+          error: 'some unrecognised upstream condition',
+        },
+        {
+          subscriptionId: 'sub-authz',
+          totalCost: 0,
+          byService: [],
+          error: 'Forbidden: insufficient privileges',
+        },
+        {
+          subscriptionId: 'sub-auth',
+          totalCost: 0,
+          byService: [],
+          error: 'Unauthorized: token expired',
+        },
+      ],
+    });
+    expect(failure?.category).toBe('auth');
+    expect((failure?.cause as { subscriptionId?: string } | undefined)?.subscriptionId).toBe(
+      'sub-auth',
+    );
+  });
+
+  it('prioritises authz_gap over schema_mismatch when no rate_limit or auth is present', () => {
+    const failure = inspectPayloadForFailure('amgmcp_cost_analysis', {
+      subscriptions: [
+        {
+          subscriptionId: 'sub-weird',
+          totalCost: 0,
+          byService: [],
+          error: 'some unrecognised upstream condition',
+        },
+        {
+          subscriptionId: 'sub-authz',
+          totalCost: 0,
+          byService: [],
+          error: 'Access denied to subscription',
+        },
+      ],
+    });
+    expect(failure?.category).toBe('authz_gap');
+    expect((failure?.cause as { subscriptionId?: string } | undefined)?.subscriptionId).toBe(
+      'sub-authz',
+    );
+  });
+
   it('carries the offending subscriptionId in the cause for forensics', () => {
     const failure = inspectPayloadForFailure('amgmcp_cost_analysis', {
       subscriptions: [
@@ -220,5 +274,16 @@ describe('inspectToolCallResultForFailure — decodes MCP envelope', () => {
       content: [{ type: 'text', text: 'this would otherwise match a rate-limit pattern' }],
     };
     expect(inspectToolCallResultForFailure('amgmcp_query_resource_graph', result)).toBeUndefined();
+  });
+
+  it('returns undefined when the text envelope is not valid JSON', () => {
+    // Falls through `tryParseJson` (returns undefined) to the raw
+    // `result.content` array — which is not the cost-analysis shape, so
+    // the inspector cleanly returns undefined rather than throwing.
+    const result: ToolCallResult = {
+      content: [{ type: 'text', text: 'totally not json {{}' }],
+      isError: false,
+    };
+    expect(inspectToolCallResultForFailure('amgmcp_cost_analysis', result)).toBeUndefined();
   });
 });

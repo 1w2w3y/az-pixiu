@@ -160,6 +160,11 @@ describe('EvidenceExecutor — failure paths', () => {
     expect(failures).toHaveLength(1);
     expect(failures[0]?.category).toBe('rate_limit');
     expect(failures[0]?.capability).toBe('amgmcp_cost_analysis');
+    // Wire 429s carry no `source` — the field is reserved for embedded-
+    // payload failures from `inspectPayloadForFailure`, so downstream
+    // surfaces can distinguish "transport 429" from "payload-embedded
+    // 429" without parsing the message.
+    expect(failures[0]?.source).toBeUndefined();
     expect(transport_summary).toHaveLength(2);
     expect(transport_summary[0]?.attempt_count).toBe(4);
     expect(transport_summary[0]?.retry_count).toBe(3);
@@ -535,6 +540,46 @@ describe('EvidenceExecutor — embedded payload failures (design/embedded-rate-l
       ],
     };
   }
+
+  it('is a no-op on clean cost-analysis payloads — first-attempt success, no inspector-induced retry', async () => {
+    // Guards the "no behavior change for clean payloads" invariant: the
+    // executor now invokes the cost-analysis inspector on every successful
+    // `amgmcp_cost_analysis` call, but a payload with real cost data must
+    // still flow straight to raw_evidence on attempt 1.
+    const subId = '00000000-0000-0000-0000-00000000dddd';
+    const transport = new FakeTransport(phase1Catalog, async (cap) => {
+      if (cap !== 'amgmcp_cost_analysis') return { content: cap };
+      return { content: cleanCostPayload(subId), isError: false };
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const sleeps: number[] = [];
+    const executor = new EvidenceExecutor({
+      client,
+      catalog,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      jitter: noJitter,
+    });
+    const { raw_evidence, failures, transport_summary } = await executor.execute({
+      requests: [
+        {
+          capability: 'amgmcp_cost_analysis',
+          parameters: { subscriptionId: subId },
+          intent: 'cost_breakdown',
+        },
+      ],
+    });
+    expect(failures).toHaveLength(0);
+    expect(raw_evidence).toHaveLength(1);
+    expect(transport_summary[0]?.attempt_count).toBe(1);
+    expect(transport_summary[0]?.retry_count).toBe(0);
+    expect(transport_summary[0]?.final_outcome).toBe('success');
+    expect(transport_summary[0]?.observed_failure_categories).toBeUndefined();
+    expect(transport_summary[0]?.cumulative_backoff_ms).toBe(0);
+    expect(sleeps).toEqual([]);
+  });
 
   it('treats embedded-429 payloads as retriable rate_limit failures (recovers on attempt 3)', async () => {
     const subId = '00000000-0000-0000-0000-00000000aaaa';

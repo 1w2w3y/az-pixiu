@@ -86,12 +86,10 @@ export interface ClassifiedFailure {
  */
 export class EmbeddedPayloadFailure extends Error {
   public readonly failure: ClassifiedFailure;
-  public readonly resultSnapshot: unknown;
-  constructor(failure: ClassifiedFailure, resultSnapshot: unknown) {
+  constructor(failure: ClassifiedFailure) {
     super(`Embedded ${failure.category} in ${failure.capability} payload: ${failure.message}`);
     this.name = 'EmbeddedPayloadFailure';
     this.failure = failure;
-    this.resultSnapshot = resultSnapshot;
   }
 }
 

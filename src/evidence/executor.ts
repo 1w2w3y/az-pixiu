@@ -227,7 +227,7 @@ export class EvidenceExecutor {
             request.capability,
             result,
           );
-          if (embedded) throw new EmbeddedPayloadFailure(embedded, result);
+          if (embedded) throw new EmbeddedPayloadFailure(embedded);
           success = result;
           lastFailure = undefined;
           break;
