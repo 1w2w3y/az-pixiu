@@ -109,6 +109,12 @@ A new section §7 in [cost-summary-depth.md](cost-summary-depth.md) — *or* a s
 
 **Phase 2.5+ or early Phase 3.** This unblocks Gap 1 (waste detection) at the operationally honest level — running waste lanes across 8 subs sequentially is materially throttle-prone, and the lanes are useless if they fail half the time. It should land *before* the waste-lane work in [§Implementation sequencing](cost-summary-depth.md#implementation-sequencing) step 6.
 
+### Amendment (2026-05-23): payload-embedded rate limits
+
+Live AMG-MCP testing surfaced a second detection surface that this §Gap 7 design did not anticipate. The `amgmcp_cost_analysis` tool wraps upstream Cost Management 429s into a schema-valid 200-OK payload (`subscriptions[*].error: "Cost Management API rate limit (429) hit …"`) rather than surfacing them as MCP transport errors. The retry substrate described above is correct; its **trigger surface is one detection layer too narrow** — `client.invoke()` never throws, so `classifyFailure()` never runs, and the retry loop is bypassed entirely. `transport_summary` rows record `final_outcome=success` for runs that produced zero usable cost data.
+
+The payload-embedded case shares the retry substrate (backoff, jitter, pacing, budget, transport rollup) and only needs a new detection layer that runs between `client.invoke()` success and `raw_evidence.push()`. The full design — detection contract, executor insertion point, proactive 60s pacing borrowed from the reference cron, coverage truth-telling, and 5-PR implementation sequencing — lives in [embedded-rate-limit.md](embedded-rate-limit.md). When that work lands, §Gap 7's retry substrate handles **both** wire-level and payload-embedded rate limits through the same mechanism.
+
 ---
 
 ## Smaller items, candidates for early landing

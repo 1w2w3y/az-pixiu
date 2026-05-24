@@ -1,6 +1,11 @@
 import { parameterDigest } from '../mcp/digest.js';
-import { classifyFailure, type ClassifiedFailure } from '../failure/taxonomy.js';
+import {
+  classifyFailure,
+  EmbeddedPayloadFailure,
+  type ClassifiedFailure,
+} from '../failure/taxonomy.js';
 import type { MCPClient, DiscoveredCatalog } from '../mcp/client.js';
+import { inspectToolCallResultForFailure } from './payload-failure.js';
 import type { EvidencePlan, EvidenceRequest, ToolCallResult } from '../schemas/index.js';
 import {
   failureCategoryToOutcome,
@@ -209,7 +214,21 @@ export class EvidenceExecutor {
       while (attempt < this.retryPolicy.maxAttempts) {
         attempt += 1;
         try {
-          success = await this.client.invoke(request.capability, request.parameters);
+          const result = await this.client.invoke(request.capability, request.parameters);
+          // Embedded-failure detection (design/embedded-rate-limit.md).
+          // For capabilities with a registered inspector (today only
+          // `amgmcp_cost_analysis`), look inside the otherwise-
+          // successful payload for upstream failures encoded as
+          // structured fields. Throwing here routes the result through
+          // the same catch block as wire-level failures so retry,
+          // backoff, pacing, budget, and `transport_summary` accounting
+          // are reused without modification.
+          const embedded = inspectToolCallResultForFailure(
+            request.capability,
+            result,
+          );
+          if (embedded) throw new EmbeddedPayloadFailure(embedded, result);
+          success = result;
           lastFailure = undefined;
           break;
         } catch (err) {

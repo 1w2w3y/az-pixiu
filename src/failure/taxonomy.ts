@@ -60,7 +60,39 @@ export interface ClassifiedFailure {
   capability: string;
   message: string;
   actionable_hint?: string;
+  /**
+   * Where the failure was detected. `transport` is the default — an
+   * exception thrown by `MCPClient.invoke()`, classified by HTTP status
+   * or error message heuristics below. `payload-embedded` means the
+   * call returned a 200-OK envelope but the per-capability inspector
+   * in `src/evidence/payload-failure.ts` found a failure signal inside
+   * the payload (e.g. `subscriptions[*].error = "rate limit (429) …"`
+   * on `amgmcp_cost_analysis`). Carried so downstream surfaces can tell
+   * "wire 429" apart from "embedded 429" without parsing messages.
+   */
+  source?: 'transport' | 'payload-embedded';
   cause?: unknown;
+}
+
+/**
+ * Thrown by {@link import('../evidence/executor.js').EvidenceExecutor}
+ * when the per-capability payload inspector detects a failure embedded
+ * inside an otherwise-successful {@link
+ * import('../schemas/index.js').ToolCallResult}. The exception carries
+ * the already-classified failure so {@link classifyFailure} can
+ * short-circuit and the retry / backoff substrate runs unchanged.
+ * Lives in this module (rather than `evidence/payload-failure.ts`) so
+ * the failure layer has no upward dependency on the evidence layer.
+ */
+export class EmbeddedPayloadFailure extends Error {
+  public readonly failure: ClassifiedFailure;
+  public readonly resultSnapshot: unknown;
+  constructor(failure: ClassifiedFailure, resultSnapshot: unknown) {
+    super(`Embedded ${failure.category} in ${failure.capability} payload: ${failure.message}`);
+    this.name = 'EmbeddedPayloadFailure';
+    this.failure = failure;
+    this.resultSnapshot = resultSnapshot;
+  }
 }
 
 export interface ClassificationContext {
@@ -82,6 +114,14 @@ export function classifyFailure(
   context: ClassificationContext,
 ): ClassifiedFailure {
   const capability = context.capability;
+
+  // 0. Payload-embedded failures are already classified by the
+  //    per-capability inspector — short-circuit so heuristics below
+  //    don't re-run and the source/cause carried by the inspector are
+  //    preserved verbatim through the retry path.
+  if (err instanceof EmbeddedPayloadFailure) {
+    return err.failure;
+  }
 
   // 1. Specific error classes
   if (err instanceof CapabilityNotAllowedError) {
