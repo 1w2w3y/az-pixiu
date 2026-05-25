@@ -246,19 +246,24 @@ describe('FilesystemRunHistoryStore', () => {
     expect(result.map((r) => r.run_id)).toEqual(['00000000-0000-0000-0000-000000000001']);
   });
 
-  it('walks one level deep so eval-runner runs are included', async () => {
+  it('excludes runs/eval/ artefacts from findPriorRuns so synthetic eval runs do not leak into operator-facing history', async () => {
     // Eval runner layout: `runs/eval/<item-id>/<run-id>/run.json`.
     await writeRun(
       tmp,
       makeArtifact({ run_id: '00000000-0000-0000-0000-000000000001', started_at: '2026-05-01T00:00:00Z' }),
       ['eval', 'cost-summary-001'],
     );
+    // A non-eval run alongside, to prove findPriorRuns still finds it.
+    await writeRun(
+      tmp,
+      makeArtifact({ run_id: '00000000-0000-0000-0000-000000000002', started_at: '2026-05-02T00:00:00Z' }),
+    );
     const store = new FilesystemRunHistoryStore({ runsDir: tmp });
     const result = await store.findPriorRuns({
       scope_signature: computeScopeSignature(baseScope),
       analysis_type: 'cost_summary',
     });
-    expect(result).toHaveLength(1);
+    expect(result.map((r) => r.run_id)).toEqual(['00000000-0000-0000-0000-000000000002']);
   });
 
   it('skips malformed run.json without throwing', async () => {

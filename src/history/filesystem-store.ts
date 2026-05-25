@@ -29,12 +29,15 @@ import { rollupTransportSummary } from '../schemas/transport.js';
  *     written artefact (rare, since the writer is atomic) or an
  *     artefact written by an incompatible schema_version should not
  *     fail the analysis that called us.
- *   - Subdirectories without a `run.json` (e.g. `runs/eval/...` from
- *     the eval runner) are walked one level deep so eval-runner runs
- *     are included alongside `pixiu analyze` runs.
+ *   - The `runs/eval/` subtree is *excluded* from `findPriorRuns` so
+ *     synthetic eval-runner artefacts cannot leak into operator-facing
+ *     analyze history. `findRunById` still honours explicitly-named
+ *     ids under `runs/eval/`, so the operator override path can still
+ *     reach them when intended.
  *   - Results are sorted descending by `started_at` so the caller can
  *     trivially compute "N consecutive runs since" by walking the list.
  */
+const EVAL_SUBDIR = 'eval';
 export class FilesystemRunHistoryStore implements RunHistoryStore {
   private readonly runsDir: string;
 
@@ -58,6 +61,7 @@ export class FilesystemRunHistoryStore implements RunHistoryStore {
     }
 
     for (const entry of entries) {
+      if (entry === EVAL_SUBDIR) continue;
       const entryPath = join(this.runsDir, entry);
       const summary = await this.readDirectory(entryPath);
       if (summary) summaries.push(summary);
