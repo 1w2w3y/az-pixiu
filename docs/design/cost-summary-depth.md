@@ -131,7 +131,9 @@ This becomes a new `EvidenceRecord` with `intent: 'prior_run_context'` flowing t
 
 The cross-run markers are surfaced as report content (§"Cross-run continuity markers" in [reporting PRD](../prd/reporting-and-recommendations.md) FR-16) and as Langfuse trace attributes (`recommendation.continuity_weeks`, `waste_lane.unchanged_count`) so the maintainer journey "monitor agent quality over time" gets a continuity dimension.
 
-**Stable recommendation identity.** The reasoner output schema gains a `recommendation_signature` field. The reasoner computes it deterministically from the lane + cluster prefix + dominant SKU; the LLM is prompted not to use it as the recommendation title, only as an attribute. This is what makes "same recommendation surfaced again in run N" tractable across LLM-rewritten output.
+**Stable recommendation identity.** The reasoner output schema gains a `recommendation_signature` field. The reasoner computes it deterministically from the lane + cluster prefix + dominant SKU; the LLM is prompted not to use it as the recommendation title, only as an attribute. This is what makes "same recommendation surfaced again in run N" tractable across LLM-rewritten output.[^v1-sig]
+
+[^v1-sig]: Phase 2.5 closeout note: v1 ships the LLM-emitted fallback slug (rule #15 in `prompts/reasoner.v1.md`) because the lane / cluster / SKU inputs above do not yet exist. The deterministic computation lands in `src/reasoning/recommendation-signature.ts` and is called by Phase 3 lane code once those structured inputs arrive. The schema field is unchanged either way (a single normalised string), so the substrate is forward-compatible without a follow-up migration.
 
 **Substrate options, named not chosen.**
 
