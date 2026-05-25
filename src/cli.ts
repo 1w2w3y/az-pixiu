@@ -49,6 +49,10 @@ analyze flags:
   --use-playbook                   skip the planner LLM; use the deterministic cost-surprise playbook
   --mock-model                     skip Foundry; use a hard-coded mock model response
   --output-dir <path>              where to write the run subdir (default: runs/)
+  --prior-run <run-id>             cross-run continuity (Phase 2.5 §Gap 5): inject the named prior run
+                                   into the reasoner's evidence regardless of scope match. If the id is
+                                   not found in the runs directory, the run still completes and a
+                                   data-quality finding is emitted.
   --observability <mode>           noop | memory | langfuse | ms-otel  (default: langfuse — requires
                                    LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL)
                                    ms-otel uses the Microsoft OpenTelemetry Distro; exports to
@@ -113,6 +117,8 @@ interface AnalyzeArgs {
   usePlaybook: boolean;
   mockModel: boolean;
   outputDir?: string;
+  /** Operator override for cross-run continuity (Phase 2.5 §Gap 5). */
+  priorRunId?: string;
   observability: 'noop' | 'memory' | 'langfuse' | 'ms-otel';
   credentialMode: CredentialMode;
 }
@@ -138,6 +144,7 @@ async function main(): Promise<number> {
       'use-playbook': { type: 'boolean' },
       'mock-model': { type: 'boolean' },
       'output-dir': { type: 'string' },
+      'prior-run': { type: 'string' },
       'fixtures-root': { type: 'string' },
       observability: { type: 'string' },
       models: { type: 'string' },
@@ -207,6 +214,9 @@ async function runAnalyzeCommand(
     usePlaybook: Boolean(values['use-playbook']),
     mockModel: Boolean(values['mock-model']),
     outputDir: stringOrUndefined(values['output-dir']),
+    ...(stringOrUndefined(values['prior-run']) !== undefined
+      ? { priorRunId: stringOrUndefined(values['prior-run']) }
+      : {}),
     observability: parseObservability(values.observability),
     credentialMode: parseCredential(values.credential),
   };
@@ -305,6 +315,7 @@ async function runAnalyzeCommand(
       observabilityMode: args.observability,
       ...(args.fixture ? { fixtureId: args.fixture } : {}),
       ...(langfusePublisher ? { langfusePublisher } : {}),
+      ...(args.priorRunId !== undefined ? { priorRunId: args.priorRunId } : {}),
       runHistoryStore,
     });
 

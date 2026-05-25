@@ -72,6 +72,19 @@ export interface FindPriorRunsOptions {
 
 export interface RunHistoryStore {
   findPriorRuns(options: FindPriorRunsOptions): Promise<RunSummary[]>;
+  /**
+   * Look up a single prior run by id, without applying the scope or
+   * analysis_type filters that {@link findPriorRuns} uses. Returns
+   * `undefined` when no run with the given id is found.
+   *
+   * Powers the `--prior-run <run-id>` operator override
+   * (design/cost-summary-depth.md §Gap 5 trade-off (c)): when an operator
+   * wants to inject a specific prior run for continuity review even though
+   * the scope drifted (e.g., an RBAC denial dropped one subscription),
+   * the orchestrator calls this instead of `findPriorRuns` and marks the
+   * resulting synthetic evidence record with `match_mode: 'operator_override'`.
+   */
+  findRunById(runId: string): Promise<RunSummary | undefined>;
 }
 
 /**
@@ -84,5 +97,9 @@ export interface RunHistoryStore {
 export class NoopRunHistoryStore implements RunHistoryStore {
   async findPriorRuns(): Promise<RunSummary[]> {
     return [];
+  }
+
+  async findRunById(): Promise<RunSummary | undefined> {
+    return undefined;
   }
 }

@@ -269,6 +269,126 @@ describe('runAnalysis — fixture transport + mock model + playbook', () => {
     }
   });
 
+  it('--prior-run override: calls findRunById, injects operator_override match_mode with caveat on scope mismatch', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'azp-orc-override-'));
+    try {
+      const scope = intakeScope({
+        subscription_ids: [subId],
+        resource_group_names: ['rg-db-prod'],
+        time_window_start: '2026-05-01T00:00:00Z',
+        time_window_end: '2026-05-08T00:00:00Z',
+        baseline_window_start: '2026-04-24T00:00:00Z',
+        baseline_window_end: '2026-05-01T00:00:00Z',
+      });
+
+      const namedPrior: RunSummary = {
+        run_id: '00000000-0000-0000-0000-00000000aaaa',
+        scope_signature: 'a-different-signature',
+        analysis_type: 'cost_surprise',
+        started_at: '2026-04-17T00:00:00Z',
+        recommendations: [
+          {
+            recommendation_id: 'rec-prior-1',
+            recommendation_signature: 'pg-sku-upgrade-investigation',
+            statement: 'consider reviewing the PG SKU upgrade timeline (operator-named prior)',
+            priority: 'high',
+          },
+        ],
+      };
+      const byId = new Map<string, RunSummary>([[namedPrior.run_id, namedPrior]]);
+      const recordingStore = new RecordingRunHistoryStore([], byId);
+
+      const result = await runAnalysis({
+        config,
+        scope,
+        client: new MCPClient({
+          transport: new FixtureMCPTransport({ fixturePath: 'fixtures/cost-surprise-001' }),
+        }),
+        model: new MockModelClient({ responses: emptyReasoningResponse() }),
+        modelProvider: 'mock',
+        credentialIdentity: describeCredential('mock'),
+        usePlaybook: true,
+        runsDir: tmp,
+        observabilityMode: 'memory',
+        runHistoryStore: recordingStore,
+        priorRunId: namedPrior.run_id,
+      });
+
+      expect(recordingStore.findByIdCalls).toEqual([namedPrior.run_id]);
+      expect(recordingStore.queries).toHaveLength(0);
+
+      const runJson = JSON.parse(await readFile(result.run_json_path, 'utf8')) as {
+        evidence: Array<{
+          query_intent: string;
+          payload_ref: { kind: string; data?: { match_mode?: string } };
+          caveats: string[];
+        }>;
+      };
+      const synthetic = runJson.evidence.find((e) => e.query_intent === 'prior_run_context');
+      expect(synthetic).toBeDefined();
+      expect(synthetic!.payload_ref.kind).toBe('inline');
+      expect(synthetic!.payload_ref.data?.match_mode).toBe('operator_override');
+      expect(synthetic!.caveats.some((c) => /did not exactly match/.test(c))).toBe(true);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('--prior-run override: emits a data-quality finding and stderr warning when the id is not found', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'azp-orc-missing-'));
+    const stderrChunks: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: unknown): boolean => {
+      stderrChunks.push(typeof chunk === 'string' ? chunk : String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const scope = intakeScope({
+        subscription_ids: [subId],
+        resource_group_names: ['rg-db-prod'],
+        time_window_start: '2026-05-01T00:00:00Z',
+        time_window_end: '2026-05-08T00:00:00Z',
+        baseline_window_start: '2026-04-24T00:00:00Z',
+        baseline_window_end: '2026-05-01T00:00:00Z',
+      });
+
+      const recordingStore = new RecordingRunHistoryStore([], new Map());
+
+      const result = await runAnalysis({
+        config,
+        scope,
+        client: new MCPClient({
+          transport: new FixtureMCPTransport({ fixturePath: 'fixtures/cost-surprise-001' }),
+        }),
+        model: new MockModelClient({ responses: emptyReasoningResponse() }),
+        modelProvider: 'mock',
+        credentialIdentity: describeCredential('mock'),
+        usePlaybook: true,
+        runsDir: tmp,
+        observabilityMode: 'memory',
+        runHistoryStore: recordingStore,
+        priorRunId: 'does-not-exist',
+      });
+
+      expect(recordingStore.findByIdCalls).toEqual(['does-not-exist']);
+      expect(stderrChunks.join('')).toMatch(/--prior-run "does-not-exist" not found/);
+
+      const runJson = JSON.parse(await readFile(result.run_json_path, 'utf8')) as {
+        input_data_quality?: Array<{ category: string; affected_capability: string | null }>;
+        evidence: Array<{ query_intent: string }>;
+      };
+      expect(
+        runJson.input_data_quality?.some(
+          (d) => d.category === 'empty_result' && d.affected_capability === 'az_pixiu_run_history',
+        ),
+      ).toBe(true);
+      expect(runJson.evidence.some((e) => e.query_intent === 'prior_run_context')).toBe(false);
+    } finally {
+      process.stderr.write = originalWrite;
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('makes no behavioural change when no run-history store is supplied (default no-op)', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'azp-orc-no-history-'));
     try {
@@ -354,12 +474,21 @@ class RecordingScorePublisher {
 
 class RecordingRunHistoryStore implements RunHistoryStore {
   readonly queries: FindPriorRunsOptions[] = [];
+  readonly findByIdCalls: string[] = [];
 
-  constructor(private readonly priorRuns: RunSummary[]) {}
+  constructor(
+    private readonly priorRuns: RunSummary[],
+    private readonly byId: Map<string, RunSummary> = new Map(),
+  ) {}
 
   async findPriorRuns(options: FindPriorRunsOptions): Promise<RunSummary[]> {
     this.queries.push(options);
     return this.priorRuns.map((r) => ({ ...r, scope_signature: options.scope_signature }));
+  }
+
+  async findRunById(runId: string): Promise<RunSummary | undefined> {
+    this.findByIdCalls.push(runId);
+    return this.byId.get(runId);
   }
 }
 

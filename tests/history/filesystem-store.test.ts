@@ -311,6 +311,54 @@ describe('FilesystemRunHistoryStore', () => {
     expect(result[0]?.transport_rollup).toBeUndefined();
   });
 
+  describe('findRunById', () => {
+    it('returns the summary for a run that exists directly under runs/', async () => {
+      await writeRun(
+        tmp,
+        makeArtifact({
+          run_id: '00000000-0000-0000-0000-000000000099',
+          started_at: '2026-05-01T00:00:00Z',
+        }),
+      );
+      const store = new FilesystemRunHistoryStore({ runsDir: tmp });
+      const result = await store.findRunById('00000000-0000-0000-0000-000000000099');
+      expect(result?.run_id).toBe('00000000-0000-0000-0000-000000000099');
+    });
+
+    it('returns the summary for a run under runs/eval/<item>/<id>/run.json when explicitly named', async () => {
+      await writeRun(
+        tmp,
+        makeArtifact({
+          run_id: '00000000-0000-0000-0000-0000000000ab',
+          started_at: '2026-05-01T00:00:00Z',
+        }),
+        ['eval', 'cost-summary-001'],
+      );
+      const store = new FilesystemRunHistoryStore({ runsDir: tmp });
+      const result = await store.findRunById('00000000-0000-0000-0000-0000000000ab');
+      expect(result?.run_id).toBe('00000000-0000-0000-0000-0000000000ab');
+    });
+
+    it('returns undefined for an id that is not present', async () => {
+      await writeRun(
+        tmp,
+        makeArtifact({
+          run_id: '00000000-0000-0000-0000-000000000001',
+          started_at: '2026-05-01T00:00:00Z',
+        }),
+      );
+      const store = new FilesystemRunHistoryStore({ runsDir: tmp });
+      const result = await store.findRunById('does-not-exist');
+      expect(result).toBeUndefined();
+    });
+
+    it('returns undefined when the runs directory itself does not exist', async () => {
+      const store = new FilesystemRunHistoryStore({ runsDir: join(tmp, 'missing') });
+      const result = await store.findRunById('anything');
+      expect(result).toBeUndefined();
+    });
+  });
+
   it('rolls up transport_summary entries when present on the artefact', async () => {
     const artifact = makeArtifact({
       run_id: '00000000-0000-0000-0000-000000000002',

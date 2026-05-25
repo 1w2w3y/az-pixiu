@@ -73,6 +73,45 @@ export class FilesystemRunHistoryStore implements RunHistoryStore {
   }
 
   /**
+   * Look up a single prior run by id. Direct lookup at
+   * `runs/<run-id>/run.json` first (the common case — the layout the
+   * orchestrator writes). Falls back to a bounded walk through nested
+   * subdirectories (including `runs/eval/<item-id>/<run-id>/run.json`)
+   * so an operator can pass an eval-runner id explicitly via
+   * `--prior-run` even though those ids are excluded from the default
+   * `findPriorRuns` walk.
+   */
+  async findRunById(runId: string): Promise<RunSummary | undefined> {
+    const direct = await tryReadRunJson(join(this.runsDir, runId, 'run.json'));
+    if (direct) return summarise(direct);
+
+    let entries: string[];
+    try {
+      entries = await readdir(this.runsDir);
+    } catch (err) {
+      if (isNoEntError(err)) return undefined;
+      throw err;
+    }
+
+    for (const entry of entries) {
+      const entryPath = join(this.runsDir, entry);
+      const candidate = join(entryPath, runId, 'run.json');
+      const nested = await tryReadRunJson(candidate);
+      if (nested && nested.metadata.run_id === runId) return summarise(nested);
+
+      // Two-level nesting (e.g. runs/eval/<item-id>/<run-id>/run.json).
+      const statResult = await stat(entryPath).catch(() => undefined);
+      if (!statResult?.isDirectory()) continue;
+      const children = await readdir(entryPath).catch(() => []);
+      for (const child of children) {
+        const deeper = await tryReadRunJson(join(entryPath, child, runId, 'run.json'));
+        if (deeper && deeper.metadata.run_id === runId) return summarise(deeper);
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Try to read a `run.json` directly under `entryPath`. If `entryPath`
    * is a directory that contains nested `<id>/run.json` files instead
    * (the eval runner's `runs/eval/<item-id>/<run-id>/run.json` layout),

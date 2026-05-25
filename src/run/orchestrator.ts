@@ -115,6 +115,18 @@ export interface RunOptions {
    * paths see no behaviour change unless the operator opts in.
    */
   runHistoryStore?: RunHistoryStore;
+  /**
+   * Operator override for cross-run continuity (design
+   * §Gap 5 trade-off (c)). When set, the orchestrator looks up the
+   * named run via `findRunById` instead of querying `findPriorRuns`
+   * by scope_signature. The matched run is injected with
+   * `match_mode: 'operator_override'`; if its scope_signature differs
+   * from the current run's, a caveat is appended to the synthetic
+   * evidence record. If the named run cannot be found, the
+   * orchestrator emits a stderr warning and surfaces a data-quality
+   * finding rather than fabricating prior-run context.
+   */
+  priorRunId?: string;
 }
 
 export interface AnalyzeScorePublisher {
@@ -652,19 +664,67 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   // analysis type, and inject them as a synthetic prior_run_context
   // EvidenceRecord. Defaults to a no-op store so the no-history path is
   // byte-identical to the pre-Phase-2.5 behaviour.
+  //
+  // When the operator passes --prior-run <run-id>, the store is queried
+  // by id instead of by scope_signature; the named run is injected
+  // verbatim with match_mode: 'operator_override'. A missing id is
+  // surfaced as a data-quality finding rather than silently absent
+  // continuity context, so the report can disclose that the override
+  // was requested but not honoured.
   const runHistoryStore = ctx.runHistoryStore ?? new NoopRunHistoryStore();
   const scopeSignature = computeScopeSignature(ctx.scope);
-  const priorRuns = await runHistoryStore.findPriorRuns({
-    scope_signature: scopeSignature,
-    analysis_type: ctx.scope.analysis_type,
-    excludeRunId: ctx.runId,
+  let priorRuns: Awaited<ReturnType<RunHistoryStore['findPriorRuns']>> = [];
+  let matchMode: 'exact_scope' | 'operator_override' = 'exact_scope';
+  if (ctx.priorRunId !== undefined) {
+    matchMode = 'operator_override';
+    const found = await runHistoryStore.findRunById(ctx.priorRunId);
+    if (found) {
+      priorRuns = [found];
+    } else {
+      process.stderr.write(
+        `  ⚠ --prior-run "${ctx.priorRunId}" not found in run-history store; continuing without prior-run context.\n`,
+      );
+      allDq.push(
+        DataQualityFindingSchema.parse({
+          dq_id: `dq-prior-run-not-found-${allDq.length + 1}`,
+          category: 'empty_result',
+          affected_capability: 'az_pixiu_run_history',
+          affected_scope_subset: null,
+          consequence_for_analysis: `Operator requested --prior-run "${ctx.priorRunId}" but no run with that id was found in the run-history store. No prior-run context was injected.`,
+          impact_on_recommendations: [],
+          actionable_hint:
+            'Verify the run-id is correct and that runs/<run-id>/run.json exists under the active runs directory.',
+        }),
+      );
+    }
+  } else {
+    priorRuns = await runHistoryStore.findPriorRuns({
+      scope_signature: scopeSignature,
+      analysis_type: ctx.scope.analysis_type,
+      excludeRunId: ctx.runId,
+    });
+  }
+  const priorRunEvidence = buildPriorRunContextEvidence({
+    priorRuns,
+    scope: ctx.scope,
+    matchMode,
+    currentScopeSignature: scopeSignature,
   });
-  const priorRunEvidence = buildPriorRunContextEvidence({ priorRuns, scope: ctx.scope });
   const recordsWithPrior = [...records, ...priorRunEvidence];
   if (priorRunEvidence.length > 0) {
+    const modeNote =
+      matchMode === 'operator_override' ? ' (operator override)' : '';
     process.stdout.write(
-      `  found ${priorRuns.length} prior run(s) against this scope — injecting prior_run_context\n`,
+      `  found ${priorRuns.length} prior run(s) against this scope${modeNote} — injecting prior_run_context\n`,
     );
+    if (
+      matchMode === 'operator_override' &&
+      priorRuns.some((r) => r.scope_signature !== scopeSignature)
+    ) {
+      process.stderr.write(
+        `  ⚠ --prior-run scope_signature differs from current run; injected as continuity-only context.\n`,
+      );
+    }
   }
 
   // Reason
