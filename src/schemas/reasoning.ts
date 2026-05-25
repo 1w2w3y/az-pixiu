@@ -101,12 +101,15 @@ export const RecommendationSchema = z
     suggested_audience: SuggestedAudienceSchema,
     suggested_human_actions: z.array(z.string().min(1)).min(1),
     // Cross-run continuity (Phase 2.5 — design/cost-summary-depth.md §Gap 5).
-    // A stable, deterministic slug that survives LLM rewrites of `statement`
-    // so the same recommendation can be recognised across runs against the
-    // same scope. Phase 2.5 only requires the field to exist; the
-    // reasoner.v1 prompt asks for a short kebab-case slug summarising the
-    // recommendation's subject. Phase 3's reasoner.v2 will replace that with
-    // a deterministic computation from lane + cluster prefix + dominant SKU.
+    // A stable slug that survives LLM rewrites of `statement` so the same
+    // recommendation can be recognised across runs against the same scope.
+    // Phase 2.5 only requires the field to exist; the reasoner.v1 prompt
+    // asks for a short kebab-case slug summarising the recommendation's
+    // subject — this is the *fallback* form. The deterministic computation
+    // from lane + cluster prefix + dominant SKU lives in
+    // src/reasoning/recommendation-signature.ts; Phase 3 lane code calls
+    // that helper as soon as those structured inputs exist, and the schema
+    // gains no new fields (the slug remains a single string either way).
     recommendation_signature: z.string().min(1),
   })
   .strict()
