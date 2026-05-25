@@ -73,6 +73,30 @@ export const ATTR = {
   transportRateLimitSeen: 'az_pixiu.transport.rate_limit_seen',
   transportRecoveredCount: 'az_pixiu.transport.recovered_count',
   transportExhaustedCount: 'az_pixiu.transport.exhausted_count',
+  // Cross-run continuity vocabulary (Phase 2.5 — design/cost-summary-depth.md
+  // §14 / §Gap 5). priorRunMatchedCount and priorRunMatchMode go on the
+  // Reasoning span where the prior-run lookup feeds the reasoner;
+  // recommendationSignature is emitted as a per-recommendation event on
+  // the same span (one event per recommendation, so Langfuse trace search
+  // can locate prior signatures cheaply without materialising the full
+  // recommendation list as a single string attribute).
+  priorRunMatchedCount: 'az_pixiu.prior_run.matched_count',
+  priorRunMatchMode: 'az_pixiu.prior_run.match_mode',
+  recommendationSignature: 'az_pixiu.recommendation.signature',
+} as const;
+
+/**
+ * Well-known event names. Kept as constants so the Langfuse UI can
+ * filter on them by exact match and so the §14 vocabulary stays
+ * grep-able. Phase 2.5 reserves both `freshness.partial_window` and
+ * `freshness.uniform_drop`; only `partial_window` is emitted today —
+ * the uniform-drop heuristic lands with the broader Phase 3 freshness
+ * work and is reserved-but-unemitted to mirror the schema enum.
+ */
+export const EVENTS = {
+  FreshnessPartialWindow: 'freshness.partial_window',
+  FreshnessUniformDrop: 'freshness.uniform_drop',
+  RecommendationSignature: 'recommendation.signature',
 } as const;
 
 /**

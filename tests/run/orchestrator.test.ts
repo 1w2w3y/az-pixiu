@@ -13,6 +13,8 @@ import { MockModelClient } from '../../src/model/mock-client.js';
 import type { Config, ReasoningOutput } from '../../src/schemas/index.js';
 import type { ScorePayload } from '../../src/evaluation/langfuse-publisher.js';
 import type { RunHistoryStore, FindPriorRunsOptions, RunSummary } from '../../src/history/store.js';
+import { initializeTracing, shutdownTracing } from '../../src/observability/setup.js';
+import { SpanNames, ATTR, EVENTS } from '../../src/observability/spans.js';
 
 const subId = '11111111-1111-1111-1111-111111111111';
 
@@ -421,6 +423,120 @@ describe('runAnalysis — fixture transport + mock model + playbook', () => {
       expect(reasonerCall!.userPrompt).not.toContain('prior_run_context');
       expect(reasonerCall!.userPrompt).not.toContain('az_pixiu_run_history');
     } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('§14 vocabulary: emits prior_run.matched_count, prior_run.match_mode, and one recommendation.signature event per recommendation on the Reasoning span', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'azp-orc-vocab-'));
+    const state = await initializeTracing({ mode: 'memory' });
+    // The orchestrator calls shutdownTracing() in its finally block,
+    // which propagates to InMemorySpanExporter.shutdown() and clears
+    // the collected spans. Stub the activeState's shutdown to be a
+    // no-op so the spans survive long enough for the test to inspect
+    // them; restore + real shutdown in the outer finally.
+    const realShutdown = state.shutdown;
+    state.shutdown = async () => {};
+    try {
+      const scope = intakeScope({
+        subscription_ids: [subId],
+        resource_group_names: ['rg-db-prod'],
+        time_window_start: '2026-05-01T00:00:00Z',
+        time_window_end: '2026-05-08T00:00:00Z',
+        baseline_window_start: '2026-04-24T00:00:00Z',
+        baseline_window_end: '2026-05-01T00:00:00Z',
+      });
+      const namedPrior: RunSummary = {
+        run_id: '00000000-0000-0000-0000-00000000aaaa',
+        scope_signature: 'sig-prior',
+        analysis_type: 'cost_surprise',
+        started_at: '2026-04-17T00:00:00Z',
+        recommendations: [],
+      };
+      const recordingStore = new RecordingRunHistoryStore(
+        [],
+        new Map([[namedPrior.run_id, namedPrior]]),
+      );
+
+      const reasoningResponse: ReasoningOutput = {
+        facts: [
+          {
+            fact_id: 'fact-1',
+            statement: 'observed',
+            evidence_ids: ['ev-amgmcp_cost_analysis-67a86186'],
+            scope_subset: { subscription_ids: [subId], resource_group_names: null, resource_ids: null },
+          },
+        ],
+        hypotheses: [],
+        recommendations: [
+          {
+            recommendation_id: 'rec-a',
+            priority: 'high',
+            confidence: { level: 'high', rationale: 'r', dimensions: strongDims },
+            impact: 'material',
+            statement: 'consider reviewing thing A',
+            supported_by_hypothesis_ids: [],
+            supported_by_fact_ids: ['fact-1'],
+            assumptions: [],
+            validation_steps: ['inspect'],
+            false_positive_considerations: [],
+            suggested_audience: 'platform_engineer',
+            suggested_human_actions: ['review the deployment'],
+            recommendation_signature: 'sig-a',
+          },
+          {
+            recommendation_id: 'rec-b',
+            priority: 'medium',
+            confidence: { level: 'high', rationale: 'r', dimensions: strongDims },
+            impact: 'moderate',
+            statement: 'consider reviewing thing B',
+            supported_by_hypothesis_ids: [],
+            supported_by_fact_ids: ['fact-1'],
+            assumptions: [],
+            validation_steps: ['inspect'],
+            false_positive_considerations: [],
+            suggested_audience: 'platform_engineer',
+            suggested_human_actions: ['review the deployment'],
+            recommendation_signature: 'sig-b',
+          },
+        ],
+        data_quality: [],
+      };
+
+      await runAnalysis({
+        config,
+        scope,
+        client: new MCPClient({
+          transport: new FixtureMCPTransport({ fixturePath: 'fixtures/cost-surprise-001' }),
+        }),
+        model: new MockModelClient({ responses: reasoningResponse }),
+        modelProvider: 'mock',
+        credentialIdentity: describeCredential('mock'),
+        usePlaybook: true,
+        runsDir: tmp,
+        observabilityMode: 'memory',
+        runHistoryStore: recordingStore,
+        priorRunId: namedPrior.run_id,
+      });
+
+      await state.inMemoryExporter!.forceFlush();
+      const spans = state.inMemoryExporter!.getFinishedSpans();
+      const reasoning = spans.find((s) => s.name === SpanNames.Reasoning);
+      expect(reasoning).toBeDefined();
+      expect(reasoning!.attributes[ATTR.priorRunMatchedCount]).toBe(1);
+      expect(reasoning!.attributes[ATTR.priorRunMatchMode]).toBe('operator_override');
+
+      const sigEvents = reasoning!.events.filter(
+        (e) => e.name === EVENTS.RecommendationSignature,
+      );
+      expect(sigEvents).toHaveLength(2);
+      const sigs = sigEvents
+        .map((e) => e.attributes?.[ATTR.recommendationSignature])
+        .sort();
+      expect(sigs).toEqual(['sig-a', 'sig-b']);
+    } finally {
+      state.shutdown = realShutdown;
+      await shutdownTracing();
       await rm(tmp, { recursive: true, force: true });
     }
   });

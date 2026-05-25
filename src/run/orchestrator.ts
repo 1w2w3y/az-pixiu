@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { trace } from '@opentelemetry/api';
+
 import { MCPClient, assertRequiredCapabilities } from '../mcp/client.js';
 import { EvidenceExecutor } from '../evidence/executor.js';
 import { EvidenceNormalizer } from '../evidence/normalizer.js';
@@ -27,6 +29,7 @@ import {
   emitEvent,
   SpanNames,
   ATTR,
+  EVENTS,
 } from '../observability/spans.js';
 import { costSurprisePlaybook } from '../playbooks/cost-surprise.js';
 import { costSummaryPlaybook } from '../playbooks/cost-summary.js';
@@ -654,6 +657,23 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   const freshnessDqs = checkFreshness(records, {
     startingCounter: failureDqs.length,
   });
+  // §14 vocabulary: emit one freshness.partial_window event per finding
+  // produced. Attached to whatever span is active here (RunRoot or the
+  // tracing-disabled noop tracer in tests) so the trace surfaces the
+  // freshness signal without needing a dedicated span. uniform_drop is
+  // reserved in EVENTS and the schema enum but not emitted today —
+  // matches the Phase 3 design and freshness.ts contract.
+  const freshnessSpan = trace.getActiveSpan();
+  if (freshnessSpan) {
+    for (const f of freshnessDqs) {
+      if (f.category === 'freshness_partial_window') {
+        emitEvent(freshnessSpan, EVENTS.FreshnessPartialWindow, {
+          affected_capability: f.affected_capability ?? '',
+          dq_id: f.dq_id,
+        });
+      }
+    }
+  }
   const allDq = [...normalizerDq, ...failureDqs, ...freshnessDqs];
   process.stdout.write(
     `  normalized ${records.length} evidence record(s); ${allDq.length} data-quality finding(s) so far\n`,
@@ -731,12 +751,30 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   process.stdout.write(`→ reasoning over evidence...\n`);
   const reasoner = new Reasoner({ model: ctx.model, systemPrompt: reasonerPrompt.content });
   const { output: reasoning, issues } = await withSpan(SpanNames.Reasoning, async (span) => {
+    // §14 vocabulary: surface the prior-run lookup result on the
+    // Reasoning span (it is the span that consumes the prior-run
+    // context). matched_count counts what the store actually returned
+    // for this run; match_mode distinguishes exact-scope matches from
+    // the operator --prior-run override.
+    span.setAttribute(ATTR.priorRunMatchedCount, priorRuns.length);
+    span.setAttribute(ATTR.priorRunMatchMode, matchMode);
     const r = await reasoner.reason({ scope: ctx.scope, evidence: recordsWithPrior, data_quality: allDq });
     span.setAttribute(ATTR.reasoningFactsProduced, r.output.facts.length);
     span.setAttribute(ATTR.reasoningHypothesesProduced, r.output.hypotheses.length);
     span.setAttribute(ATTR.reasoningRecommendationsProduced, r.output.recommendations.length);
     span.setAttribute(ATTR.reasoningDqProduced, r.output.data_quality.length);
     span.setAttribute(ATTR.reasoningIssuesEmitted, r.issues.length);
+    // One event per recommendation signature so Langfuse trace search
+    // can locate prior signatures cheaply (a single string attribute
+    // listing all signatures would be cheaper for cardinality but
+    // harder to filter on individually). Cardinality is bounded by
+    // recommendations.length, which the existing rubrics already cap.
+    for (const rec of r.output.recommendations) {
+      emitEvent(span, EVENTS.RecommendationSignature, {
+        [ATTR.recommendationSignature]: rec.recommendation_signature,
+        recommendation_id: rec.recommendation_id,
+      });
+    }
     return r;
   });
   process.stdout.write(
