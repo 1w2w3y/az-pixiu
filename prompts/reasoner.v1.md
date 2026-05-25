@@ -111,7 +111,8 @@ Given cost evidence showing PostgreSQL spend rose 38% over a baseline, with an a
       "suggested_human_actions": [
         "review the 2026-05-03 db-prod-2 SKU upgrade against utilization trend",
         "confirm with the deployment owner whether the upgrade is permanent"
-      ]
+      ],
+      "recommendation_signature": "pg-sku-upgrade-investigation"
     }
   ],
   "data_quality": []
