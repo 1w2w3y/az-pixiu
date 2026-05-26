@@ -184,10 +184,12 @@ describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)',
       expect(issues).toHaveLength(0);
       expect(reasoning.recommendations).toHaveLength(1);
 
-      // 7. Score against the rubric
+      // 7. Score against the rubric (Phase 3 adds estimated_impact_calibrated,
+      // so the base count without evidence is now 5; passing evidence
+      // also enables waste_classification_grounding).
       const score = scoreAll(reasoning);
       expect(score.passed_all).toBe(true);
-      expect(score.pass_count).toBe(4);
+      expect(score.pass_count).toBe(5);
 
       // 8. Build run metadata + artifact
       const metadata: RunMetadata = {

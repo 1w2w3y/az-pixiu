@@ -108,5 +108,14 @@ export const QueryIntentSchema = z.enum([
   // recurring patterns. The records are *not* fetched from AMG-MCP; their
   // source_capability is 'az_pixiu_run_history'.
   'prior_run_context',
+  // Waste-detection lanes (Phase 3 — design/cost-summary-depth.md §Gap 1).
+  // The WasteDetectionExecutor emits one EvidenceRecord per candidate
+  // resource that matches a lane's ARG predicate, with the predicate
+  // text cited on the record so the reasoner can defend its
+  // classification. Lane outputs originate from AMG-MCP's resource-graph
+  // capability but are surfaced under a synthetic source_capability
+  // (`az_pixiu_waste_lane`) so they are obviously distinguishable from
+  // generic `inventory` records in the trace and the report.
+  'waste_candidate',
 ]);
 export type QueryIntent = z.infer<typeof QueryIntentSchema>;

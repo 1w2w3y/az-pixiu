@@ -41,6 +41,10 @@ import { intakeScope, type ScopeIntakeInput } from './scope-intake.js';
 import { computeScopeSignature } from './scope-signature.js';
 import { buildPriorRunContextEvidence } from './prior-run-evidence.js';
 import { checkFreshness } from './freshness.js';
+import { WasteDetectionExecutor } from './waste-detection.js';
+import { getEnabledWasteLanes } from '../playbooks/waste-lanes/registry.js';
+import { JsonFileRateSource } from '../pricing/json-file-rate-source.js';
+import type { PricingRateSource } from '../pricing/source.js';
 import { NoopRunHistoryStore, type RunHistoryStore } from '../history/store.js';
 import {
   rollupTransportSummary,
@@ -115,6 +119,20 @@ export interface RunOptions {
    * paths see no behaviour change unless the operator opts in.
    */
   runHistoryStore?: RunHistoryStore;
+  /**
+   * Pricing rate source for the waste-detection executor (Phase 3 —
+   * design/cost-summary-depth.md §Gap 1/§Gap 3). When supplied, used
+   * directly; when omitted, the orchestrator loads the seed JSON card
+   * at `pricing/azure-rate-card.json` lazily on the first cost_summary
+   * run. Tests inject a mock rate source so they do not touch disk.
+   */
+  rateSource?: PricingRateSource;
+  /**
+   * Disable the waste-detection executor even on `cost_summary` runs.
+   * Tests use this to keep the cost-summary path identical to its
+   * pre-Phase-3 shape. Defaults to false (lanes run for cost_summary).
+   */
+  disableWasteDetection?: boolean;
 }
 
 export interface AnalyzeScorePublisher {
@@ -514,8 +532,17 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     filename: 'planner.v1.md',
     ...(ctx.promptsCwd ? { cwd: ctx.promptsCwd } : {}),
   });
+  // Reasoner prompt selection (Phase 3 — design/cost-summary-depth.md
+  // §Reasoner prompt changes). cost_summary analyses get reasoner.v2,
+  // which knows how to consume waste-candidate evidence and render
+  // calibrated impact ranges. Every other analysis stays on v1 so the
+  // existing Phase 1/2 eval surface is unaffected by the Phase 3 prompt
+  // changes — v2 promotion against other analysis types lands when
+  // their lanes do.
+  const reasonerFilename =
+    ctx.scope.analysis_type === 'cost_summary' ? 'reasoner.v2.md' : 'reasoner.v1.md';
   const reasonerPrompt = await loadPrompt({
-    filename: 'reasoner.v1.md',
+    filename: reasonerFilename,
     ...(ctx.promptsCwd ? { cwd: ctx.promptsCwd } : {}),
   });
 
@@ -633,6 +660,23 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   // Merge failure-classified DQs alongside normalizer DQs
   const failureDqs = failures.map((f, i) => failureToDq(f, i));
 
+  // Waste-detection lanes (Phase 3 — design/cost-summary-depth.md §Gap 1).
+  // Runs only for cost_summary analyses; fans the lane registry out
+  // through the existing transport so each ARG call inherits §Gap 7
+  // retry + embedded rate-limit detection. The executor emits one
+  // EvidenceRecord per candidate; the deterministic per-lane summary
+  // surfaces in the report (Waste Candidates section) and in run.json
+  // (waste_lanes block) so RunHistoryStore can index lane history in
+  // PR 4 without re-walking evidence.
+  const wasteResult = await runWasteDetection(ctx, catalog);
+  const wasteEvidence = wasteResult?.evidence ?? [];
+  const wasteFailures = wasteResult?.failures ?? [];
+  const wasteFailureDqs = wasteFailures.map((f, i) => failureToDq(f, failureDqs.length + i));
+  const mergedTransport = [
+    ...transport_summary,
+    ...(wasteResult?.transport_summary ?? []),
+  ];
+
   // Freshness check (Phase 3 — design/cost-summary-depth.md §Gap 4):
   // emit a freshness_partial_window finding when any cost-analysis
   // window ends within the cost-API's late-posting threshold (default
@@ -640,12 +684,21 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   // report section because freshness categories are in
   // RUN_QUALITY_CATEGORIES (src/report/markdown.ts).
   const freshnessDqs = checkFreshness(records, {
-    startingCounter: failureDqs.length,
+    startingCounter: failureDqs.length + wasteFailureDqs.length,
   });
-  const allDq = [...normalizerDq, ...failureDqs, ...freshnessDqs];
+  const allDq = [...normalizerDq, ...failureDqs, ...wasteFailureDqs, ...freshnessDqs];
   process.stdout.write(
     `  normalized ${records.length} evidence record(s); ${allDq.length} data-quality finding(s) so far\n`,
   );
+  if (wasteResult) {
+    const totalCandidates = wasteResult.lanes.reduce(
+      (sum, lane) => sum + lane.candidates.length,
+      0,
+    );
+    process.stdout.write(
+      `  waste-detection: ${wasteResult.lanes.length} lane(s) ran, ${totalCandidates} candidate(s) surfaced\n`,
+    );
+  }
 
   // Cross-run continuity (Phase 2.5 — design/cost-summary-depth.md §Gap 5).
   // Query the run-history store for prior runs against the same scope and
@@ -660,7 +713,11 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     excludeRunId: ctx.runId,
   });
   const priorRunEvidence = buildPriorRunContextEvidence({ priorRuns, scope: ctx.scope });
-  const recordsWithPrior = [...records, ...priorRunEvidence];
+  // Order: main normalized records → waste-candidate evidence →
+  // synthetic prior-run context. The reasoner sees lane evidence
+  // before continuity context so it can ground continuity markers
+  // (Phase 3 PR 4) against the in-window lane output.
+  const recordsWithPrior = [...records, ...wasteEvidence, ...priorRunEvidence];
   if (priorRunEvidence.length > 0) {
     process.stdout.write(
       `  found ${priorRuns.length} prior run(s) against this scope — injecting prior_run_context\n`,
@@ -683,7 +740,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     `  reasoning produced ${reasoning.facts.length} fact(s), ${reasoning.hypotheses.length} hypothesis/es, ${reasoning.recommendations.length} recommendation(s)\n`,
   );
 
-  const score = scoreAll(reasoning);
+  const score = scoreAll(reasoning, { evidence: recordsWithPrior });
 
   const endedAt = new Date().toISOString();
   const modelInfo = resolveModelInfo(ctx.config);
@@ -717,7 +774,8 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       evidence: recordsWithPrior,
       metadata,
       inputDataQuality: allDq,
-      transportSummary: transport_summary,
+      transportSummary: mergedTransport,
+      ...(wasteResult ? { wasteLanes: wasteResult.lanes } : {}),
     });
     await mkdir(ctx.runDir, { recursive: true });
     await writeFile(ctx.reportPath, md, 'utf8');
@@ -729,7 +787,8 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
         recordsWithPrior,
         reasoning,
         allDq,
-        transport_summary,
+        mergedTransport,
+        wasteResult?.lanes,
       ),
     });
   });
@@ -759,15 +818,95 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     trace_id: ctx.traceId,
     metadata,
     reasoning,
-    evidence: records,
+    // RunResult.evidence is the eval runner's view of what was retrieved
+    // and surfaced for grounding. Include waste-candidate evidence so
+    // `expected_capabilities_invoked: ['az_pixiu_waste_lane']` and
+    // intent-based eval assertions resolve. The prior_run_context
+    // record stays out (it is synthetic continuity context, not
+    // retrieved evidence) to match the pre-Phase-3 shape.
+    evidence: [...records, ...wasteEvidence],
     input_dq_categories: allDq.map((d) => d.category),
     score,
-    failures_classified: failures.length,
+    failures_classified: failures.length + wasteFailures.length,
     post_process_issues: issues.length,
   };
 }
 
 // --- helpers ---
+
+/**
+ * Phase 3 — design/cost-summary-depth.md §Gap 1. Runs the waste-lane
+ * registry for cost_summary analyses and returns the structured result.
+ * Returns `undefined` when waste detection is skipped (non-cost_summary
+ * analyses, or operator-disabled), so the caller can elide every
+ * downstream merge cleanly.
+ */
+async function runWasteDetection(
+  ctx: RunCtx,
+  catalog: import('../mcp/client.js').DiscoveredCatalog,
+): Promise<import('./waste-detection.js').WasteDetectionResult | undefined> {
+  if (ctx.scope.analysis_type !== 'cost_summary') return undefined;
+  if (ctx.disableWasteDetection) return undefined;
+  const lanes = getEnabledWasteLanes();
+  if (lanes.length === 0) return undefined;
+
+  const rateSource = ctx.rateSource ?? (await loadDefaultRateSource());
+  return await withSpan(SpanNames.WasteDetection, async (span) => {
+    const executor = new WasteDetectionExecutor({
+      client: ctx.client,
+      catalog,
+      rateSource,
+      lanes,
+      onEvent: (event) => {
+        if (event.kind === 'retry_scheduled') {
+          emitEvent(span, 'transport.retry_scheduled', {
+            logical_request_id: event.logical_request_id,
+            capability: event.capability,
+            attempt: event.attempt,
+            failure_category: event.failure_category,
+            backoff_ms: event.backoff_ms,
+          });
+        } else if (event.kind === 'pacing_applied') {
+          emitEvent(span, 'transport.pacing_applied', {
+            logical_request_id: event.logical_request_id,
+            capability: event.capability,
+            pacing_ms: event.pacing_ms,
+          });
+        }
+      },
+    });
+    const result = await executor.execute({ scope: ctx.scope });
+    // §14 vocabulary: emit one event per lane carrying the lane's
+    // attribute group, so Langfuse trace filters generalise across
+    // lanes without requiring a child span per lane.
+    for (const lane of result.lanes) {
+      emitEvent(span, 'waste_lane.summary', {
+        [ATTR.wasteLaneName]: lane.lane,
+        [ATTR.wasteLaneCandidateCount]: lane.candidates.length,
+        [ATTR.wasteLaneEstimatedWeeklyUsdLow]: lane.lane_total.low_usd,
+        [ATTR.wasteLaneEstimatedWeeklyUsdHigh]: lane.lane_total.high_usd,
+        [ATTR.wasteLaneRateSource]: lane.rate_source_captured_at,
+        [ATTR.wasteLaneRateUnavailableCount]: lane.lane_total.unavailable_count,
+        [ATTR.wasteLaneFailed]: lane.failed,
+      });
+    }
+    span.setAttribute(ATTR.evidenceRecordsProduced, result.evidence.length);
+    return result;
+  });
+}
+
+/**
+ * Lazy single-shot load of the in-repo seed rate card. The orchestrator
+ * caches a single instance for the lifetime of the process so repeated
+ * cost_summary runs do not re-read the JSON file from disk.
+ */
+let cachedDefaultRateSource: Promise<PricingRateSource> | undefined;
+async function loadDefaultRateSource(): Promise<PricingRateSource> {
+  if (!cachedDefaultRateSource) {
+    cachedDefaultRateSource = JsonFileRateSource.load({ path: 'pricing/azure-rate-card.json' });
+  }
+  return cachedDefaultRateSource;
+}
 
 async function publishAnalyzeScores(
   publisher: AnalyzeScorePublisher | undefined,

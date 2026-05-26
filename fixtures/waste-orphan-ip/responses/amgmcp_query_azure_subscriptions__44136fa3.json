@@ -1,0 +1,14 @@
+{
+  "capability": "amgmcp_query_azure_subscriptions",
+  "parameters": {},
+  "parameters_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "response": {
+    "content": {
+      "subscriptions": [
+        { "subscriptionId": "77777777-7777-7777-7777-777777777777", "displayName": "corp-shared-platform-test", "state": "Enabled" },
+        { "subscriptionId": "88888888-8888-8888-8888-888888888888", "displayName": "corp-app-team-sandbox", "state": "Enabled" }
+      ]
+    },
+    "isError": false
+  }
+}

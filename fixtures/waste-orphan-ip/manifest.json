@@ -1,0 +1,9 @@
+{
+  "fixture_id": "waste-orphan-ip",
+  "description": "Phase 3 PR 1 — orphan public-IP waste lane vertical slice. Two subscriptions (77.../77 = corp-shared-platform-test, 88.../88 = corp-app-team-sandbox) carry 5 orphan public IPs total across 2 subs, 1 attached IP (must NOT appear in the lane output — the ARG predicate filters it), and 1 orphan IP with an unknown SKU (Basic/Dynamic) so the lane renders 'rate unavailable for SKU PublicIPAddress_Basic_Dynamic'. Cost-summary playbook output is minimal (one quiet day, no notable activity).",
+  "analysis_type": "cost_summary",
+  "recorded_at": "2026-05-25T00:00:00Z",
+  "sanitized_at": "2026-05-25T00:00:00Z",
+  "recorded_from": "synthetic",
+  "time_window": { "start": "2026-05-01T00:00:00Z", "end": "2026-05-08T00:00:00Z" }
+}

@@ -1,0 +1,23 @@
+{
+  "_comment": "Cost-summary playbook query #2: type x location cross-cut.",
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "subscription_ids": [
+      "77777777-7777-7777-7777-777777777777",
+      "88888888-8888-8888-8888-888888888888"
+    ],
+    "query": "Resources | summarize count_=count() by type, location | order by count_ desc | take 15"
+  },
+  "parameters_digest": "dccbbf9690c6c058d345ca0065e4136ccf3e8683c9e194e705bfdf30f43865f8",
+  "response": {
+    "content": {
+      "data": [
+        { "type": "Microsoft.Network/publicIPAddresses", "location": "eastus", "count_": 4 },
+        { "type": "Microsoft.Network/publicIPAddresses", "location": "westus2", "count_": 2 },
+        { "type": "Microsoft.Network/virtualNetworks", "location": "eastus", "count_": 2 }
+      ],
+      "count": 3
+    },
+    "isError": false
+  }
+}

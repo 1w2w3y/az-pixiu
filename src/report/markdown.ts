@@ -21,6 +21,7 @@ import {
   isFullCoverage,
   type CostCoverage,
 } from './coverage.js';
+import type { WasteLaneResult } from '../playbooks/waste-lanes/types.js';
 
 /**
  * Markdown report assembler (design §4.8 / §10.2). Deterministic template
@@ -50,6 +51,16 @@ export interface RenderReportInput {
    * threaded continue to compile.
    */
   transportSummary?: TransportSummaryEntry[];
+  /**
+   * Per-lane waste-detection results (Phase 3 — design/cost-summary-depth.md
+   * §Gap 1). When supplied and non-empty, the report renders a "Waste
+   * Candidates" section between Data Quality and Recommendations: one
+   * sub-block per lane listing each candidate by resource id with the
+   * lane's classification predicate cited as the lane's defense.
+   * Lane-level rate-card provenance (source_url + captured_at) is
+   * footnoted so reviewers can audit the impact estimates.
+   */
+  wasteLanes?: WasteLaneResult[];
 }
 
 export function renderMarkdownReport(input: RenderReportInput): string {
@@ -60,15 +71,23 @@ export function renderMarkdownReport(input: RenderReportInput): string {
     metadata,
     inputDataQuality = [],
     transportSummary = [],
+    wasteLanes = [],
   } = input;
   const coverage = computeCostCoverage({ scope, evidence, transportSummary });
   const rollup = rollupTransportSummary(transportSummary);
+  // Waste Candidates renders directly above Recommendations so the
+  // operator sees the deterministic per-resource enumeration (the
+  // evidence the reasoner cites) immediately before the
+  // recommendation framing the reasoner derives from it. The existing
+  // Data Quality sections remain after Recommendations / Hypotheses /
+  // Facts — their position predates this PR and is preserved.
   const sections = [
     title(scope),
     scopeAndDataSources(scope, evidence, metadata),
     runQualitySection(inputDataQuality, rollup, coverage),
     costSummaryOverview(scope, evidence),
     executiveSummary(reasoning, inputDataQuality, coverage),
+    wasteCandidatesSection(wasteLanes),
     recommendationsSection(reasoning),
     hypothesesSection(reasoning),
     factsSection(reasoning),
@@ -379,6 +398,88 @@ function costSummaryOverview(scope: Scope, evidence: EvidenceRecord[]): string {
   }
 
   return lines.join('\n');
+}
+
+/**
+ * Waste Candidates (Phase 3 — design/cost-summary-depth.md §Gap 1).
+ *
+ * Deterministic per-lane enumeration of waste-detection rows. The
+ * reasoner is the only writer of recommendation framing in the report;
+ * this section is the *cited evidence* that downstream recommendations
+ * reference, rendered straight from the lane registry's structured
+ * output rather than the LLM's voice. That separation honours the
+ * design's "no autonomous remediation" rule — the lane code never
+ * proposes deletion, it just enumerates what the predicate classified.
+ *
+ * Per-candidate line: `name (resource_id) — SKU X in region Y, alloc Z
+ *   — ~$L–$H/week` or `(rate unavailable for SKU X)`. Lane footer
+ * cites `predicate`, `rate_source captured_at`, and any unparsed-row
+ * count so an operator can audit the lane's coverage.
+ */
+function wasteCandidatesSection(lanes: readonly WasteLaneResult[]): string {
+  if (lanes.length === 0) return '';
+  const lines: string[] = ['## Waste Candidates', ''];
+  for (const lane of lanes) {
+    lines.push(`### ${lane.title} (\`${lane.lane}\`)`);
+    lines.push('');
+    if (lane.failed) {
+      lines.push(
+        `_The lane's resource-graph call did not return data this run (transport failure or retries exhausted). No candidates enumerated; see Run Quality for details._`,
+      );
+      lines.push('');
+      lines.push(`**Classification predicate:** \`${lane.predicate_text}\``);
+      lines.push('');
+      continue;
+    }
+    if (lane.candidates.length === 0) {
+      lines.push(`_No matching resources in scope._`);
+      lines.push('');
+      lines.push(`**Classification predicate:** \`${lane.predicate_text}\``);
+      lines.push('');
+      continue;
+    }
+    for (const c of lane.candidates) {
+      lines.push(renderWasteCandidateLine(c));
+    }
+    lines.push('');
+    const total = lane.lane_total;
+    const totalLine =
+      total.available_count > 0
+        ? `**Lane total (${total.available_count} priced candidate(s)):** ~$${total.low_usd.toFixed(2)}–$${total.high_usd.toFixed(2)}/week, list-price estimate.`
+        : `**Lane total:** no priced candidates (every SKU was unavailable from the rate card).`;
+    lines.push(totalLine);
+    if (total.unavailable_count > 0) {
+      const skus = total.unavailable_skus.map((s) => s.sku).join(', ');
+      lines.push(
+        `_${total.unavailable_count} candidate(s) excluded from the total — rate unavailable for SKU(s): ${skus}._`,
+      );
+    }
+    lines.push('');
+    lines.push(`**Classification predicate:** \`${lane.predicate_text}\``);
+    lines.push(
+      `**Rate source:** in-repo rate card captured ${lane.rate_source_captured_at}; list-price only — reservations, savings plans, hybrid benefit, and negotiated discounts are NOT modelled.`,
+    );
+    if (lane.unparsed_row_count > 0) {
+      lines.push(
+        `_${lane.unparsed_row_count} ARG row(s) were unparseable by this lane and excluded from the enumeration._`,
+      );
+    }
+    lines.push('');
+  }
+  return lines.join('\n').trimEnd();
+}
+
+function renderWasteCandidateLine(
+  c: WasteLaneResult['candidates'][number],
+): string {
+  const id = c.candidate.resource_id;
+  const sku = c.candidate.sku;
+  const region = c.candidate.location || '(unknown)';
+  const impact = c.estimated_weekly_impact;
+  if (impact.kind === 'available') {
+    return `- **${c.candidate.name}** (\`${id}\`) — SKU ${sku} in ${region} — ~$${impact.low_usd.toFixed(2)}–$${impact.high_usd.toFixed(2)}/week`;
+  }
+  return `- **${c.candidate.name}** (\`${id}\`) — SKU ${sku} in ${region} — _(rate unavailable for SKU ${sku})_`;
 }
 
 function recommendationsSection(reasoning: ReasoningOutput): string {

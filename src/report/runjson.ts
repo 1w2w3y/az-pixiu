@@ -8,6 +8,8 @@ import type {
   DataQualityFinding,
   TransportSummaryEntry,
 } from '../schemas/index.js';
+import type { WasteLaneResult } from '../playbooks/waste-lanes/types.js';
+import type { LaneTotal, EstimateResult } from '../pricing/impact.js';
 
 /**
  * Per-run output envelope for run.json (design §10.2, §15.6). Versioned
@@ -42,6 +44,47 @@ export interface RunArtifact {
    * artefacts written before this field existed continue to parse.
    */
   transport_summary?: TransportSummaryEntry[];
+  /**
+   * Phase 3 — design/cost-summary-depth.md §Gap 1. Per-lane summary of
+   * the waste candidates the WasteDetectionExecutor surfaced, with the
+   * lane's classification predicate, the per-candidate rate-lookup
+   * outcome, and the rolled-up lane total. Indexed here (alongside
+   * `transport_summary`) so the `RunHistoryStore` can answer per-lane
+   * continuity questions in PR 4 without re-walking the evidence
+   * records. Empty/absent for analysis types that do not run lanes.
+   */
+  waste_lanes?: WasteLanesBlockEntry[];
+}
+
+export interface WasteLanesBlockCandidate {
+  resource_id: string;
+  name: string;
+  subscription_id: string;
+  resource_group: string;
+  location: string;
+  sku: string;
+  fields: Record<string, string>;
+  evidence_id: string;
+  estimated_weekly_impact: EstimateResult;
+}
+
+export interface WasteLanesBlockEntry {
+  /** Machine-readable lane name (e.g. 'orphan_public_ip'). */
+  name: string;
+  /** Human-readable title used in the report. */
+  title: string;
+  /** Wire capability the lane ultimately hit (always ARG today). */
+  source_capability: string;
+  /** Predicate the lane cited to classify each row. */
+  predicate: string;
+  /** Rate-card snapshot date, propagated to the per-lane footnote. */
+  rate_source_captured_at: string;
+  candidates: WasteLanesBlockCandidate[];
+  lane_total: LaneTotal;
+  /** True when the ARG call exhausted retries or otherwise failed. */
+  failed: boolean;
+  /** Rows the parser could not interpret; surfaced for transparency. */
+  unparsed_row_count: number;
 }
 
 export interface WriteRunArtifactOptions {
@@ -77,6 +120,7 @@ export function buildRunArtifact(
   reasoning: ReasoningOutput,
   inputDataQuality?: DataQualityFinding[],
   transportSummary?: TransportSummaryEntry[],
+  wasteLanes?: WasteLaneResult[],
 ): RunArtifact {
   return {
     schema_version: RUN_JSON_SCHEMA_VERSION,
@@ -90,5 +134,32 @@ export function buildRunArtifact(
     ...(transportSummary && transportSummary.length > 0
       ? { transport_summary: transportSummary }
       : {}),
+    ...(wasteLanes && wasteLanes.length > 0
+      ? { waste_lanes: wasteLanes.map(toWasteLaneBlockEntry) }
+      : {}),
+  };
+}
+
+function toWasteLaneBlockEntry(result: WasteLaneResult): WasteLanesBlockEntry {
+  return {
+    name: result.lane,
+    title: result.title,
+    source_capability: result.source_capability,
+    predicate: result.predicate_text,
+    rate_source_captured_at: result.rate_source_captured_at,
+    candidates: result.candidates.map((c) => ({
+      resource_id: c.candidate.resource_id,
+      name: c.candidate.name,
+      subscription_id: c.candidate.subscription_id,
+      resource_group: c.candidate.resource_group,
+      location: c.candidate.location,
+      sku: c.candidate.sku,
+      fields: c.candidate.fields,
+      evidence_id: c.evidence.evidence_id,
+      estimated_weekly_impact: c.estimated_weekly_impact,
+    })),
+    lane_total: result.lane_total,
+    failed: result.failed,
+    unparsed_row_count: result.unparsed_row_count,
   };
 }
