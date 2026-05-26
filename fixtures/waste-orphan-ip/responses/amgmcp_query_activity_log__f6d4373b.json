@@ -1,0 +1,9 @@
+{
+  "capability": "amgmcp_query_activity_log",
+  "parameters": {
+    "subscription_id": "77777777-7777-7777-7777-777777777777",
+    "time_window": { "start": "2026-05-01T00:00:00Z", "end": "2026-05-08T00:00:00Z" }
+  },
+  "parameters_digest": "f6d4373b497b4aa823a07af78ef1b335806306b91a3d4d22db8f9cac5e6dd3ed",
+  "response": { "content": { "entries": [] }, "isError": false }
+}

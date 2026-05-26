@@ -11,16 +11,22 @@
   ],
   "entries": [
     {
+      "sku": "PublicIPAddress_Standard_Static",
+      "list_price_weekly_usd": 0.84,
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/ip-addresses/",
+      "notes": "$0.005/hr × 168h. Region-flat for most regions. SKU key composed from the ARG projection {sku.name}_{properties.publicIPAllocationMethod} so the orphan-public-ip lane (src/playbooks/waste-lanes/orphan-public-ip.ts) can resolve rates without an extra IP-version probe."
+    },
+    {
       "sku": "PublicIPAddress_Standard_Static_IPv4",
       "list_price_weekly_usd": 0.84,
       "source_url": "https://azure.microsoft.com/en-us/pricing/details/ip-addresses/",
-      "notes": "$0.005/hr × 168h. Region-flat for most regions."
+      "notes": "$0.005/hr × 168h. Region-flat for most regions. Reserved for a future lane that probes IP version."
     },
     {
       "sku": "PublicIPAddress_Standard_Static_IPv6",
       "list_price_weekly_usd": 0.84,
       "source_url": "https://azure.microsoft.com/en-us/pricing/details/ip-addresses/",
-      "notes": "$0.005/hr × 168h. Region-flat for most regions."
+      "notes": "$0.005/hr × 168h. Region-flat for most regions. Reserved for a future lane that probes IP version."
     },
     {
       "sku": "ManagedDisks_Premium_LRS_P4_32GB",

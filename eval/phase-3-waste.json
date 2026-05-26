@@ -1,0 +1,32 @@
+{
+  "schema_version": "1",
+  "items": [
+    {
+      "id": "cost-summary-waste-001",
+      "fixture_id": "waste-orphan-ip",
+      "description": "Phase 3 PR 1 — orphan public-IP waste lane vertical slice. Two subscriptions; the lane surfaces 5 orphan public IPs (one of which has an unknown SKU — Basic/Dynamic — so its weekly impact renders 'rate unavailable'). The fixture's logical inventory also includes one attached IP that the ARG predicate already filters out, so the lane must not surface it. Cost-summary playbook output is intentionally quiet — the focus of this item is the lane output, not the cost narrative.",
+      "scope": {
+        "subscription_ids": [
+          "77777777-7777-7777-7777-777777777777",
+          "88888888-8888-8888-8888-888888888888"
+        ],
+        "time_window": {
+          "start": "2026-05-01T00:00:00Z",
+          "end": "2026-05-08T00:00:00Z"
+        },
+        "analysis_type": "cost_summary",
+        "effective_scope_summary": "2 subscriptions: corp-shared-platform-test (77...77), corp-app-team-sandbox (88...88); 2026-05-01 → 2026-05-08; analysis_type=cost_summary"
+      },
+      "expectations": {
+        "min_recommendations": 1,
+        "expected_capabilities_invoked": [
+          "amgmcp_query_azure_subscriptions",
+          "amgmcp_cost_analysis",
+          "amgmcp_query_resource_graph",
+          "amgmcp_query_activity_log",
+          "az_pixiu_waste_lane"
+        ]
+      }
+    }
+  ]
+}

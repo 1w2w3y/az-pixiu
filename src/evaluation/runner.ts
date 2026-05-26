@@ -220,7 +220,7 @@ async function runOne(
       fixtureId: item.fixture_id,
     });
 
-    const score = scoreAll(result.reasoning);
+    const score = scoreAll(result.reasoning, { evidence: result.evidence });
     const expectations = checkExpectations({
       item,
       reasoning: result.reasoning,

@@ -15,6 +15,11 @@ export const SpanNames = {
   CapabilityDiscovery: 'run.capability_discovery',
   EvidencePlanning: 'run.evidence_planning',
   EvidenceRetrieval: 'run.evidence_retrieval',
+  // Phase 3 — design/cost-summary-depth.md §Gap 1. Runs after evidence
+  // retrieval for cost_summary analyses; fans the lane registry out
+  // through the existing transport. One span per run, one
+  // `waste_lane.*` attribute group per lane added to it.
+  WasteDetection: 'run.waste_detection',
   Reasoning: 'run.reasoning',
   ReportAssembly: 'run.report_assembly',
   Finalize: 'run.finalize',
@@ -73,6 +78,18 @@ export const ATTR = {
   transportRateLimitSeen: 'az_pixiu.transport.rate_limit_seen',
   transportRecoveredCount: 'az_pixiu.transport.recovered_count',
   transportExhaustedCount: 'az_pixiu.transport.exhausted_count',
+  // Waste-detection lane attributes (Phase 3 — design/cost-summary-depth.md
+  // §Gap 1, §"Trace vocabulary additions"). Emitted on the
+  // WasteDetection span, one set per executed lane. Names join the
+  // existing az_pixiu.* vocabulary so Langfuse filtering generalises
+  // to the new dimensions without new namespaces.
+  wasteLaneName: 'az_pixiu.waste_lane.name',
+  wasteLaneCandidateCount: 'az_pixiu.waste_lane.candidate_count',
+  wasteLaneEstimatedWeeklyUsdLow: 'az_pixiu.waste_lane.estimated_weekly_usd_low',
+  wasteLaneEstimatedWeeklyUsdHigh: 'az_pixiu.waste_lane.estimated_weekly_usd_high',
+  wasteLaneRateSource: 'az_pixiu.waste_lane.rate_source',
+  wasteLaneRateUnavailableCount: 'az_pixiu.waste_lane.rate_unavailable_count',
+  wasteLaneFailed: 'az_pixiu.waste_lane.failed',
 } as const;
 
 /**

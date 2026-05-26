@@ -198,6 +198,8 @@ describe('runAnalysis — fixture transport + mock model + playbook', () => {
         'rubric.citation_completeness',
         'rubric.confidence_consistency',
         'rubric.read_only_adherence',
+        'rubric.estimated_impact_calibrated',
+        'rubric.waste_classification_grounding',
         'rubric.passed_all',
       ]);
       expect(publisher.calls[0]!.every((s) => s.traceId === result.otel_trace_id)).toBe(true);

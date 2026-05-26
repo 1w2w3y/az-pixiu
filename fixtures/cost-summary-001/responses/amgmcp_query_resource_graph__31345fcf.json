@@ -1,0 +1,16 @@
+{
+  "_comment": "Waste-detection lane: orphan_public_ip. Cost-summary-001 has no orphan public IPs — empty data array exercises the 'lane ran cleanly, 0 candidates' path so the existing cost-summary fixture continues to pass under Phase 3 waste detection without surfacing a recommendation surface that the canned mock can't ground.",
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "subscription_ids": ["33333333-3333-3333-3333-333333333333"],
+    "query": "Resources | where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration) | project id, name, subscriptionId, resourceGroup, location, skuName=tostring(sku.name), allocationMethod=tostring(properties.publicIPAllocationMethod)"
+  },
+  "parameters_digest": "31345fcf04296eeb42f9463423fc988f12c3fb1e918a53b0340b3feb57aa126d",
+  "response": {
+    "content": {
+      "data": [],
+      "count": 0
+    },
+    "isError": false
+  }
+}

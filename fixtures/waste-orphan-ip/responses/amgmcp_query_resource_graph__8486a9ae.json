@@ -1,0 +1,65 @@
+{
+  "_comment": "Orphan public-IP waste-lane ARG response. 5 orphan public IPs across 2 subscriptions (4 in 77.../77 — 1 of which has an unknown SKU [Basic/Dynamic], 1 in 88.../88). The lane ARG predicate (isnull(properties.ipConfiguration)) already excludes the attached IP that lives in this fixture's logical inventory; an ARG-side WHERE filter is what the agent relies on, so the unattached fixture row is deliberately not present in this response.",
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "subscription_ids": [
+      "77777777-7777-7777-7777-777777777777",
+      "88888888-8888-8888-8888-888888888888"
+    ],
+    "query": "Resources | where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration) | project id, name, subscriptionId, resourceGroup, location, skuName=tostring(sku.name), allocationMethod=tostring(properties.publicIPAllocationMethod)"
+  },
+  "parameters_digest": "8486a9ae7625ac5db92ff7690cf1b2a276a1f0a12a71b9f8b27e175d17fbee7e",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "id": "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-inbound-001",
+          "name": "pip-test-vhx-inbound-001",
+          "subscriptionId": "77777777-7777-7777-7777-777777777777",
+          "resourceGroup": "rg-shared-test",
+          "location": "eastus",
+          "skuName": "Standard",
+          "allocationMethod": "Static"
+        },
+        {
+          "id": "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-inbound-002",
+          "name": "pip-test-vhx-inbound-002",
+          "subscriptionId": "77777777-7777-7777-7777-777777777777",
+          "resourceGroup": "rg-shared-test",
+          "location": "eastus",
+          "skuName": "Standard",
+          "allocationMethod": "Static"
+        },
+        {
+          "id": "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-outbound-001",
+          "name": "pip-test-vhx-outbound-001",
+          "subscriptionId": "77777777-7777-7777-7777-777777777777",
+          "resourceGroup": "rg-shared-test",
+          "location": "eastus",
+          "skuName": "Standard",
+          "allocationMethod": "Static"
+        },
+        {
+          "id": "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-legacy-prototype/providers/Microsoft.Network/publicIPAddresses/pip-legacy-basic-001",
+          "name": "pip-legacy-basic-001",
+          "subscriptionId": "77777777-7777-7777-7777-777777777777",
+          "resourceGroup": "rg-legacy-prototype",
+          "location": "westus2",
+          "skuName": "Basic",
+          "allocationMethod": "Dynamic"
+        },
+        {
+          "id": "/subscriptions/88888888-8888-8888-8888-888888888888/resourceGroups/rg-sandbox-app/providers/Microsoft.Network/publicIPAddresses/pip-sandbox-bastion-stale",
+          "name": "pip-sandbox-bastion-stale",
+          "subscriptionId": "88888888-8888-8888-8888-888888888888",
+          "resourceGroup": "rg-sandbox-app",
+          "location": "westus2",
+          "skuName": "Standard",
+          "allocationMethod": "Static"
+        }
+      ],
+      "count": 5
+    },
+    "isError": false
+  }
+}

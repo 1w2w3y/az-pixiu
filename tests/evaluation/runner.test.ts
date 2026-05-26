@@ -84,6 +84,45 @@ describe('runEvaluation — Phase 1 dataset against seeded fixtures (mock model 
   });
 });
 
+describe('runEvaluation — Phase 3 waste-orphan-ip vertical slice', () => {
+  it('runs cost-summary-waste-001 end-to-end against the seeded fixture and surfaces lane evidence', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'azp-eval-waste-'));
+    try {
+      const dataset = await loadDataset('eval/phase-3-waste.json');
+      const result = await runEvaluation({
+        dataset,
+        config,
+        makeModel: () => buildCannedMockModelClient(),
+        modelProvider: 'mock',
+        credentialIdentity,
+        usePlaybook: true,
+        runsDir: tmp,
+        observabilityMode: 'noop',
+      });
+
+      expect(result.items).toHaveLength(1);
+      const item = result.items[0]!;
+      expect(item.error).toBeUndefined();
+      expect(item.score.passed_all).toBe(true);
+      expect(item.expectations.passed_all).toBe(true);
+      // The lane's synthetic source_capability proves the waste-detection
+      // executor ran and its EvidenceRecords reached the eval runner's
+      // capability accounting (proxy for the trace's wired path).
+      expect(
+        item.expectations.results.find((r) => r.expectation === 'expected_capabilities_invoked')
+          ?.passed,
+      ).toBe(true);
+      // Both new rubrics must be present in the score list — they
+      // are the per-PR contract for Phase 3 PR 1.
+      const rubricNames = item.score.results.map((r) => r.rubric);
+      expect(rubricNames).toContain('estimated_impact_calibrated');
+      expect(rubricNames).toContain('waste_classification_grounding');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('runEvaluationByPath — convenience wrapper', () => {
   it('loads the dataset from disk and returns the same shape with dataset_path filled in', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'azp-eval-by-path-'));
