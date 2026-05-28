@@ -1,5 +1,9 @@
 # Az-Pixiu
 
+<p align="center">
+  <img src="assets/logo.png" alt="Az-Pixiu logo" width="200" />
+</p>
+
 Az-Pixiu is a local, read-only Azure FinOps agent. It connects to your Azure environment through the [Azure Managed Grafana MCP server](docs/amg-mcp-positioning.md) (AMG-MCP), pulls cost, resource, and telemetry signals, and produces evidence-cited recommendations for reducing cloud spend.
 
 The project is named after the **Pixiu (貔貅)**, a creature in Chinese mythology said to attract and protect wealth — a fitting mascot for a tool focused on understanding and reducing cloud spend.
