@@ -1,46 +1,46 @@
 # Az-Pixiu
 
-Az-Pixiu is a local, AI-powered Azure FinOps agent. It connects to Azure environments through the Azure Managed Grafana MCP server (AMG-MCP), gathers cost, resource, and telemetry signals, and produces actionable optimization recommendations.
+Az-Pixiu is a local, read-only Azure FinOps agent. It connects to your Azure environment through the [Azure Managed Grafana MCP server](docs/amg-mcp-positioning.md) (AMG-MCP), pulls cost, resource, and telemetry signals, and produces evidence-cited recommendations for reducing cloud spend.
 
-The project is named after the Pixiu (貔貅), a creature in Chinese mythology associated with attracting and protecting wealth — a fitting metaphor for a tool focused on understanding and reducing cloud spend.
+The project is named after the **Pixiu (貔貅)**, a creature in Chinese mythology said to attract and protect wealth — a fitting mascot for a tool focused on understanding and reducing cloud spend.
 
 ## What it does
 
-Az-Pixiu is intended to:
+- Discovers Azure subscriptions and resources via AMG-MCP.
+- Pulls cost, configuration, and telemetry signals over the same boundary.
+- Identifies waste candidates (orphan public IPs, unattached disks, deallocated VMs, …) and other cost-relevant patterns.
+- Writes a human-readable Markdown report where every claim cites the underlying tool call.
+- Records the full reasoning trace — planner steps, tool calls, model output, scores — to [Langfuse](https://langfuse.com) for review and evaluation.
 
-- Connect to one or more Azure subscriptions through AMG-MCP.
-- Collect and reason over cost, resource configuration, and telemetry data.
-- Identify likely sources of waste and concrete optimization opportunities.
-- Generate human-readable recommendations supported by the evidence used to produce them.
-- Record every step of its reasoning so that recommendations can be reviewed, audited, and evaluated.
-
-The agent is designed to run locally. Sensitive cloud telemetry stays inside the environment in which the agent runs.
+Everything runs locally. Cloud telemetry never leaves the machine the agent runs on, except for the trace metadata you choose to ship to Langfuse.
 
 ## Why it exists
 
-Az-Pixiu has two intertwined purposes.
+Two reasons, equally weighted:
 
-First, it aims to be a genuinely useful tool for engineers and operators who want to understand Azure spending without manually navigating Cost Management, Azure Monitor, Resource Graph, and Grafana dashboards.
-
-Second, it is an open exploration of AI observability. The project is intentionally built on top of Langfuse so that tracing, evaluations, datasets, prompt management, and experiments are first-class concerns rather than afterthoughts. The project is meant to make these capabilities legible to other engineers learning how to build observable AI systems.
-
-## Project status
-
-Phase 1 ("minimum viable agent") is complete. The agent runs end-to-end against live AMG-MCP and Azure AI Foundry, produces an evidence-cited markdown report plus a `run.json` artefact for each invocation, and lands a Langfuse trace for every run. A first 3-item evaluation dataset (`eval/phase-1.json`) plus four scoring rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence) are in place. The project is in **Phase 2 — Langfuse depth**: managed prompts, Langfuse-hosted datasets, scores pushed back as Langfuse Scores, and prompt/model experiments on real workloads. A new foundational **Phase 2.5 — cross-run continuity** slot has been added to unblock Phase 3's analyzer breadth (waste detection, calibrated impact estimates, recurring-pattern recall); see the [roadmap](docs/roadmap.md) for the full direction of travel and the [cost-summary depth design](docs/design/cost-summary-depth.md) for the analyzer plan.
+1. **A useful FinOps tool.** Understanding Azure spend today means hopping between Cost Management, Azure Monitor, Resource Graph, and a stack of Grafana dashboards. Az-Pixiu does that legwork in one command and explains what it found.
+2. **An open study of AI observability.** Az-Pixiu is built on Langfuse from day one — tracing, evaluations, datasets, prompt management, and experiments are first-class concerns, not afterthoughts. The codebase and docs are written so other engineers can learn how to instrument and evaluate an LLM agent without reverse-engineering a closed product.
 
 ## Getting started
 
-Az-Pixiu is a CLI (`pixiu`) intended to be cloned and run locally. It requires Node.js 22+ and an `az login` against a tenant that has access to an Azure Managed Grafana instance with MCP enabled. For the LLM call it can use either an Azure AI Foundry deployment (Entra ID auth) or an OpenAI-compatible LiteLLM gateway; pick one in `config.json` via the top-level `"provider"` field (`"foundry"` — the default — or `"litellm"`).
+Az-Pixiu is a CLI (`pixiu`) you clone and run locally. Requirements:
+
+- **Node.js 22+**
+- **`az login`** against a tenant that can reach an Azure Managed Grafana instance with MCP enabled
+- An **LLM provider** — either an Azure AI Foundry deployment (Entra ID auth) or any OpenAI-compatible LiteLLM gateway. Pick one in `config.json` via the top-level `"provider"` field (`"foundry"` — the default — or `"litellm"`).
 
 ```bash
 npm install
-cp config.sample.json config.json    # then edit endpoints + deployment / model name
-npm run build                        # or use `npm run dev` during development
+cp config.sample.json config.json    # edit endpoints + deployment / model name
+npm run build                        # or `npm run dev` during development
 
-# real run against live AMG-MCP + the configured model provider
+# headline run: single-window cost breakdown for one subscription
+npx pixiu analyze cost-summary --subscription <sub-id>
+
+# baseline-comparison flow: surface what changed vs. the prior window
 npx pixiu analyze cost-surprise --subscription <sub-id> --resource-group <rg>
 
-# fully-offline eval against the seeded fixtures (no LLM provider, no Azure calls)
+# fully-offline eval against the seeded fixtures (no LLM, no Azure calls)
 npx pixiu eval eval/phase-1.json --use-playbook --mock-model \
     --credential mock --observability noop
 
@@ -55,39 +55,53 @@ LANGFUSE_PUBLIC_KEY=… LANGFUSE_SECRET_KEY=… LANGFUSE_BASE_URL=… \
 npx pixiu diagnose
 ```
 
-Run `npx pixiu --help` for the full flag set. Per-run artefacts land in `runs/<run-id>/`.
+`npx pixiu --help` lists the full flag set. Each run writes its report, `run.json`, and intermediate artefacts to `runs/<run-id>/`.
 
-## Documentation
+## Project status
 
-- [Vision](docs/vision.md) — the long-term direction of the project.
-- [Goals and non-goals](docs/goals.md) — what is and is not in scope.
-- [Architecture principles](docs/architecture-principles.md) — the philosophy that will shape the system.
-- [Use cases](docs/use-cases.md) — the scenarios the agent is intended to support.
-- [Roadmap](docs/roadmap.md) — the phased plan for the project.
-- [Langfuse learning goals](docs/langfuse-learning-goals.md) — the Langfuse capabilities the project intends to demonstrate.
-- [AMG-MCP positioning](docs/amg-mcp-positioning.md) — why AMG-MCP sits at the boundary between the agent and Azure.
-- [AMG-MCP capabilities](docs/amg-mcp-capabilities.md) — a snapshot of what AMG-MCP exposes to the agent today and how it maps to project use cases.
-- [Model comparison](docs/model-comparison.md) — Phase 1 sweep of OpenAI chat-completion models against the cost-summary workload; informs the default model in `config.json` and flags models to avoid.
+**Phase 2 — Langfuse depth — in progress.** Phase 1 (minimum viable agent) is complete: end-to-end runs against live AMG-MCP and Azure AI Foundry, evidence-cited Markdown reports, per-run `run.json`, a Langfuse trace for every invocation, a seeded eval dataset (`eval/phase-1.json`), and four scoring rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence).
 
-## Product requirements
+Recently shipped:
 
-- [Core agent PRD](docs/prd/core-agent.md) — the core Azure cost analysis AI agent.
-- [Langfuse observability PRD](docs/prd/langfuse-observability.md) — telemetry, tracing, evaluations, experiments, and observability requirements.
-- [AMG-MCP integration PRD](docs/prd/amg-mcp-integration.md) — requirements for the MCP integration boundary.
-- [Reporting and recommendations PRD](docs/prd/reporting-and-recommendations.md) — requirements for reports and optimization suggestions.
-- [Evaluation framework PRD](docs/prd/evaluation-framework.md) — requirements for evaluation datasets and quality measurement.
-- [CLI experience PRD](docs/prd/cli-experience.md) — command-line and local developer experience requirements.
-- [Future multi-agent platform PRD](docs/prd/future-multi-agent-platform.md) — long-term vision for multiple Azure operational agents.
+- **Phase 2.5 — cross-run continuity foundations.** `RunHistoryStore` over the existing `runs/` artefacts, deterministic `recommendation_signature`, `prior_run_context` evidence, and a first-class "Run Quality" report section.
+- **Phase 3 — first waste lane.** The `cost-summary` analyzer now detects **orphan public IPs** with calibrated weekly impact estimates from an in-repo rate card.
+- **Embedded rate-limit detection.** The agent recognizes 429s embedded in MCP tool payloads and retries with capped backoff plus jitter, separated from the pacing budget; per-attempt Langfuse span events make retries visible in traces.
 
-## Design
-
-- [Phase 1 design](docs/design/phase-1.md) — the minimum viable agent: component decomposition, data shapes, reasoning loop, trace vocabulary, and option sets for deliberately-open tech decisions.
-- [Phase 2 design](docs/design/phase-2.md) — Langfuse depth: scores, datasets, prompt management, experiments, LLM-as-judge, human review, and a calibration loop, with the eval architecture as the centerpiece.
-- [Cost-summary depth](docs/design/cost-summary-depth.md) — Phase 2.5 cross-run continuity foundations and Phase 3 cost-summary analyzer extensions: waste-detection lanes, naming-pattern clustering, calibrated weekly impact estimates, freshness reasoning, and continuity markers.
+Next up: the rest of the Phase 3 waste-lane group (unattached disks, deallocated VMs, stopped AKS, "restored-*" PostgreSQL servers, empty ACRs), naming-pattern clustering, and a `reasoner.v2` prompt with new scoring rubrics. See the [roadmap](docs/roadmap.md) and the [cost-summary depth design](docs/design/cost-summary-depth.md) for the full plan.
 
 ## Audience
 
-The project is written for two audiences at once. The first is engineers and operators who would use a local Azure FinOps agent to understand their own subscription spending. The second is engineers learning how to build, instrument, and evaluate AI systems in a disciplined way. The documentation, the codebase, and the evaluation artifacts are intended to serve both.
+Az-Pixiu is written for two readers. The first is an engineer or operator who wants to understand their own Azure spend without manually piecing together Cost Management, Azure Monitor, and a Grafana dashboard. The second is an engineer learning how to build, instrument, and evaluate an LLM agent in a disciplined way. The code, docs, and eval artefacts are kept legible for both.
+
+## Documentation
+
+**Direction and scope**
+
+- [Vision](docs/vision.md) — long-term direction.
+- [Goals and non-goals](docs/goals.md) — what is and isn't in scope.
+- [Architecture principles](docs/architecture-principles.md) — the philosophy shaping the system.
+- [Use cases](docs/use-cases.md) — the scenarios the agent is built to support.
+- [Roadmap](docs/roadmap.md) — phased plan.
+- [Langfuse learning goals](docs/langfuse-learning-goals.md) — the Langfuse capabilities the project intends to demonstrate.
+- [AMG-MCP positioning](docs/amg-mcp-positioning.md) — why AMG-MCP sits at the Azure boundary.
+- [AMG-MCP capabilities](docs/amg-mcp-capabilities.md) — what AMG-MCP exposes today and how it maps to use cases.
+- [Model comparison](docs/model-comparison.md) — Phase 1 sweep of OpenAI chat-completion models on the cost-summary workload.
+
+**Product requirements**
+
+- [Core agent](docs/prd/core-agent.md)
+- [Langfuse observability](docs/prd/langfuse-observability.md)
+- [AMG-MCP integration](docs/prd/amg-mcp-integration.md)
+- [Reporting and recommendations](docs/prd/reporting-and-recommendations.md)
+- [Evaluation framework](docs/prd/evaluation-framework.md)
+- [CLI experience](docs/prd/cli-experience.md)
+- [Future multi-agent platform](docs/prd/future-multi-agent-platform.md)
+
+**Design**
+
+- [Phase 1 design](docs/design/phase-1.md) — minimum viable agent: components, data shapes, reasoning loop, trace vocabulary.
+- [Phase 2 design](docs/design/phase-2.md) — Langfuse depth: scores, datasets, prompt management, experiments, LLM-as-judge, human review, calibration.
+- [Cost-summary depth](docs/design/cost-summary-depth.md) — Phase 2.5 + Phase 3 analyzer extensions: waste lanes, naming-pattern clustering, calibrated impact, freshness checks, continuity markers.
 
 ## License
 
