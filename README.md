@@ -38,7 +38,13 @@ npm install
 cp config.sample.json config.json    # edit endpoints + deployment / model name
 npm run build                        # or `npm run dev` during development
 
-# headline run: single-window cost breakdown for one subscription
+# headline run: single-window cost breakdown — no subscription id needed.
+# With no --subscription flag the agent auto-discovers your top 3
+# subscriptions by resource count via AMG-MCP and analyzes those.
+npx pixiu analyze cost-summary
+
+# scope it explicitly to one or more subscriptions instead (--subscription repeats),
+# or filter by display-name substring with --subscription-name-filter <text>
 npx pixiu analyze cost-summary --subscription <sub-id>
 
 # baseline-comparison flow: surface what changed vs. the prior window
