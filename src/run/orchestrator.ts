@@ -227,7 +227,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const runsDir = options.runsDir ?? 'runs';
-  const runDir = join(runsDir, runId);
+  const runDir = join(runsDir, runDirName(startedAt, runId));
   const reportPath = join(runDir, 'report.md');
   const runJsonPath = join(runDir, 'run.json');
 
@@ -939,6 +939,26 @@ async function publishAnalyzeScores(
 function runIdAsBranded(id: string): RunMetadata['run_id'] {
   // randomUUID is RFC 4122 v4 so it satisfies the RunIdSchema brand.
   return id as unknown as RunMetadata['run_id'];
+}
+
+/**
+ * Filesystem-safe, lexically-sortable name for a run's artefact directory.
+ * Derived from the run's start time so `runs/` browses and sorts
+ * chronologically, with a short run_id suffix for uniqueness within the same
+ * second and to keep a visible link back to the Langfuse trace (`run-<run_id>`).
+ *
+ * The canonical run identity is still `run_id` (a UUID) recorded inside
+ * run.json — the RunHistoryStore reads that field, never the directory name —
+ * so this only affects navigability, not cross-run matching or trace ids.
+ *
+ *   2026-05-29T04:12:41.704Z  ->  2026-05-29T04-12-41Z-d3f4aa74
+ *
+ * Milliseconds are dropped and ':' is replaced with '-' because ':' is illegal
+ * in Windows path components.
+ */
+function runDirName(startedAtIso: string, runId: string): string {
+  const stamp = startedAtIso.replace(/\.\d+Z$/, 'Z').replace(/:/g, '-');
+  return `${stamp}-${runId.slice(0, 8)}`;
 }
 
 /**
