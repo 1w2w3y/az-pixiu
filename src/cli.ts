@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { loadConfig, ConfigError } from './config.js';
 import { intakeScope } from './run/scope-intake.js';
