@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +12,7 @@ import { Planner } from '../../src/reasoning/planner.js';
 import { Reasoner } from '../../src/reasoning/reasoner.js';
 import { MockModelClient } from '../../src/model/mock-client.js';
 import { renderMarkdownReport } from '../../src/report/markdown.js';
+import { renderHtmlReport } from '../../src/report/html.js';
 import { writeRunArtifact, buildRunArtifact } from '../../src/report/runjson.js';
 import { initializeTracing, shutdownTracing } from '../../src/observability/setup.js';
 import { withSpan, SpanNames, ATTR } from '../../src/observability/spans.js';
@@ -211,11 +213,16 @@ describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)',
 
       // 9. Render report + write run.json
       const reportPath = join(tmpDir, 'report.md');
+      const htmlReportPath = join(tmpDir, 'report.html');
       const runJsonPath = join(tmpDir, 'run.json');
+      const reportInput = { scope: item.scope, reasoning, evidence: records, metadata };
       const md = await withSpan(SpanNames.ReportAssembly, async () =>
-        renderMarkdownReport({ scope: item.scope, reasoning, evidence: records, metadata }),
+        renderMarkdownReport(reportInput),
       );
-      await (await import('node:fs/promises')).writeFile(reportPath, md, 'utf8');
+      const html = renderHtmlReport(reportInput);
+      const fsWriteFile = (await import('node:fs/promises')).writeFile;
+      await fsWriteFile(reportPath, md, 'utf8');
+      await fsWriteFile(htmlReportPath, html, 'utf8');
       await writeRunArtifact({
         path: runJsonPath,
         artifact: buildRunArtifact(metadata, item.scope, records, reasoning),
@@ -226,6 +233,12 @@ describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)',
       expect(reportContent).toContain('# Az-Pixiu Cost-Surprise Report');
       expect(reportContent).toContain(recId);
       expect(reportContent).toContain('investigate the 2026-05-03 PostgreSQL SKU upgrade');
+      // The HTML report writes alongside report.md and starts with a
+      // well-formed HTML5 doctype.
+      expect(existsSync(htmlReportPath)).toBe(true);
+      const htmlContent = await readFile(htmlReportPath, 'utf8');
+      expect(htmlContent.startsWith('<!doctype html>')).toBe(true);
+      expect(htmlContent).toContain(recId);
 
       const runJson = JSON.parse(await readFile(runJsonPath, 'utf8')) as { schema_version: string; reasoning: { recommendations: unknown[] } };
       expect(runJson.schema_version).toBe('1');

@@ -10,6 +10,7 @@ import { Reasoner } from '../reasoning/reasoner.js';
 import type { ModelClient } from '../model/client.js';
 import { modelConfigHash } from '../model/client.js';
 import { renderMarkdownReport } from '../report/markdown.js';
+import { renderHtmlReport } from '../report/html.js';
 import { buildRunArtifact, writeRunArtifact } from '../report/runjson.js';
 import {
   propagateAttributes,
@@ -162,6 +163,7 @@ export interface RunResult {
   run_id: string;
   run_dir: string;
   report_path: string;
+  html_report_path: string;
   run_json_path: string;
   /**
    * Agent-side logical trace identifier (`run-<run_id>`). Stable across
@@ -229,6 +231,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
   const runsDir = options.runsDir ?? 'runs';
   const runDir = join(runsDir, runDirName(startedAt, runId));
   const reportPath = join(runDir, 'report.md');
+  const htmlReportPath = join(runDir, 'report.html');
   const runJsonPath = join(runDir, 'run.json');
 
   const observabilityMode = options.observabilityMode ?? 'memory';
@@ -345,6 +348,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
               startedAt,
               runDir,
               reportPath,
+              htmlReportPath,
               runJsonPath,
               traceId,
             });
@@ -384,6 +388,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
 
     process.stdout.write(`\nDone. ${result.reasoning.recommendations.length} recommendation(s).\n`);
     process.stdout.write(`  report: ${result.report_path}\n`);
+    process.stdout.write(`  html report: ${result.html_report_path}\n`);
     process.stdout.write(`  run.json: ${result.run_json_path}\n`);
     process.stdout.write(`  trace_id: ${result.trace_id}\n`);
     if (otelTraceId) process.stdout.write(`  otel_trace_id: ${otelTraceId}\n`);
@@ -523,6 +528,7 @@ interface RunCtx extends Omit<RunOptions, 'scope'> {
   startedAt: string;
   runDir: string;
   reportPath: string;
+  htmlReportPath: string;
   runJsonPath: string;
   traceId: string;
 }
@@ -768,7 +774,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
 
   process.stdout.write(`→ writing report to ${ctx.runDir}/\n`);
   await withSpan(SpanNames.ReportAssembly, async () => {
-    const md = renderMarkdownReport({
+    const reportInput = {
       scope: ctx.scope,
       reasoning,
       evidence: recordsWithPrior,
@@ -776,9 +782,12 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       inputDataQuality: allDq,
       transportSummary: mergedTransport,
       ...(wasteResult ? { wasteLanes: wasteResult.lanes } : {}),
-    });
+    };
+    const md = renderMarkdownReport(reportInput);
+    const html = renderHtmlReport(reportInput);
     await mkdir(ctx.runDir, { recursive: true });
     await writeFile(ctx.reportPath, md, 'utf8');
+    await writeFile(ctx.htmlReportPath, html, 'utf8');
     await writeRunArtifact({
       path: ctx.runJsonPath,
       artifact: buildRunArtifact(
@@ -814,6 +823,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     run_id: ctx.runId,
     run_dir: ctx.runDir,
     report_path: ctx.reportPath,
+    html_report_path: ctx.htmlReportPath,
     run_json_path: ctx.runJsonPath,
     trace_id: ctx.traceId,
     metadata,
