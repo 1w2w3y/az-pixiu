@@ -273,6 +273,50 @@ describe('renderMarkdownReport', () => {
     expect(md).not.toContain('## Cost Summary Overview');
   });
 
+  it('expands obscure-abbreviation service names in the top-services list', () => {
+    const summaryScope: Scope = {
+      subscription_ids: [subId],
+      time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
+      analysis_type: 'cost_summary',
+      effective_scope_summary: '1 subscription, 7-day cost summary',
+    };
+    const ddosEvidence: EvidenceRecord[] = [
+      {
+        evidence_id: 'ev-amgmcp_cost_analysis-ddos',
+        source_capability: 'amgmcp_cost_analysis',
+        capability_version: '1.0.0',
+        query_intent: 'cost_breakdown',
+        scope_subset: { subscription_ids: [subId] },
+        time_window: summaryScope.time_window,
+        payload_ref: {
+          kind: 'inline',
+          data: {
+            periodStart: '2026-05-01',
+            periodEnd: '2026-05-08',
+            subscriptions: [
+              {
+                subscriptionId: subId,
+                totalCost: 224.4,
+                currency: 'USD',
+                byService: [{ name: 'Azure DDOS Protection', cost: 224.4 }],
+              },
+            ],
+          },
+        },
+        payload_summary: { total_cost: 224.4, currency: 'USD' },
+        caveats: [],
+      },
+    ];
+    const md = renderMarkdownReport({
+      scope: summaryScope,
+      reasoning,
+      evidence: ddosEvidence,
+      metadata,
+    });
+    expect(md).toContain('Azure Distributed Denial of Service (DDoS) Protection: 224.40 USD');
+    expect(md).not.toMatch(/^- Azure DDOS Protection:/m);
+  });
+
   it('renders a spend overview from live AMG-MCP shape (subscriptions[].byService)', () => {
     const summaryScope: Scope = {
       subscription_ids: [subId],
@@ -374,8 +418,8 @@ describe('renderMarkdownReport — retrieval-stage data quality', () => {
       inputDataQuality: [taggingFinding, partialCoverageFinding],
     });
     expect(md).toContain('## Data Quality — Retrieval Stage');
-    expect(md).toContain('### dq-1 — tagging_gap');
-    expect(md).toContain('### dq-2 — partial_coverage');
+    expect(md).toContain('### Data Quality finding dq-1 — tagging_gap');
+    expect(md).toContain('### Data Quality finding dq-2 — partial_coverage');
     // Both categories are absent from reasoning.data_quality, so each is
     // tagged as not-echoed.
     expect(md).toMatch(/dq-1 — tagging_gap[\s\S]*Status:_ not echoed by the reasoner/);
@@ -572,7 +616,7 @@ describe('renderMarkdownReport — Run Quality enrichment (Phase 3 §S3)', () =>
       /amgmcp_cost_analysis:\*\* 2 retry attempt\(s\), 90s cumulative backoff, all attempts ultimately succeeded\./,
     );
     // Recovered throttles don't generate DQ findings.
-    expect(md).not.toContain('### dq-throttle');
+    expect(md).not.toContain('### Data Quality finding dq-throttle');
   });
 
   it('renders exhausted throttle with rate_limit DQ above it', () => {
@@ -622,7 +666,7 @@ describe('renderMarkdownReport — Run Quality enrichment (Phase 3 §S3)', () =>
     });
     expect(md).toMatch(/partial cost-scope coverage \(1 of 2 subscription\(s\) returned cost evidence\)/);
     expect(md).toMatch(/amgmcp_cost_analysis:\*\* 3 retry attempt\(s\), 210s cumulative backoff,/);
-    expect(md).toContain('### dq-failure-1 — rate_limit');
+    expect(md).toContain('### Data Quality finding dq-failure-1 — rate_limit');
   });
 
   it('falls back to non-derivable when the scope has no subscription ids', () => {

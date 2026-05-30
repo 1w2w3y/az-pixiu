@@ -239,6 +239,41 @@ describe('renderMarkdownReport — Waste Candidates section', () => {
     expect(md).not.toContain('## Waste Candidates');
   });
 
+  it('expands SKU on its first occurrence in the section and uses the bare form thereafter', () => {
+    const md = renderMarkdownReport({
+      scope,
+      reasoning,
+      evidence,
+      metadata,
+      wasteLanes: [makeLane()],
+    });
+    // First candidate line introduces the abbreviation in full.
+    const firstExpansion = md.indexOf('Stock Keeping Unit (SKU)');
+    expect(firstExpansion).toBeGreaterThan(-1);
+    // The bare "SKU PublicIPAddress_Basic_Dynamic" rendering (subsequent
+    // candidate line) must come AFTER the first expansion.
+    const bareUse = md.indexOf('rate unavailable for SKU PublicIPAddress_Basic_Dynamic');
+    expect(bareUse).toBeGreaterThan(firstExpansion);
+    // Only one expansion per section — the second priced candidate's row
+    // should already use the bare form.
+    expect(md.match(/Stock Keeping Unit \(SKU\)/g)?.length ?? 0).toBe(1);
+  });
+
+  it('expands ARG on its first occurrence in the unparsed-rows footer', () => {
+    const laneWithUnparsed: WasteLaneResult = {
+      ...makeLane(),
+      unparsed_row_count: 2,
+    };
+    const md = renderMarkdownReport({
+      scope,
+      reasoning,
+      evidence,
+      metadata,
+      wasteLanes: [laneWithUnparsed],
+    });
+    expect(md).toContain('Azure Resource Graph (ARG) row(s) were unparseable');
+  });
+
   it('renders a failed lane with the predicate cited but no candidates enumerated', () => {
     const failedLane: WasteLaneResult = {
       lane: 'orphan_public_ip',

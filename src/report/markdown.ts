@@ -99,6 +99,51 @@ export function renderMarkdownReport(input: RenderReportInput): string {
 }
 
 /**
+ * Section-local abbreviation expander. The report stays primarily in
+ * English; the only stylistic rule is that any obscure 2–3 letter
+ * abbreviation must be spelled out on its first occurrence inside a
+ * given section as `Full Phrase (ABBR)` and may be used bare in every
+ * subsequent occurrence within that same section. Each top-level
+ * section that mints such terms gets its own expander instance so the
+ * code does not have to track document-global first-use.
+ */
+function makeAbbrExpander(): {
+  sku(): string;
+  arg(): string;
+} {
+  const seen = new Set<string>();
+  function expand(key: string, full: string, abbr: string): string {
+    if (seen.has(key)) return abbr;
+    seen.add(key);
+    return `${full} (${abbr})`;
+  }
+  return {
+    sku: () => expand('SKU', 'Stock Keeping Unit', 'SKU'),
+    arg: () => expand('ARG', 'Azure Resource Graph', 'ARG'),
+  };
+}
+
+/**
+ * Service-name display helper. Cost-API responses surface a handful of
+ * Azure service names whose canonical form contains a bare obscure
+ * abbreviation (e.g. "Azure DDOS Protection"). The renderer expands
+ * those on every occurrence — service-line rows are read out-of-order
+ * by the operator (skim the top-services bullets, jump to a fact),
+ * so a section-local "first use" rule does not buy clarity here.
+ * Unrecognized service names pass through unchanged so the helper is
+ * safe to apply uniformly wherever a cost-API service name is
+ * rendered into the report.
+ */
+const SERVICE_NAME_EXPANSIONS: Record<string, string> = {
+  'Azure DDOS Protection': 'Azure Distributed Denial of Service (DDoS) Protection',
+  'Azure DDoS Protection': 'Azure Distributed Denial of Service (DDoS) Protection',
+};
+
+function expandServiceName(name: string): string {
+  return SERVICE_NAME_EXPANSIONS[name] ?? name;
+}
+
+/**
  * Run Quality (Phase 2.5 — design/cost-summary-depth.md §Gap 6).
  *
  * Surfaces transport- and protocol-level findings as a first-class
@@ -213,7 +258,7 @@ function recoveredCapabilityLines(rollup: TransportRollup): string[] {
 
 function renderRunQualityFinding(d: DataQualityFinding): string {
   return [
-    `### ${d.dq_id} — ${d.category}`,
+    `### Data Quality finding ${d.dq_id} — ${d.category}`,
     '',
     d.consequence_for_analysis,
     ...(d.affected_capability ? [`**Affected capability:** ${d.affected_capability}`] : []),
@@ -381,7 +426,9 @@ function costSummaryOverview(scope: Scope, evidence: EvidenceRecord[]): string {
     lines.push(
       '',
       '**Top services:**',
-      ...summary.topServices.map((s) => `- ${s.name}: ${formatMoney(s.cost, summary.currency)}`),
+      ...summary.topServices.map(
+        (s) => `- ${expandServiceName(s.name)}: ${formatMoney(s.cost, summary.currency)}`,
+      ),
     );
   }
 
@@ -419,6 +466,7 @@ function costSummaryOverview(scope: Scope, evidence: EvidenceRecord[]): string {
 function wasteCandidatesSection(lanes: readonly WasteLaneResult[]): string {
   if (lanes.length === 0) return '';
   const lines: string[] = ['## Waste Candidates', ''];
+  const expander = makeAbbrExpander();
   for (const lane of lanes) {
     lines.push(`### ${lane.title} (\`${lane.lane}\`)`);
     lines.push('');
@@ -439,19 +487,19 @@ function wasteCandidatesSection(lanes: readonly WasteLaneResult[]): string {
       continue;
     }
     for (const c of lane.candidates) {
-      lines.push(renderWasteCandidateLine(c));
+      lines.push(renderWasteCandidateLine(c, expander));
     }
     lines.push('');
     const total = lane.lane_total;
     const totalLine =
       total.available_count > 0
         ? `**Lane total (${total.available_count} priced candidate(s)):** ~$${total.low_usd.toFixed(2)}–$${total.high_usd.toFixed(2)}/week, list-price estimate.`
-        : `**Lane total:** no priced candidates (every SKU was unavailable from the rate card).`;
+        : `**Lane total:** no priced candidates (every ${expander.sku()} was unavailable from the rate card).`;
     lines.push(totalLine);
     if (total.unavailable_count > 0) {
       const skus = total.unavailable_skus.map((s) => s.sku).join(', ');
       lines.push(
-        `_${total.unavailable_count} candidate(s) excluded from the total — rate unavailable for SKU(s): ${skus}._`,
+        `_${total.unavailable_count} candidate(s) excluded from the total — rate unavailable for ${expander.sku()}(s): ${skus}._`,
       );
     }
     lines.push('');
@@ -461,7 +509,7 @@ function wasteCandidatesSection(lanes: readonly WasteLaneResult[]): string {
     );
     if (lane.unparsed_row_count > 0) {
       lines.push(
-        `_${lane.unparsed_row_count} ARG row(s) were unparseable by this lane and excluded from the enumeration._`,
+        `_${lane.unparsed_row_count} ${expander.arg()} row(s) were unparseable by this lane and excluded from the enumeration._`,
       );
     }
     lines.push('');
@@ -471,15 +519,16 @@ function wasteCandidatesSection(lanes: readonly WasteLaneResult[]): string {
 
 function renderWasteCandidateLine(
   c: WasteLaneResult['candidates'][number],
+  expander: ReturnType<typeof makeAbbrExpander>,
 ): string {
   const id = c.candidate.resource_id;
   const sku = c.candidate.sku;
   const region = c.candidate.location || '(unknown)';
   const impact = c.estimated_weekly_impact;
   if (impact.kind === 'available') {
-    return `- **${c.candidate.name}** (\`${id}\`) — SKU ${sku} in ${region} — ~$${impact.low_usd.toFixed(2)}–$${impact.high_usd.toFixed(2)}/week`;
+    return `- **${c.candidate.name}** (\`${id}\`) — ${expander.sku()} ${sku} in ${region} — ~$${impact.low_usd.toFixed(2)}–$${impact.high_usd.toFixed(2)}/week`;
   }
-  return `- **${c.candidate.name}** (\`${id}\`) — SKU ${sku} in ${region} — _(rate unavailable for SKU ${sku})_`;
+  return `- **${c.candidate.name}** (\`${id}\`) — ${expander.sku()} ${sku} in ${region} — _(rate unavailable for SKU ${sku})_`;
 }
 
 function recommendationsSection(reasoning: ReasoningOutput): string {
@@ -500,7 +549,7 @@ function renderRecommendation(rec: Recommendation, reasoning: ReasoningOutput): 
     .filter((f): f is Fact => Boolean(f));
 
   return [
-    `### ${rec.recommendation_id} — ${rec.priority.toUpperCase()} / ${rec.confidence.level.toUpperCase()} (impact: ${rec.impact})`,
+    `### Recommendation ${rec.recommendation_id} — ${rec.priority.toUpperCase()} / ${rec.confidence.level.toUpperCase()} (impact: ${rec.impact})`,
     '',
     rec.statement,
     '',
@@ -515,11 +564,11 @@ function renderRecommendation(rec: Recommendation, reasoning: ReasoningOutput): 
     section('False-positive considerations', rec.false_positive_considerations),
     section(
       'Cited hypotheses',
-      citedHyps.map((h) => `${h.hypothesis_id}: ${h.statement}`),
+      citedHyps.map((h) => `Hypothesis ${h.hypothesis_id}: ${h.statement}`),
     ),
     section(
       'Cited facts',
-      citedFacts.map((f) => `${f.fact_id}: ${f.statement}`),
+      citedFacts.map((f) => `Fact ${f.fact_id}: ${f.statement}`),
     ),
   ]
     .filter(Boolean)
@@ -539,7 +588,7 @@ function hypothesesSection(reasoning: ReasoningOutput): string {
       .map((s) => `- ${s}`)
       .join('\n');
     return [
-      `### ${h.hypothesis_id} — confidence ${h.confidence.level}`,
+      `### Hypothesis ${h.hypothesis_id} — confidence ${h.confidence.level}`,
       '',
       h.statement,
       '',
@@ -558,7 +607,7 @@ function hypothesesSection(reasoning: ReasoningOutput): string {
 function factsSection(reasoning: ReasoningOutput): string {
   if (reasoning.facts.length === 0) return '## Observed Facts\n\n_(none)_';
   const blocks = reasoning.facts.map((f) =>
-    `### ${f.fact_id}\n\n${f.statement}\n\n**Evidence:** ${f.evidence_ids.join(', ')}`,
+    `### Fact ${f.fact_id}\n\n${f.statement}\n\n**Evidence:** ${f.evidence_ids.join(', ')}`,
   );
   return ['## Observed Facts', ...blocks].join('\n\n');
 }
@@ -598,13 +647,13 @@ function retrievalStageDataQualitySection(
 
 function renderDataQuality(d: DataQualityFinding): string {
   return [
-    `### ${d.dq_id} — ${d.category}`,
+    `### Data Quality finding ${d.dq_id} — ${d.category}`,
     '',
     d.consequence_for_analysis,
     ...(d.affected_capability ? [`**Affected capability:** ${d.affected_capability}`] : []),
     ...(d.actionable_hint ? [`**Actionable hint:** ${d.actionable_hint}`] : []),
     ...(d.impact_on_recommendations.length > 0
-      ? [`**Weakens:** ${d.impact_on_recommendations.join(', ')}`]
+      ? [`**Weakens recommendations:** ${d.impact_on_recommendations.map((id) => `Recommendation ${id}`).join(', ')}`]
       : []),
   ].join('\n');
 }

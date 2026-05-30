@@ -31,3 +31,11 @@ Set `intent` to one of:
 Emit a single JSON object with a `requests` array (1 or more entries). Validation will reject empty plans, unknown capabilities, parameters outside the declared schema, or any mutating capability.
 
 If you cannot produce a useful plan from the scope and capability catalog (e.g., no cost capability available), emit a single request to the closest available read capability with `expected_role` explaining the limitation — the downstream missing-evidence handler will translate this into a data-quality finding.
+
+## Report writing style (for any free-text fields you emit)
+
+The downstream report is written in **English**. Any free-text field you emit (e.g. an `expected_role` describing why a request was the closest available substitute) must stay in English. On the first occurrence within the document of an obscure 2–3 letter abbreviation, spell it out in full with the abbreviation in parentheses, e.g. `Stock Keeping Unit (SKU)`, `Distributed Denial of Service (DDoS)`, `Role-Based Access Control (RBAC)`. Subsequent references within the same document may use the bare abbreviation.
+
+Mandatory expansion list (any of these used bare on first occurrence is a defect): `WoW MoM YoY QoQ TAM SAM SOM P/E P/B P/S EPS FCF EBITDA RBAC SKU TCO RU IOPS SLA SLO SLI VM AKS RG NSG VNet PIP P50 P95 P99 KQL RPS QPS MTTR MTBF LLM A2A ACP RAG SDK ADX RP ARG ACR DDOS DDoS PG TTL FinOps KPI`.
+
+Whitelist — leave bare always: `Azure Grafana MCP GPU CPU USD URL API SQL JSON CSV HTTP HTTPS TCP UDP DNS IPv4 IPv6 ID OK AI`; all product / company names; stock tickers; ISO country / language codes; Azure subscription / resource names; ARM resource type strings; tool names (`amgmcp_*`); JSON / schema keys. Numbers, USD amounts, subscription IDs, resource IDs, and URLs are also kept verbatim.
