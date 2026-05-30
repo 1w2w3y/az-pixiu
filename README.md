@@ -69,7 +69,7 @@ npx pixiu diagnose
 
 ## Project status
 
-**Phase 2 — Langfuse depth — in progress.** Phase 1 (minimum viable agent) is complete: end-to-end runs against live AMG-MCP and Azure AI Foundry, evidence-cited Markdown reports, per-run `run.json`, a Langfuse trace for every invocation, a seeded eval dataset (`eval/phase-1.json`), and four scoring rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence).
+**Phase 2 — Langfuse depth — in progress.** Phase 1 (minimum viable agent) is complete: end-to-end runs against live AMG-MCP and Azure AI Foundry, evidence-cited Markdown reports, per-run `run.json`, a Langfuse trace for every invocation, a seeded eval dataset (`eval/phase-1.json`), and six scoring rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence, plus the Phase 3 additions `estimated_impact_calibrated` and `waste_classification_grounding`).
 
 Recently shipped:
 

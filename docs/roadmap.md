@@ -10,7 +10,7 @@ The goal was to establish a shared understanding of what Az-Pixiu is, what it is
 
 ## Phase 1 — Minimum viable agent (complete)
 
-The goal was to bring an end-to-end agent into existence, even in a constrained form. That bar has been met. The agent connects to AMG-MCP, retrieves a small but realistic set of Azure cost and telemetry signals, produces a recommendation grounded in that data, lands a Langfuse trace for every run, and ships with a first evaluation dataset (`eval/phase-1.json`, 3 items) and four scoring rubrics.
+The goal was to bring an end-to-end agent into existence, even in a constrained form. That bar has been met. The agent connects to AMG-MCP, retrieves a small but realistic set of Azure cost and telemetry signals, produces a recommendation grounded in that data, lands a Langfuse trace for every run, and ships with a first evaluation dataset (`eval/phase-1.json`, 4 items) and six scoring rubrics (the four Phase 1 rubrics — structural correctness, citation completeness, confidence consistency, read-only adherence — plus the Phase 3 additions `estimated_impact_calibrated` and `waste_classification_grounding`).
 
 Scope stayed intentionally narrow: two analysis types (`cost_surprise`, `cost_summary`), a handful of AMG-MCP capabilities, and a single deployment target (clone-and-run TypeScript / Node 22). The point of this phase was to validate the architecture and to give the project something concrete to evaluate; both are done.
 

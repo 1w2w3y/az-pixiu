@@ -106,7 +106,7 @@ A second-pass evaluator runs after `pixiu eval` produces a `ReasoningOutput` for
 Three guardrails make this useful rather than noisy:
 
 1. **Judge runs only inside `pixiu eval`, not inside `pixiu analyze`.** Judges are an evaluation tool, not a production gate. Live runs do not pay the judge cost.
-2. **Judge scores never overwrite rubric scores.** They live in the `judge.*` namespace. A run that passes all four rubrics can still get `judge.grounding = 0.4`, and that disagreement is the signal worth investigating.
+2. **Judge scores never overwrite rubric scores.** They live in the `judge.*` namespace. A run that passes all six rubrics can still get `judge.grounding = 0.4`, and that disagreement is the signal worth investigating.
 3. **The judge sees only what the agent's recommendations cite.** Specifically, the judge prompt fences the cited evidence as data, the same way the reasoner prompt does (`src/reasoning/reasoner.ts:71-76`). The judge does not get raw payloads the reasoner did not use.
 
 **Trade-off named, not resolved: which model judges?** Cheapest option is the same Foundry deployment; safest is a *different* model so judge and judged don't share failure modes; most expensive is a frontier model not available in the operator's tenant. Phase 2's default is "same deployment as the reasoner, single configurable override flag." Calibration data (next section) will tell us whether that's good enough.
@@ -220,7 +220,7 @@ Phase 2 completes when every item below is met:
 - **LLM-as-judge scores appear on eval items and are visible in the same trace as the rubric scores.** Disagreement between rubric scores (boolean) and judge scores (numeric) is filterable.
 - **A human reviewer can attach a score via the Langfuse UI without writing code.** Documented in `docs/operations.md`.
 - **A calibration report exists.** At least one calibration cycle has run against real `human.*` data.
-- **Offline operation still works.** `pixiu eval eval/phase-1.json --use-playbook --mock-model --credential mock --observability noop --no-judge --dataset-file` produces the same `PASS: 3/3` it does today; no Langfuse network call required.
+- **Offline operation still works.** `pixiu eval eval/phase-1.json --use-playbook --mock-model --credential mock --observability noop --no-judge --dataset-file` produces the same `PASS: 4/4` it does today; no Langfuse network call required.
 
 The Phase 1 verification list ([phase-1 design](phase-1.md) §Verification) continues to hold — Phase 2 does not regress any Phase 1 invariant.
 

@@ -4,15 +4,20 @@ import { deriveConfidenceLevel } from '../confidence.js';
 import { detectImperativeRemediation } from '../lint/imperative.js';
 
 /**
- * Phase 1 minimal scoring rubric (design §22 step 12, §17 verification).
+ * Phase 1 minimal scoring rubric (design §22 step 12, §17 verification),
+ * extended in Phase 3 with two waste-lane rubrics.
  * Each rubric is one independent check; aggregator returns the conjunction.
  *
- * The four rubrics deliberately mirror §17's verification list:
+ * The first four rubrics deliberately mirror §17's verification list:
  *   - structural correctness (passes ReasoningOutputSchema)
  *   - evidence-citation completeness (every rec cites surviving facts/hyps;
  *     every fact cites at least one evidence_id, which the schema enforces)
  *   - confidence-derivation consistency (level matches dimensions)
  *   - read-only language adherence (no bare imperative remediation)
+ *
+ * Phase 3 added two waste-lane rubrics:
+ *   - estimated_impact_calibrated (waste recs ship a defensible impact estimate)
+ *   - waste_classification_grounding (waste recs cite a waste-lane evidence record)
  *
  * Phase 2 will add: rubric.relevance, rubric.calibration vs ground truth,
  * rubric.completeness vs expected hypotheses, etc.

@@ -25,7 +25,7 @@ const credentialIdentity: CredentialIdentity = {
 };
 
 describe('runEvaluation — Phase 1 dataset against seeded fixtures (mock model + playbook)', () => {
-  it('runs all three items and produces per-item rubric + expectations results', async () => {
+  it('runs all four items and produces per-item rubric + expectations results', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'azp-eval-runner-'));
     try {
       const dataset = await loadDataset('eval/phase-1.json');

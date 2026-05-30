@@ -774,7 +774,7 @@ End-to-end checks to confirm Phase 1 is real. **All items below are met as of 20
 - **Repeat-run reproducibility** ([core agent PRD](../prd/core-agent.md) FR-14): running the same scope twice produces structurally consistent output; differences localize to non-deterministic prose, not facts/citations/DQ findings. (Enforced by deterministic playbooks + temperature-0 reasoner + `postProcessReasoning` citation/number checks.)
 - **Capability-version drift:** the failure_taxonomy classifies `schema_mismatch`; covered by `tests/failure/*.test.ts` and the integration tests.
 - **Read-only enforcement:** mutating capabilities are denied at `MCPClient.discover()` via `src/mcp/allowlist.ts`; covered by `tests/mcp/*.test.ts`. The `mutating_capabilities_excluded` event is emitted on the CapabilityDiscovery span when applicable.
-- **Eval dataset items score green** on structural correctness, evidence-citation completeness, confidence-derivation consistency, and read-only adherence: `eval/phase-1.json` has three items (one healthy `cost_surprise`, one permission-gap variant, one `cost_summary`); `pixiu eval eval/phase-1.json --use-playbook --mock-model --credential mock --observability noop` reports `PASS: 3/3 item(s) green`.
+- **Eval dataset items score green** on structural correctness, evidence-citation completeness, confidence-derivation consistency, and read-only adherence: `eval/phase-1.json` has four items (one healthy `cost_surprise`, one permission-gap `cost_surprise` variant, one healthy single-window `cost_summary`, and one multi-subscription `cost_summary` sanitized from a real AMG-MCP run); `pixiu eval eval/phase-1.json --use-playbook --mock-model --credential mock --observability noop` reports `PASS: 4/4 item(s) green`.
 
 ---
 
@@ -810,8 +810,8 @@ Phase 1 produced the following source surface; sections of this document referen
 - **Observability (§4.9 / §14):** `src/observability/setup.ts`, `src/observability/spans.ts`.
 - **Run orchestrator + CLI (§4.10):** `src/run/orchestrator.ts`, `src/run/scope-intake.ts`, `src/run/subscription-discovery.ts`, `src/run/diagnose.ts`, `src/run/credential-factory.ts`, `src/cli.ts`.
 - **Report assembly (§10):** `src/report/markdown.ts`, `src/report/runjson.ts`.
-- **Evaluation (§17 / step 12):** `src/evaluation/` — `dataset.ts`, `scoring.ts` (four rubrics), `expectations.ts`, `runner.ts`, `canned-mock.ts`.
+- **Evaluation (§17 / step 12):** `src/evaluation/` — `dataset.ts`, `scoring.ts` (six rubrics: the four Phase 1 rubrics plus the Phase 3 additions `estimated_impact_calibrated` and `waste_classification_grounding`), `expectations.ts`, `runner.ts`, `canned-mock.ts`.
 - **Prompts (§8, §15.5):** `prompts/planner.v1.md`, `prompts/reasoner.v1.md` (Phase 2 moves these into Langfuse-managed prompts).
 - **Fixtures (§13):** `fixtures/cost-surprise-001/`, `fixtures/cost-surprise-002/`, `fixtures/cost-summary-001/`; seed scripts in `scripts/seed-*.ts`.
-- **Datasets:** `eval/phase-1.json` (3 items), `eval/cost-surprise-001.json` (single-item legacy file used by `tests/evaluation/dataset.test.ts`).
+- **Datasets:** `eval/phase-1.json` (4 items), `eval/cost-surprise-001.json` (single-item legacy file used by `tests/evaluation/dataset.test.ts`).
 - **Project artefacts:** `package.json`, `tsconfig.json`, `vitest.config.ts`, `config.sample.json` (checked-in template) and `config.json` (operator-local, gitignored), `runs/` (per-run output directory; gitignored).
