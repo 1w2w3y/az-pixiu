@@ -6,6 +6,9 @@ import { runAnalysis } from './run/orchestrator.js';
 import { FilesystemRunHistoryStore } from './history/filesystem-store.js';
 import { diagnose, type DiagnoseResult } from './run/diagnose.js';
 import { SubscriptionDiscoveryError } from './run/subscription-discovery.js';
+import { BillingProbeCache, defaultCachePath } from './run/billing-probe-cache.js';
+import { probeBillingAccess } from './run/billing-probe.js';
+import { DataQualityFindingSchema, type DataQualityFinding } from './schemas/index.js';
 import {
   buildCredential,
   describeCredential,
@@ -34,11 +37,24 @@ const USAGE = `Usage:
   pixiu diagnose [flags]
 
 analyze flags:
-  --subscription <id>              Azure subscription GUID. May be repeated. If omitted, the agent auto-discovers the top 3 subscriptions by resource count via AMG-MCP.
+  --subscription <id>              Azure subscription GUID. May be repeated. If omitted, the agent auto-discovers the
+                                   top 3 subscriptions by resource count via AMG-MCP — and, by default, probes each
+                                   candidate's Cost Management read access before final selection so RBAC-denied subs
+                                   are dropped from the analysis up front (pass --no-probe-billing to skip).
   --max-subscriptions <n>          When auto-discovering, how many top subscriptions to analyze (default: 3)
   --subscription-name-filter <s>   case-insensitive substring filter on subscription display names. The agent discovers
                                    all visible subscriptions, keeps only those whose name contains <s>, and analyzes
                                    the top N by resource count. Mutually exclusive with --subscription.
+  --probe-billing / --no-probe-billing
+                                   Toggle the billing-access pre-flight probe (default: enabled). When enabled, each
+                                   candidate is probed with a cheap amgmcp_cost_analysis call and only subs that
+                                   return a clean payload are eligible for auto-selection. Excluded subs become
+                                   billing_probe_excluded data-quality findings.
+  --probe-pool-size <n>            Override the probe pool size (default: max(3*max-subscriptions, max+5, 10), cap 25).
+  --probe-concurrency <n>          Parallel probe calls (default: 5, max: 10).
+  --probe-timeout-ms <n>           Per-probe timeout in milliseconds (default: 15000).
+  --probe-cache <path>             Probe-outcome cache file (default: ~/.az-pixiu/billing-probe-cache.json).
+  --no-probe-cache                 Disable the probe-outcome cache for this run.
   --resource-group <name>          May be repeated
   --from <iso>                     time_window start (default: now − 7d)
   --to <iso>                       time_window end (default: now)
@@ -116,6 +132,12 @@ interface AnalyzeArgs {
   outputDir?: string;
   observability: 'noop' | 'memory' | 'langfuse' | 'ms-otel';
   credentialMode: CredentialMode;
+  probeBilling: boolean;
+  probePoolSize?: number;
+  probeConcurrency?: number;
+  probeTimeoutMs?: number;
+  probeCachePath?: string;
+  probeCacheEnabled: boolean;
 }
 
 async function main(): Promise<number> {
@@ -145,6 +167,13 @@ async function main(): Promise<number> {
       'experiment-name': { type: 'string' },
       'dataset-name': { type: 'string' },
       credential: { type: 'string' },
+      'probe-billing': { type: 'boolean' },
+      'no-probe-billing': { type: 'boolean' },
+      'probe-pool-size': { type: 'string' },
+      'probe-concurrency': { type: 'string' },
+      'probe-timeout-ms': { type: 'string' },
+      'probe-cache': { type: 'string' },
+      'no-probe-cache': { type: 'boolean' },
     },
   });
 
@@ -192,6 +221,13 @@ async function runAnalyzeCommand(
     return 2;
   }
 
+  const probeBilling = !Boolean(values['no-probe-billing']);
+  const probePoolSize = parseOptionalPositiveInt(values['probe-pool-size']);
+  const probeConcurrency = parseOptionalPositiveInt(values['probe-concurrency']);
+  const probeTimeoutMs = parseOptionalPositiveInt(values['probe-timeout-ms']);
+  const probeCachePathArg = stringOrUndefined(values['probe-cache']);
+  const probeCacheEnabled = !Boolean(values['no-probe-cache']);
+
   const args: AnalyzeArgs = {
     configPath: stringOrUndefined(values.config),
     subscriptions: explicitSubs,
@@ -210,6 +246,12 @@ async function runAnalyzeCommand(
     outputDir: stringOrUndefined(values['output-dir']),
     observability: parseObservability(values.observability),
     credentialMode: parseCredential(values.credential),
+    probeBilling,
+    ...(probePoolSize !== undefined ? { probePoolSize } : {}),
+    ...(probeConcurrency !== undefined ? { probeConcurrency } : {}),
+    ...(probeTimeoutMs !== undefined ? { probeTimeoutMs } : {}),
+    ...(probeCachePathArg ? { probeCachePath: probeCachePathArg } : {}),
+    probeCacheEnabled,
   };
 
   let client: MCPClient | undefined;
@@ -284,6 +326,42 @@ async function runAnalyzeCommand(
     const runsDir = args.outputDir ?? 'runs';
     const runHistoryStore = new FilesystemRunHistoryStore({ runsDir });
 
+    // Billing-access probe cache — shared across both the auto-discovery
+    // path (where the probe gates selection) and the explicit-pick path
+    // (where the probe runs but doesn't gate). Cache identity hint is
+    // coarse — the credential mode and/or AZURE_USER env are stable
+    // enough partitions to keep entries from bleeding across operators
+    // sharing a workstation.
+    const probeCache = args.probeBilling && args.probeCacheEnabled
+      ? new BillingProbeCache({
+          path: args.probeCachePath ?? defaultCachePath(),
+          endpoint: config.amg.endpoint,
+          identityHint: `${args.credentialMode}:${process.env.AZURE_USER ?? 'default'}`,
+        })
+      : undefined;
+
+    const probeConfig = args.probeBilling
+      ? {
+          enabled: true,
+          ...(args.probePoolSize !== undefined ? { poolSize: args.probePoolSize } : {}),
+          ...(args.probeConcurrency !== undefined ? { concurrency: args.probeConcurrency } : {}),
+          ...(args.probeTimeoutMs !== undefined ? { timeoutMs: args.probeTimeoutMs } : {}),
+          ...(probeCache ? { cache: probeCache } : {}),
+        }
+      : undefined;
+
+    // Explicit-pick mode: probe still runs but does not gate selection.
+    // Findings flow in as `preflightDataQuality` so the report surfaces
+    // them, but the operator's choice stands.
+    let preflightDataQuality: DataQualityFinding[] | undefined;
+    if (scope && args.probeBilling && !args.fixture) {
+      preflightDataQuality = await probeExplicitSubscriptions(
+        client,
+        args.subscriptions,
+        probeConfig!,
+      );
+    }
+
     const result = await runAnalysis({
       config,
       ...(scope
@@ -295,6 +373,7 @@ async function runAnalyzeCommand(
               ...(args.subscriptionNameFilter !== undefined
                 ? { nameFilter: args.subscriptionNameFilter }
                 : {}),
+              ...(probeConfig ? { probe: probeConfig } : {}),
             },
           }),
       client,
@@ -307,6 +386,9 @@ async function runAnalyzeCommand(
       ...(args.fixture ? { fixtureId: args.fixture } : {}),
       ...(langfusePublisher ? { langfusePublisher } : {}),
       runHistoryStore,
+      ...(preflightDataQuality && preflightDataQuality.length > 0
+        ? { preflightDataQuality }
+        : {}),
     });
 
     return result.score.passed_all ? 0 : 3;
@@ -327,6 +409,64 @@ async function runAnalyzeCommand(
   } finally {
     if (client) await client.close().catch(() => undefined);
   }
+}
+
+/**
+ * Probe each explicitly-named subscription's billing access, log the
+ * outcomes, and return one DQ finding per non-pass. Operator's choice
+ * is never overridden — selection is whatever was passed on the CLI —
+ * but the report surfaces the probe outcome so the operator sees
+ * billing-access state up front.
+ */
+async function probeExplicitSubscriptions(
+  client: MCPClient,
+  subscriptionIds: string[],
+  probeConfig: {
+    enabled: boolean;
+    poolSize?: number;
+    concurrency?: number;
+    timeoutMs?: number;
+    cache?: BillingProbeCache;
+  },
+): Promise<DataQualityFinding[]> {
+  if (!probeConfig.enabled || subscriptionIds.length === 0) return [];
+  process.stdout.write(
+    `→ probing ${subscriptionIds.length} explicit subscription(s) for Cost Management read access...\n`,
+  );
+  const run = await probeBillingAccess(client, subscriptionIds, {
+    ...(probeConfig.concurrency !== undefined ? { concurrency: probeConfig.concurrency } : {}),
+    ...(probeConfig.timeoutMs !== undefined ? { timeoutMs: probeConfig.timeoutMs } : {}),
+    ...(probeConfig.cache ? { cache: probeConfig.cache } : {}),
+    onProbe: (event) => {
+      process.stdout.write(
+        `    probe ${event.outcome}${event.classification ? ` (${event.classification})` : ''}${event.cache_hit ? ' [cache]' : ''}: ${event.subscription_id} (${event.latency_ms}ms)\n`,
+      );
+    },
+  });
+  const dq: DataQualityFinding[] = [];
+  for (const result of run.results) {
+    if (result.outcome === 'pass') continue;
+    dq.push(
+      DataQualityFindingSchema.parse({
+        dq_id: `dq-probe-${dq.length + 1}`,
+        category: 'billing_probe_excluded',
+        affected_capability: 'amgmcp_cost_analysis',
+        affected_scope_subset: {
+          subscription_ids: [result.subscription_id],
+          resource_group_names: null,
+          resource_ids: null,
+        },
+        consequence_for_analysis:
+          `Subscription ${result.subscription_id} was explicitly named on the CLI but the billing-access probe ` +
+          `returned ${result.outcome}${result.classification ? `: ${result.classification}` : ''}. The Cost Management API returned: "${result.message ?? 'no upstream message'}". ` +
+          `The run will proceed because --subscription is an operator override; any actual cost-analysis failure for this sub will surface as a separate retrieval-stage finding.`,
+        impact_on_recommendations: [],
+        actionable_hint:
+          'Grant the Grafana data-source principal Cost Management Reader on this subscription, or pass --no-probe-billing to skip the pre-flight check.',
+      }),
+    );
+  }
+  return dq;
 }
 
 async function runEvalCommand(
@@ -597,6 +737,12 @@ function parsePositiveInt(v: unknown, fallback: number): number {
   if (typeof v !== 'string') return fallback;
   const n = Number.parseInt(v, 10);
   return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+function parseOptionalPositiveInt(v: unknown): number | undefined {
+  if (typeof v !== 'string') return undefined;
+  const n = Number.parseInt(v, 10);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
 function cliAnalysisType(v: unknown): 'cost_surprise' | 'cost_summary' | undefined {

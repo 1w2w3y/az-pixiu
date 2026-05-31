@@ -83,6 +83,11 @@ export const RUN_QUALITY_CATEGORIES: ReadonlySet<DataQualityFinding['category']>
   'stale_data',
   'freshness_partial_window',
   'freshness_uniform_drop',
+  // Phase 3 — billing-access pre-flight probe excludes a candidate
+  // before the analysis runs; the finding belongs in Run Quality
+  // because it describes the operational state of subscription
+  // discovery, not an analytical coverage gap.
+  'billing_probe_excluded',
 ]);
 
 // ---------- recommendation ordering ----------

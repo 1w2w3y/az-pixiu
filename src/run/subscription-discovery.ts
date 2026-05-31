@@ -1,5 +1,8 @@
 import type { MCPClient } from '../mcp/client.js';
 import { extractText, tryParseJson, isWrappedError } from '../mcp/content.js';
+import { probeBillingAccess, type ProbeResult } from './billing-probe.js';
+import { BillingProbeCache } from './billing-probe-cache.js';
+import { DataQualityFindingSchema, type DataQualityFinding } from '../schemas/index.js';
 
 /**
  * Auto-discovery of which Azure subscriptions to analyze when the
@@ -28,6 +31,48 @@ export interface SubscriptionDiscoveryResult {
   selected: SubscriptionCount[];
   all_counts: SubscriptionCount[];
   diagnostics: string[];
+  /**
+   * Billing-access probe outcomes for the candidates that were probed.
+   * Empty when the probe was disabled. Present (and possibly empty) when
+   * the probe ran but selected zero candidates from the probe pool.
+   */
+  probed: ProbeResult[];
+  /**
+   * Subscriptions that were probed and excluded from auto-selection
+   * because the probe did not return `pass`. Each carries the matching
+   * resource count (for context) and the probe outcome (for the DQ
+   * finding). Empty in explicit-pick mode where the operator overrides.
+   */
+  excluded: ExcludedSubscription[];
+  /**
+   * Synthetic `billing_probe_excluded` DQ findings — one per excluded
+   * subscription — that the orchestrator merges into the run's data-
+   * quality input. Empty when the probe was disabled or every probed
+   * sub passed.
+   */
+  data_quality: DataQualityFinding[];
+  /**
+   * Run-level discovery funnel for the Run Metadata footer. Absent when
+   * the probe was disabled.
+   */
+  funnel?: {
+    arg_ranked: number;
+    pool_size: number;
+    probed: number;
+    passed: number;
+    selected: number;
+    cache_hits: number;
+    cache_misses: number;
+  };
+}
+
+export interface ExcludedSubscription {
+  subscription_id: string;
+  display_name?: string;
+  resource_count: number;
+  outcome: ProbeResult['outcome'];
+  classification?: string;
+  message?: string;
 }
 
 export class SubscriptionDiscoveryError extends Error {
@@ -70,6 +115,29 @@ export interface DiscoverTopSubscriptionsOptions {
    * selection, use the CLI's --subscription instead and skip discovery.
    */
   nameFilter?: string;
+  /**
+   * Billing-access pre-flight probe options. When set and `enabled` is
+   * true (the default at the CLI layer), the discovery probes the top
+   * `poolSize` candidates against `amgmcp_cost_analysis` and only
+   * subscriptions that pass are eligible for auto-selection.
+   *
+   * The probe is observability-only: results never enter the evidence
+   * stream or the reasoner. Excluded subs are surfaced as
+   * `billing_probe_excluded` DQ findings.
+   *
+   * Operators who want the legacy behaviour pass `--no-probe-billing`,
+   * which sets `enabled=false`. Explicit-pick callers (CLI with
+   * `--subscription`) do not invoke this path — they bypass discovery
+   * entirely; if probing of explicit picks is wanted it must be
+   * threaded by the caller separately.
+   */
+  probe?: {
+    enabled: boolean;
+    poolSize?: number;
+    concurrency?: number;
+    timeoutMs?: number;
+    cache?: BillingProbeCache | null;
+  };
 }
 
 const stdoutOnlyProgress: DiscoveryProgress = (line) => {
@@ -195,20 +263,168 @@ export async function discoverTopSubscriptions(
     );
   }
 
-  // 3. Sort and pick the top N with non-zero counts. If none have
-  // resources (e.g., everything errored), fall back to the first up-to-N
-  // subscriptions so the run proceeds — the missing data turns into DQ
-  // findings downstream.
+  // 3. Sort. If the probe is disabled, pick the top N with non-zero
+  // counts directly. If the probe is enabled, probe the top
+  // `poolSize` and pick the top N *among passers*; excluded subs
+  // become DQ findings the operator sees before any real cost call.
   counts.sort((a, b) => b.resource_count - a.resource_count);
-  let selected = counts.filter((c) => c.resource_count > 0).slice(0, limit);
-  if (selected.length === 0) {
-    diagnostics.push(
-      'no subscription returned a non-zero resource count; falling back to first up-to-N discovered',
+  const probeEnabled = options.probe?.enabled ?? false;
+  const probed: ProbeResult[] = [];
+  const excluded: ExcludedSubscription[] = [];
+  const dq: DataQualityFinding[] = [];
+  let funnel: SubscriptionDiscoveryResult['funnel'];
+
+  if (!probeEnabled) {
+    let selected = counts.filter((c) => c.resource_count > 0).slice(0, limit);
+    if (selected.length === 0) {
+      diagnostics.push(
+        'no subscription returned a non-zero resource count; falling back to first up-to-N discovered',
+      );
+      selected = counts.slice(0, limit);
+    }
+    emitSelection(onProgress, selected);
+    if (selected.length === 0) {
+      throw new SubscriptionDiscoveryError(
+        `Discovered ${subscriptions.length} subscription(s) but could not select any. Diagnostics: ${diagnostics.join('; ')}`,
+      );
+    }
+    return {
+      selected_subscription_ids: selected.map((c) => c.subscription_id),
+      selected,
+      all_counts: counts,
+      diagnostics,
+      probed,
+      excluded,
+      data_quality: dq,
+    };
+  }
+
+  // Probe pool: top-N by resource count, bounded to keep the probe
+  // budget reasonable on tenants with hundreds of visible subs. The
+  // pool is intentionally larger than `limit` so retry losses or
+  // mass denials still leave enough passers to fill `limit`.
+  const poolSize = clampPoolSize(options.probe?.poolSize, limit);
+  const nonZero = counts.filter((c) => c.resource_count > 0);
+  const pool = (nonZero.length > 0 ? nonZero : counts).slice(0, poolSize);
+  if (pool.length === 0) {
+    throw new SubscriptionDiscoveryError(
+      `Discovered ${subscriptions.length} subscription(s) but could not build a probe pool. Diagnostics: ${diagnostics.join('; ')}`,
     );
-    selected = counts.slice(0, limit);
   }
   onProgress(
-    `  selected top ${selected.length} by resource count: ${selected
+    `  probing top ${pool.length} candidate(s) for Cost Management read access (poolSize=${poolSize})...`,
+    {
+      name: 'discovery.probe_started',
+      attrs: { pool_size: pool.length, limit },
+    },
+  );
+
+  const probeStartedAt = Date.now();
+  const probeRun = await probeBillingAccess(
+    client,
+    pool.map((c) => c.subscription_id),
+    {
+      ...(options.probe?.concurrency !== undefined ? { concurrency: options.probe.concurrency } : {}),
+      ...(options.probe?.timeoutMs !== undefined ? { timeoutMs: options.probe.timeoutMs } : {}),
+      ...(options.probe?.cache ? { cache: options.probe.cache } : {}),
+      onProbe: (event) => {
+        onProgress(
+          `    probe ${event.outcome}${event.classification ? ` (${event.classification})` : ''}${event.cache_hit ? ' [cache]' : ''}: ${event.subscription_id} (${event.latency_ms}ms)`,
+          {
+            name: 'probe.end',
+            attrs: {
+              subscription_id: event.subscription_id,
+              outcome: event.outcome,
+              ...(event.classification ? { classification: event.classification } : {}),
+              latency_ms: event.latency_ms,
+              cache_hit: event.cache_hit,
+            },
+          },
+        );
+      },
+    },
+  );
+  probed.push(...probeRun.results);
+  const probeElapsedMs = Date.now() - probeStartedAt;
+  const byId = new Map(probeRun.results.map((r) => [r.subscription_id, r] as const));
+  const passers = pool.filter((c) => byId.get(c.subscription_id)?.outcome === 'pass');
+  onProgress(
+    `  probe complete in ${probeElapsedMs}ms — ${passers.length}/${pool.length} candidate(s) passed (${probeRun.stats.cache_hits} cache hit(s))`,
+    {
+      name: 'discovery.probe_complete',
+      attrs: {
+        probed: pool.length,
+        passed: passers.length,
+        cache_hits: probeRun.stats.cache_hits,
+        cache_misses: probeRun.stats.cache_misses,
+        elapsed_ms: probeElapsedMs,
+      },
+    },
+  );
+
+  const selected = passers.slice(0, limit);
+  for (const candidate of pool) {
+    const result = byId.get(candidate.subscription_id);
+    if (!result || result.outcome === 'pass') continue;
+    excluded.push({
+      subscription_id: candidate.subscription_id,
+      ...(candidate.display_name ? { display_name: candidate.display_name } : {}),
+      resource_count: candidate.resource_count,
+      outcome: result.outcome,
+      ...(result.classification ? { classification: result.classification } : {}),
+      ...(result.message ? { message: result.message } : {}),
+    });
+    dq.push(buildExcludedDq(dq.length, candidate, result));
+  }
+
+  if (selected.length < limit) {
+    diagnostics.push(
+      `billing-access probe yielded only ${passers.length} passer(s) out of ${pool.length} probed (target ${limit}); see Run Quality for excluded sub(s)`,
+    );
+    // partial_coverage DQ when the probe leaves the analysis with
+    // fewer than `limit` subs but at least one passer. (Zero-passer
+    // case throws below.)
+    if (passers.length > 0 && excluded.length > 0) {
+      dq.push(buildPartialCoverageDq(dq.length, pool.length, passers.length, limit));
+    }
+  }
+  emitSelection(onProgress, selected);
+
+  funnel = {
+    arg_ranked: counts.length,
+    pool_size: poolSize,
+    probed: pool.length,
+    passed: passers.length,
+    selected: selected.length,
+    cache_hits: probeRun.stats.cache_hits,
+    cache_misses: probeRun.stats.cache_misses,
+  };
+
+  if (selected.length === 0) {
+    const summary = excluded
+      .map((e) => `${formatSubscription(e)} — ${e.outcome}${e.classification ? `/${e.classification}` : ''}`)
+      .join('; ');
+    throw new SubscriptionDiscoveryError(
+      `Billing-access probe excluded every candidate (${pool.length} probed). Grant the Grafana data-source principal Cost Management Reader on at least one subscription, ` +
+        `or pass --no-probe-billing to skip the probe and let the existing failure path surface the mid-run errors. Excluded: ${summary}.`,
+    );
+  }
+
+  return {
+    selected_subscription_ids: selected.map((c) => c.subscription_id),
+    selected,
+    all_counts: counts,
+    diagnostics,
+    probed,
+    excluded,
+    data_quality: dq,
+    funnel,
+  };
+}
+
+function emitSelection(onProgress: DiscoveryProgress, selected: SubscriptionCount[]): void {
+  onProgress(
+    `  selected top ${selected.length}: ${selected
       .map((c) => `${formatSubscription(c)} — ${c.resource_count} resources`)
       .join(', ')}`,
     {
@@ -223,19 +439,72 @@ export async function discoverTopSubscriptions(
       },
     },
   );
+}
 
-  if (selected.length === 0) {
-    throw new SubscriptionDiscoveryError(
-      `Discovered ${subscriptions.length} subscription(s) but could not select any. Diagnostics: ${diagnostics.join('; ')}`,
-    );
-  }
+/**
+ * Pool-size formula. The probe pool is at least `max(limit*3,
+ * limit+5, 10)` so retry losses or mass denials still leave enough
+ * passers to fill `limit`. Capped at 25 to keep the probe budget
+ * reasonable. Operator overrides are clamped to the same ceiling.
+ */
+function clampPoolSize(override: number | undefined, limit: number): number {
+  const defaultPool = Math.max(limit * 3, limit + 5, 10);
+  const requested = override ?? defaultPool;
+  return Math.max(1, Math.min(25, requested));
+}
 
-  return {
-    selected_subscription_ids: selected.map((c) => c.subscription_id),
-    selected,
-    all_counts: counts,
-    diagnostics,
-  };
+function buildExcludedDq(
+  index: number,
+  candidate: SubscriptionCount,
+  result: ProbeResult,
+): DataQualityFinding {
+  const subLabel = candidate.display_name
+    ? `"${candidate.display_name}" (${candidate.subscription_id})`
+    : candidate.subscription_id;
+  const shortMessage = result.message ? truncate(result.message, 240) : 'no upstream message';
+  const consequence =
+    `Subscription ${subLabel} was ranked #${index + 1}-or-higher by resource count but was excluded from auto-discovery ` +
+    `because the billing-access probe failed (${result.outcome}${result.classification ? `: ${result.classification}` : ''}). ` +
+    `The Cost Management API returned: "${shortMessage}".`;
+  return DataQualityFindingSchema.parse({
+    dq_id: `dq-probe-${index + 1}`,
+    category: 'billing_probe_excluded',
+    affected_capability: 'amgmcp_cost_analysis',
+    affected_scope_subset: {
+      subscription_ids: [candidate.subscription_id],
+      resource_group_names: null,
+      resource_ids: null,
+    },
+    consequence_for_analysis: consequence,
+    impact_on_recommendations: [],
+    actionable_hint:
+      'Grant the Grafana data-source principal Cost Management Reader on this subscription, or pass --no-probe-billing to skip the pre-flight check (the run will likely fail at the cost-retrieval step instead).',
+  });
+}
+
+function buildPartialCoverageDq(
+  index: number,
+  probed: number,
+  passed: number,
+  target: number,
+): DataQualityFinding {
+  return DataQualityFindingSchema.parse({
+    dq_id: `dq-probe-${index + 1}`,
+    category: 'partial_coverage',
+    affected_capability: 'amgmcp_cost_analysis',
+    affected_scope_subset: null,
+    consequence_for_analysis:
+      `Billing-access probe passed ${passed} of ${probed} candidate(s); ` +
+      `auto-discovery had asked for the top ${target}, so the analysis is bounded to ${passed} subscription(s).`,
+    impact_on_recommendations: [],
+    actionable_hint:
+      'Grant Cost Management Reader on additional subscriptions or raise --max-subscriptions / --probe-pool-size to widen the candidate set.',
+  });
+}
+
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return text.slice(0, max - 1) + '…';
 }
 
 /**

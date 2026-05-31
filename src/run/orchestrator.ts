@@ -37,7 +37,9 @@ import type { ScorePayload } from '../evaluation/langfuse-publisher.js';
 import {
   discoverTopSubscriptions,
   formatSubscription,
+  type SubscriptionDiscoveryResult,
 } from './subscription-discovery.js';
+import { BillingProbeCache } from './billing-probe-cache.js';
 import { intakeScope, type ScopeIntakeInput } from './scope-intake.js';
 import { computeScopeSignature } from './scope-signature.js';
 import { buildPriorRunContextEvidence } from './prior-run-evidence.js';
@@ -134,6 +136,15 @@ export interface RunOptions {
    * pre-Phase-3 shape. Defaults to false (lanes run for cost_summary).
    */
   disableWasteDetection?: boolean;
+  /**
+   * Data-quality findings produced before the run started — currently
+   * the billing-access probe under explicit-pick mode, where the CLI
+   * runs the probe but does not gate selection. Merged into the run's
+   * `allDq` alongside discovery-emitted findings so the operator sees
+   * billing-access state in the report even when the explicit `--subscription`
+   * override prevents the probe from filtering.
+   */
+  preflightDataQuality?: DataQualityFinding[];
 }
 
 export interface AnalyzeScorePublisher {
@@ -151,6 +162,22 @@ export interface DiscoverSubscriptionsOption {
    * type that auto-discovers subscriptions.
    */
   nameFilter?: string;
+  /**
+   * Billing-access pre-flight probe (Phase 3). When enabled, the
+   * top-N ranking by resource count is gated by a tiny
+   * `amgmcp_cost_analysis` call against each candidate so subs that
+   * lack Cost Management read access are excluded before final
+   * selection. Defaults at the CLI layer to enabled with the standard
+   * pool/concurrency/timeouts and the on-disk cache at
+   * `~/.az-pixiu/billing-probe-cache.json`.
+   */
+  probe?: {
+    enabled: boolean;
+    poolSize?: number;
+    concurrency?: number;
+    timeoutMs?: number;
+    cache?: BillingProbeCache | null;
+  };
   /**
    * Scope-intake input minus `subscription_ids`. The orchestrator fills
    * in `subscription_ids` from the discovery result and calls
@@ -316,12 +343,17 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
             // them. setActiveTraceIO is deferred until we have the final
             // scope so the trace input reflects what was actually
             // analyzed, not a placeholder.
+            let discoveryResult: SubscriptionDiscoveryResult | undefined;
             const scope = options.scope
               ? options.scope
-              : await runSubscriptionDiscovery(
-                  options.client,
-                  options.discoverSubscriptions!,
-                );
+              : await (async () => {
+                  const r = await runSubscriptionDiscovery(
+                    options.client,
+                    options.discoverSubscriptions!,
+                  );
+                  discoveryResult = r.discovery;
+                  return r.scope;
+                })();
 
             // Trace-level input is the operator's effective ask; trace-level
             // output is set after doRun returns so Langfuse renders the
@@ -344,6 +376,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
             const r = await doRun({
               ...options,
               scope,
+              ...(discoveryResult ? { discoveryResult } : {}),
               runId,
               startedAt,
               runDir,
@@ -459,7 +492,7 @@ function toOtelAttributes(
 async function runSubscriptionDiscovery(
   client: MCPClient,
   option: DiscoverSubscriptionsOption,
-): Promise<Scope> {
+): Promise<{ scope: Scope; discovery: SubscriptionDiscoveryResult }> {
   process.stdout.write(
     `→ discovering top ${option.maxSubscriptions} subscription(s) by resource count via AMG-MCP${option.nameFilter ? ` (name filter: "${option.nameFilter}")` : ''}...\n`,
   );
@@ -468,6 +501,7 @@ async function runSubscriptionDiscovery(
       input: {
         limit: option.maxSubscriptions,
         ...(option.nameFilter ? { name_filter: option.nameFilter } : {}),
+        ...(option.probe ? { probe: { enabled: option.probe.enabled } } : {}),
       },
     });
     const result = await discoverTopSubscriptions(client, option.maxSubscriptions, {
@@ -476,6 +510,7 @@ async function runSubscriptionDiscovery(
         if (event) emitEvent(span, event.name, toOtelAttributes(event.attrs));
       },
       ...(option.nameFilter ? { nameFilter: option.nameFilter } : {}),
+      ...(option.probe ? { probe: option.probe } : {}),
     });
     const visibleCount = result.all_counts.length;
     const withNamesCount = result.all_counts.filter((c) => c.display_name).length;
@@ -485,6 +520,13 @@ async function runSubscriptionDiscovery(
     span.setAttribute(ATTR.discoverySelectedCount, result.selected.length);
     const shapeDiag = result.diagnostics.find((d) => d.startsWith('no display names'));
     if (shapeDiag) span.setAttribute(ATTR.discoveryShapeHint, shapeDiag);
+    if (result.funnel) {
+      span.setAttribute(ATTR.discoveryPoolSize, result.funnel.pool_size);
+      span.setAttribute(ATTR.discoveryProbedCount, result.funnel.probed);
+      span.setAttribute(ATTR.discoveryPassedCount, result.funnel.passed);
+      span.setAttribute(ATTR.discoveryCacheHits, result.funnel.cache_hits);
+      span.setAttribute(ATTR.discoveryCacheMisses, result.funnel.cache_misses);
+    }
     updateActiveObservation({
       output: {
         selected: result.selected.map((c) => ({
@@ -494,6 +536,13 @@ async function runSubscriptionDiscovery(
           formatted: formatSubscription(c),
         })),
         diagnostics: result.diagnostics,
+        ...(result.funnel ? { funnel: result.funnel } : {}),
+        excluded: result.excluded.map((e) => ({
+          subscription_id: e.subscription_id,
+          display_name: e.display_name,
+          outcome: e.outcome,
+          classification: e.classification,
+        })),
       },
     });
     return result;
@@ -513,17 +562,20 @@ async function runSubscriptionDiscovery(
     if (c.display_name) displayNames[c.subscription_id] = c.display_name;
   }
 
-  return intakeScope({
+  const scope = intakeScope({
     ...option.scopeIntake,
     subscription_ids: discovered.selected_subscription_ids,
     ...(Object.keys(displayNames).length > 0
       ? { subscription_display_names: displayNames }
       : {}),
   });
+
+  return { scope, discovery: discovered };
 }
 
 interface RunCtx extends Omit<RunOptions, 'scope'> {
   scope: Scope;
+  discoveryResult?: SubscriptionDiscoveryResult;
   runId: string;
   startedAt: string;
   runDir: string;
@@ -692,7 +744,11 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   const freshnessDqs = checkFreshness(records, {
     startingCounter: failureDqs.length + wasteFailureDqs.length,
   });
-  const allDq = [...normalizerDq, ...failureDqs, ...wasteFailureDqs, ...freshnessDqs];
+  const probeDqs = [
+    ...(ctx.discoveryResult?.data_quality ?? []),
+    ...(ctx.preflightDataQuality ?? []),
+  ];
+  const allDq = [...normalizerDq, ...failureDqs, ...wasteFailureDqs, ...freshnessDqs, ...probeDqs];
   process.stdout.write(
     `  normalized ${records.length} evidence record(s); ${allDq.length} data-quality finding(s) so far\n`,
   );
@@ -767,6 +823,18 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     amg_mcp_endpoint: ctx.config.amg.endpoint,
     capability_versions: { ...catalog.capability_versions },
     ...(ctx.fixtureId ? { fixture_id: ctx.fixtureId } : {}),
+    ...(ctx.discoveryResult?.funnel
+      ? {
+          discovery_funnel: {
+            arg_ranked: ctx.discoveryResult.funnel.arg_ranked,
+            probed: ctx.discoveryResult.funnel.probed,
+            passed: ctx.discoveryResult.funnel.passed,
+            selected: ctx.discoveryResult.funnel.selected,
+            cache_hits: ctx.discoveryResult.funnel.cache_hits,
+            cache_misses: ctx.discoveryResult.funnel.cache_misses,
+          },
+        }
+      : {}),
     started_at: ctx.startedAt,
     ended_at: endedAt,
     status: 'success',

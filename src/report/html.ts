@@ -796,6 +796,22 @@ function metadataSection(metadata: RunMetadata): string {
         .join(', ') || '(none)',
     ],
     ['fixture', metadata.fixture_id ?? '(live)'],
+    ...(metadata.discovery_funnel
+      ? ([
+          [
+            'Discovery funnel',
+            (() => {
+              const f = metadata.discovery_funnel!;
+              return (
+                `Azure Resource Graph (ARG) ranked ${f.arg_ranked} subscription(s) → probed top ${f.probed} for billing access → ${f.passed} passed → selected top ${f.selected}` +
+                (f.cache_hits + f.cache_misses > 0
+                  ? ` (cache: ${f.cache_hits} hit(s), ${f.cache_misses} miss(es))`
+                  : '')
+              );
+            })(),
+          ],
+        ] as Array<[string, string]>)
+      : []),
     ['started_at', metadata.started_at],
     ['ended_at', metadata.ended_at ?? '(in-progress)'],
   ];

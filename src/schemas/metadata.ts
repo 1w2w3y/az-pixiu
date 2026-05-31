@@ -31,6 +31,29 @@ export const CredentialSourceSchema = z
   })
   .strict();
 
+/**
+ * Auto-discovery funnel record (Phase 3 — billing-access probe). When a
+ * run auto-discovers subscriptions instead of taking explicit `--subscription`
+ * arguments, the discovery has up to four stages:
+ *   1. ARG ranks every visible subscription by resource count.
+ *   2. The top `probed` are probed against `amgmcp_cost_analysis` to
+ *      verify Cost Management read access.
+ *   3. The `passed` count is the subset whose probe succeeded.
+ *   4. The `selected` count is the slice that ultimately fed the analysis.
+ * `cache_hits` / `cache_misses` reveal how much of the probe latency the
+ * file-backed cache absorbed. Absent for explicit-pick runs.
+ */
+export const DiscoveryFunnelSchema = z
+  .object({
+    arg_ranked: z.number().int().nonnegative(),
+    probed: z.number().int().nonnegative(),
+    passed: z.number().int().nonnegative(),
+    selected: z.number().int().nonnegative(),
+    cache_hits: z.number().int().nonnegative(),
+    cache_misses: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export const RunMetadataSchema = z
   .object({
     run_id: RunIdSchema,
@@ -51,6 +74,7 @@ export const RunMetadataSchema = z
     amg_mcp_endpoint: z.string().url(),
     capability_versions: z.record(z.string().min(1), z.string().min(1)),
     fixture_id: z.string().min(1).optional(),
+    discovery_funnel: DiscoveryFunnelSchema.optional(),
     started_at: z.string().datetime({ offset: true }),
     ended_at: z.string().datetime({ offset: true }).optional(),
     status: RunStatusSchema,
@@ -61,4 +85,5 @@ export type RunStatus = z.infer<typeof RunStatusSchema>;
 export type ModelDeploymentSku = z.infer<typeof ModelDeploymentSkuSchema>;
 export type PromptVersions = z.infer<typeof PromptVersionsSchema>;
 export type CredentialSource = z.infer<typeof CredentialSourceSchema>;
+export type DiscoveryFunnel = z.infer<typeof DiscoveryFunnelSchema>;
 export type RunMetadata = z.infer<typeof RunMetadataSchema>;

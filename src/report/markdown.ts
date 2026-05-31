@@ -528,26 +528,30 @@ function renderDataQuality(d: DataQualityFinding): string {
 }
 
 function metadataFooter(metadata: RunMetadata): string {
-  return [
-    '---',
-    '',
-    '## Run Metadata',
-    '',
-    bullets({
-      run_id: metadata.run_id,
-      trace_id: metadata.trace_id,
-      status: metadata.status,
-      model: `${metadata.model_provider}/${metadata.model_name} (${metadata.model_deployment_sku ? `sku: ${metadata.model_deployment_sku}, ` : ''}config_hash: ${metadata.model_config_hash})`,
-      prompts: `planner: ${metadata.prompt_versions.planner}, reasoner: ${metadata.prompt_versions.reasoner}`,
-      credential: `${metadata.credential_source.implementation} (${metadata.credential_source.identity})`,
-      capabilities: Object.entries(metadata.capability_versions)
+  const items: Record<string, string> = {
+    run_id: metadata.run_id,
+    trace_id: metadata.trace_id,
+    status: metadata.status,
+    model: `${metadata.model_provider}/${metadata.model_name} (${metadata.model_deployment_sku ? `sku: ${metadata.model_deployment_sku}, ` : ''}config_hash: ${metadata.model_config_hash})`,
+    prompts: `planner: ${metadata.prompt_versions.planner}, reasoner: ${metadata.prompt_versions.reasoner}`,
+    credential: `${metadata.credential_source.implementation} (${metadata.credential_source.identity})`,
+    capabilities:
+      Object.entries(metadata.capability_versions)
         .map(([k, v]) => `${k}@${v}`)
         .join(', ') || '(none)',
-      fixture: metadata.fixture_id ?? '(live)',
-      started_at: metadata.started_at,
-      ended_at: metadata.ended_at ?? '(in-progress)',
-    }),
-  ].join('\n');
+    fixture: metadata.fixture_id ?? '(live)',
+    started_at: metadata.started_at,
+    ended_at: metadata.ended_at ?? '(in-progress)',
+  };
+  if (metadata.discovery_funnel) {
+    const f = metadata.discovery_funnel;
+    items['Discovery funnel'] =
+      `Azure Resource Graph (ARG) ranked ${f.arg_ranked} subscription(s) → probed top ${f.probed} for billing access → ${f.passed} passed → selected top ${f.selected}` +
+      (f.cache_hits + f.cache_misses > 0
+        ? ` (cache: ${f.cache_hits} hit(s), ${f.cache_misses} miss(es))`
+        : '');
+  }
+  return ['---', '', '## Run Metadata', '', bullets(items)].join('\n');
 }
 
 // ---------------- helpers ----------------

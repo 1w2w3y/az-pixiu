@@ -66,6 +66,16 @@ export const ATTR = {
   discoveryWithNamesCount: 'az_pixiu.discovery.with_names_count',
   discoverySelectedCount: 'az_pixiu.discovery.selected_count',
   discoveryShapeHint: 'az_pixiu.discovery.shape_hint',
+  // Billing-access pre-flight probe (Phase 3). Attached to the
+  // SubscriptionDiscovery span when auto-discovery probed candidates.
+  // Per-sub detail surfaces as `probe.start` / `probe.end` span
+  // events on the same span; these are the run-level rollup
+  // attributes used for Langfuse filter pivots.
+  discoveryPoolSize: 'az_pixiu.discovery.pool_size',
+  discoveryProbedCount: 'az_pixiu.discovery.probed_count',
+  discoveryPassedCount: 'az_pixiu.discovery.passed_count',
+  discoveryCacheHits: 'az_pixiu.discovery.cache_hits',
+  discoveryCacheMisses: 'az_pixiu.discovery.cache_misses',
   instrumentationFlavor: 'az_pixiu.instrumentation.flavor',
   // Transport-level retry observability (Phase 3 §Gap 7 / §S4). Attached
   // to the evidence_retrieval span as run-level aggregates; per-attempt

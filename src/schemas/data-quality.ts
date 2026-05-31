@@ -32,6 +32,13 @@ export const DataQualityCategorySchema = z.enum([
   // Phase 3 work.
   'freshness_partial_window',
   'freshness_uniform_drop',
+  // Phase 3 — billing-access pre-flight probe. Emitted when a
+  // subscription survived ARG resource-count ranking but was excluded
+  // from auto-discovery because the cheap probe call against
+  // `amgmcp_cost_analysis` returned a denial. Surfaced so the
+  // operator sees billing-access state before a mid-run failure and
+  // can grant Cost Management Reader on the affected subs.
+  'billing_probe_excluded',
 ]);
 
 export type DataQualityCategory = z.infer<typeof DataQualityCategorySchema>;
