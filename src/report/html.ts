@@ -105,7 +105,7 @@ export function renderHtmlReport(input: RenderReportInput): string {
   const body = [
     titleBlock(scope),
     scopeSection(scope, evidence, metadata),
-    runQualitySection(nonCleanupInputDq, rollup, coverage),
+    runQualitySection(nonCleanupInputDq, rollup, coverage, input.runOutcomeSummary),
     costOverviewSection(scope, evidence),
     executiveSection(reasoning, inputDataQuality, coverage, sortedRecs),
     wasteSection(wasteLanes),
@@ -201,6 +201,9 @@ function runQualitySection(
   inputDataQuality: readonly DataQualityFinding[],
   rollup: TransportRollup,
   coverage: CostCoverage,
+  runOutcomeSummary:
+    | { label: 'SUCCESS' | 'PARTIAL' | 'FAILED'; sentence: string }
+    | undefined,
 ): string {
   const findings = inputDataQuality.filter((d) => RUN_QUALITY_CATEGORIES.has(d.category));
   const freshnessCount = inputDataQuality.filter(
@@ -209,7 +212,19 @@ function runQualitySection(
   const baselineLine = runQualityBaseline(rollup, coverage, freshnessCount);
   const capabilityItems = recoveredCapabilityItems(rollup);
 
-  const parts = [sectionOpen('run-quality', 'Run Quality'), `<p>${escapeHtml(baselineLine)}</p>`];
+  const parts = [sectionOpen('run-quality', 'Run Quality')];
+  if (runOutcomeSummary) {
+    // Plain-text banner mirroring the markdown's `**Run outcome:**`
+    // line. No special styling — the label is bolded inline so the
+    // HTML and markdown views stay structurally identical for a
+    // reader comparing them.
+    parts.push(
+      `<p><strong>Run outcome: ${escapeHtml(runOutcomeSummary.label)}</strong> — ${escapeHtml(
+        runOutcomeSummary.sentence,
+      )}</p>`,
+    );
+  }
+  parts.push(`<p>${escapeHtml(baselineLine)}</p>`);
   if (capabilityItems.length > 0) {
     parts.push(
       '<ul>',

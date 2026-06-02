@@ -145,6 +145,19 @@ export interface RunOptions {
    * override prevents the probe from filtering.
    */
   preflightDataQuality?: DataQualityFinding[];
+  /**
+   * Optional EvidenceExecutor injection points for tests. The CLI never
+   * sets these — the executor's defaults are anchored to the reference
+   * cron's empirical recovery times (DEFAULT_RETRY_POLICY in
+   * `src/evidence/retry-policy.ts`). Tests that simulate failures pass
+   * `sleep: () => Promise.resolve()` and `jitter: () => 0` so the
+   * suite does not stall on the 30s–180s backoffs.
+   */
+  executorOverrides?: {
+    retryPolicy?: import('../evidence/retry-policy.js').RetryPolicy;
+    sleep?: (ms: number) => Promise<void>;
+    jitter?: (policy: import('../evidence/retry-policy.js').RetryPolicy) => number;
+  };
 }
 
 export interface AnalyzeScorePublisher {
@@ -229,6 +242,51 @@ export interface RunResult {
   failures_classified: number;
   /** Whether any §7.5 post-process issues were synthesized. */
   post_process_issues: number;
+  /**
+   * Breakdown of facts/hypotheses/recommendations that
+   * {@link postProcessReasoning} dropped because of dangling citations,
+   * fabricated numbers, or imperative remediation language. Exposed so
+   * the CLI can emit a single loud warning when the reasoner's output
+   * was non-trivially truncated — those drops surface as `dq-synth-*`
+   * rows buried in the Data Quality section of `report.md`, and an
+   * operator skimming the run summary would otherwise have to read the
+   * report to notice. Always present; zeros when nothing was dropped.
+   */
+  reasoning_drops: ReasoningDropBreakdown;
+  /**
+   * Outcome of cost-evidence retrieval for analysis types that depend on
+   * `amgmcp_cost_analysis` (`cost_summary`, `cost_surprise`). Computed
+   * from the in-scope subscription set and the cost-capability rows of
+   * `transport_summary`:
+   *
+   *   - `success`: every in-scope sub returned at least one successful
+   *     cost-analysis call.
+   *   - `partial`: at least one sub returned cost evidence, but at least
+   *     one was missing or failed.
+   *   - `failed`: zero in-scope subs returned cost evidence AND at least
+   *     one cost-analysis call was attempted (i.e. throttled or denied
+   *     out of the run, not "nothing was tried").
+   *   - `not_applicable`: the analysis type does not consume cost
+   *     evidence, or the scope carried no subscription ids to attribute
+   *     coverage against.
+   *
+   * `failed` is the CLI's signal to exit non-zero — see
+   * `src/cli.ts:runAnalyzeCommand` and DESIGN-NOTE.md.
+   */
+  cost_retrieval_outcome: CostRetrievalOutcome;
+}
+
+export type CostRetrievalOutcome =
+  | 'success'
+  | 'partial'
+  | 'failed'
+  | 'not_applicable';
+
+export interface ReasoningDropBreakdown {
+  facts: number;
+  hypotheses: number;
+  recommendations: number;
+  total: number;
 }
 
 /**
@@ -425,6 +483,29 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
     process.stdout.write(`  run.json: ${result.run_json_path}\n`);
     process.stdout.write(`  trace_id: ${result.trace_id}\n`);
     if (otelTraceId) process.stdout.write(`  otel_trace_id: ${otelTraceId}\n`);
+    // Two loud warnings that previously surfaced only as buried DQ rows
+    // inside report.md (DESIGN-NOTE.md §Bug A). Printed to stderr so they
+    // do not interleave with the stdout artefact paths above and so they
+    // remain visible when stdout is piped through `head` etc.
+    if (result.reasoning_drops.total > 0) {
+      const d = result.reasoning_drops;
+      process.stderr.write(
+        `  ⚠ reasoner cited evidence not present in the pool. Output was truncated: ` +
+          `${d.facts} fact(s), ${d.hypotheses} hypothesis/es, ${d.recommendations} recommendation(s) dropped. ` +
+          `See "Data Quality" findings dq-synth-* in report.md.\n`,
+      );
+    }
+    if (result.cost_retrieval_outcome === 'failed') {
+      const causeLine = describeCostRetrievalCause(result);
+      process.stderr.write(
+        `\n[FAILED] cost-evidence retrieval failed across all subscriptions in scope.\n` +
+          `  cause: ${causeLine}\n` +
+          `  consequence: no recommendations could be grounded in cost data.\n` +
+          `  remediation: re-run after the upstream throttle window; narrow scope ` +
+          `(e.g. --max-subscriptions 1) to lower the call rate; or retry later.\n` +
+          `  report: ${result.report_path}   (preserved for trace continuity)\n`,
+      );
+    }
     if (!result.score.passed_all) {
       process.stdout.write(`  ⚠ scoring: ${result.score.fail_count} rubric(s) failed\n`);
       for (const r of result.score.results) {
@@ -667,6 +748,15 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       const executor = new EvidenceExecutor({
         client,
         catalog,
+        ...(ctx.executorOverrides?.retryPolicy
+          ? { retryPolicy: ctx.executorOverrides.retryPolicy }
+          : {}),
+        ...(ctx.executorOverrides?.sleep
+          ? { sleep: ctx.executorOverrides.sleep }
+          : {}),
+        ...(ctx.executorOverrides?.jitter
+          ? { jitter: ctx.executorOverrides.jitter }
+          : {}),
         onEvent: (event) => {
           if (event.kind === 'retry_scheduled') {
             emitEvent(span, 'transport.retry_scheduled', {
@@ -804,6 +894,27 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
 
   const score = scoreAll(reasoning, { evidence: recordsWithPrior });
 
+  // Cost-retrieval outcome + reasoner-drop accounting (DESIGN-NOTE.md
+  // §Bug A). Both are derivable from already-computed values — the
+  // executor's transport_summary for cost capabilities and the
+  // post-process issues for the reasoning truncation. Compute once here
+  // so the CLI, the report renderer, and the run.json metadata all
+  // observe the same outcome and there is exactly one source of truth.
+  const reasoningDrops = summarizeReasoningDrops(issues);
+  const costRetrievalOutcome = classifyCostRetrievalOutcome({
+    analysisType: ctx.scope.analysis_type,
+    scopeSubscriptionIds: ctx.scope.subscription_ids,
+    transportSummary: mergedTransport,
+    evidence: records,
+  });
+  const runStatus = deriveRunStatus(costRetrievalOutcome, reasoningDrops);
+  const runOutcomeSummary = describeRunOutcome(
+    runStatus,
+    costRetrievalOutcome,
+    reasoningDrops,
+    mergedTransport,
+  );
+
   const endedAt = new Date().toISOString();
   const modelInfo = resolveModelInfo(ctx.config);
   const metadata: RunMetadata = {
@@ -837,7 +948,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       : {}),
     started_at: ctx.startedAt,
     ended_at: endedAt,
-    status: 'success',
+    status: runStatus,
   };
 
   process.stdout.write(`→ writing report to ${ctx.runDir}/\n`);
@@ -849,6 +960,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       metadata,
       inputDataQuality: allDq,
       transportSummary: mergedTransport,
+      runOutcomeSummary,
       ...(wasteResult ? { wasteLanes: wasteResult.lanes } : {}),
     };
     const md = renderMarkdownReport(reportInput);
@@ -907,6 +1019,8 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     score,
     failures_classified: failures.length + wasteFailures.length,
     post_process_issues: issues.length,
+    reasoning_drops: reasoningDrops,
+    cost_retrieval_outcome: costRetrievalOutcome,
   };
 }
 
@@ -935,6 +1049,15 @@ async function runWasteDetection(
       catalog,
       rateSource,
       lanes,
+      ...(ctx.executorOverrides?.retryPolicy
+        ? { retryPolicy: ctx.executorOverrides.retryPolicy }
+        : {}),
+      ...(ctx.executorOverrides?.sleep
+        ? { sleep: ctx.executorOverrides.sleep }
+        : {}),
+      ...(ctx.executorOverrides?.jitter
+        ? { jitter: ctx.executorOverrides.jitter }
+        : {}),
       onEvent: (event) => {
         if (event.kind === 'retry_scheduled') {
           emitEvent(span, 'transport.retry_scheduled', {
@@ -1087,4 +1210,190 @@ function failureToDq(failure: ClassifiedFailure, index: number): DataQualityFind
     impact_on_recommendations: [],
     actionable_hint: failure.actionable_hint ?? null,
   });
+}
+
+/**
+ * Capabilities whose successful evidence is the substrate for
+ * cost-summary / cost-surprise analyses. Mirrors the report-layer set
+ * in `src/report/coverage.ts` — both surfaces ask the same question
+ * ("did we get cost rows?") and must answer it from the same membership.
+ */
+const COST_CAPABILITIES: ReadonlySet<string> = new Set([
+  'amgmcp_cost_analysis',
+  'cost_analysis',
+]);
+
+/**
+ * Classify the run's cost-evidence retrieval outcome (DESIGN-NOTE.md §Bug A).
+ *
+ * The flow:
+ *   - analysis types that do not consume cost evidence → `not_applicable`.
+ *   - scope with no subscription ids → `not_applicable` (no denominator).
+ *   - at least one in-scope sub returned a successful cost record → maybe
+ *     `success` (every in-scope sub covered) or `partial` (some sub
+ *     covered, others uncovered).
+ *   - zero in-scope subs returned cost evidence AND at least one
+ *     cost-capability call was attempted → `failed`. This is the
+ *     user-facing signal that the analysis has no cost substrate.
+ *   - zero cost-capability calls attempted → `not_applicable` (no signal
+ *     to report; the playbook decided not to ask).
+ */
+function classifyCostRetrievalOutcome(input: {
+  analysisType: AnalysisType;
+  scopeSubscriptionIds: readonly string[];
+  transportSummary: readonly import('../schemas/transport.js').TransportSummaryEntry[];
+  evidence: readonly EvidenceRecord[];
+}): CostRetrievalOutcome {
+  const isCostAnalysis =
+    input.analysisType === 'cost_summary' ||
+    input.analysisType === 'cost_surprise';
+  if (!isCostAnalysis) return 'not_applicable';
+  if (input.scopeSubscriptionIds.length === 0) return 'not_applicable';
+
+  const costCalls = input.transportSummary.filter((e) =>
+    COST_CAPABILITIES.has(e.capability),
+  );
+  if (costCalls.length === 0) return 'not_applicable';
+
+  const expectedSet = new Set(input.scopeSubscriptionIds);
+  const coveredSet = new Set<string>();
+  for (const ev of input.evidence) {
+    if (!COST_CAPABILITIES.has(ev.source_capability)) continue;
+    const subs = ev.scope_subset.subscription_ids;
+    if (!subs) continue;
+    for (const id of subs) {
+      if (expectedSet.has(id)) coveredSet.add(id);
+    }
+  }
+  if (coveredSet.size === 0) return 'failed';
+  if (coveredSet.size < expectedSet.size) return 'partial';
+  return 'success';
+}
+
+/**
+ * Reduce {@link PostProcessIssue} rows into a per-target drop count. The
+ * three "fatal" issue kinds — `dangling_citation`, `fabricated_number`,
+ * `imperative_language` — are the ones that actually drop an item from
+ * the reasoner output; `confidence_downgraded` only rewrites the
+ * confidence level and does not drop, so it is not counted here.
+ */
+function summarizeReasoningDrops(
+  issues: readonly import('../reasoning/post-process.js').PostProcessIssue[],
+): ReasoningDropBreakdown {
+  let facts = 0;
+  let hypotheses = 0;
+  let recommendations = 0;
+  for (const issue of issues) {
+    const dropping =
+      issue.kind === 'dangling_citation' ||
+      issue.kind === 'fabricated_number' ||
+      issue.kind === 'imperative_language';
+    if (!dropping) continue;
+    if (issue.target === 'fact') facts += 1;
+    else if (issue.target === 'hypothesis') hypotheses += 1;
+    else if (issue.target === 'recommendation') recommendations += 1;
+  }
+  return { facts, hypotheses, recommendations, total: facts + hypotheses + recommendations };
+}
+
+/**
+ * Derive {@link RunMetadata.status} from the cost-retrieval outcome and
+ * reasoner-drop accounting. Honours the existing enum:
+ *
+ *   failed_analysis  ← cost retrieval failed across the entire scope
+ *   partial          ← any in-scope sub missed cost evidence or the
+ *                      reasoner dropped any output rows
+ *   success          ← everything landed and nothing was truncated
+ *
+ * The schema permits all three; downstream consumers (eval runner,
+ * history store, Langfuse score publisher) read this as an opaque enum.
+ */
+function deriveRunStatus(
+  costOutcome: CostRetrievalOutcome,
+  drops: ReasoningDropBreakdown,
+): RunMetadata['status'] {
+  if (costOutcome === 'failed') return 'failed_analysis';
+  if (costOutcome === 'partial') return 'partial';
+  if (drops.total > 0) return 'partial';
+  return 'success';
+}
+
+/**
+ * One-sentence human summary of the run outcome, used as the
+ * `**Run outcome:**` line at the top of the Run Quality section in
+ * report.md. Pure function of the inputs so the same string surfaces in
+ * tests, Langfuse, and the report.
+ */
+function describeRunOutcome(
+  status: RunMetadata['status'],
+  costOutcome: CostRetrievalOutcome,
+  drops: ReasoningDropBreakdown,
+  transportSummary: readonly import('../schemas/transport.js').TransportSummaryEntry[],
+): RunOutcomeSummary {
+  const label =
+    status === 'failed_analysis' ? 'FAILED'
+    : status === 'partial' ? 'PARTIAL'
+    : status === 'failed_config' ? 'FAILED'
+    : 'SUCCESS';
+
+  const reasons: string[] = [];
+  if (costOutcome === 'failed') {
+    const costCalls = transportSummary.filter((e) => COST_CAPABILITIES.has(e.capability));
+    const total = costCalls.length;
+    const categories = Array.from(
+      new Set(
+        costCalls
+          .map((e) => e.failure_category)
+          .filter((c): c is import('../failure/taxonomy.js').FailureCategory => Boolean(c)),
+      ),
+    ).sort();
+    const categoryClause = categories.length > 0 ? categories.join(', ') : 'no successful response';
+    reasons.push(
+      `cost-evidence retrieval failed across all subscriptions in scope (${total} cost-analysis call(s); ${categoryClause})`,
+    );
+  } else if (costOutcome === 'partial') {
+    reasons.push('cost-evidence retrieval was incomplete for at least one subscription in scope');
+  }
+  if (drops.total > 0) {
+    reasons.push(
+      `reasoner output was truncated (${drops.facts} fact(s), ${drops.hypotheses} hypothesis/es, ${drops.recommendations} recommendation(s) dropped — see dq-synth-* in Data Quality)`,
+    );
+  }
+  const sentence =
+    reasons.length === 0
+      ? 'cost retrieval and reasoning completed without truncation.'
+      : reasons.join('; ') + '.';
+  return { label, sentence };
+}
+
+export interface RunOutcomeSummary {
+  label: 'SUCCESS' | 'PARTIAL' | 'FAILED';
+  sentence: string;
+}
+
+/**
+ * One-line cause string for the CLI's `[FAILED]` stderr block. Aggregates
+ * by failure category across the cost-capability rows of
+ * `transport_summary` so the operator sees "rate_limit (3 of 3 calls)"
+ * rather than a single category they need to count themselves.
+ */
+function describeCostRetrievalCause(result: RunResult): string {
+  // The run.json transport summary is on the artifact, not on the
+  // RunResult directly; for the CLI message we use the metadata/status
+  // and the reasoner.data_quality categories instead, both of which
+  // already carry the failure tags propagated through failureToDq().
+  const failureCategories = result.input_dq_categories
+    .filter((c) =>
+      ['rate_limit', 'timeout', 'auth', 'authz_gap', 'schema_mismatch'].includes(c),
+    )
+    .sort();
+  const distinct = Array.from(new Set(failureCategories));
+  if (distinct.length === 0) {
+    return 'no successful cost-analysis response (cause not classified — see report.md "Run Quality")';
+  }
+  const counts = distinct.map((c) => {
+    const n = failureCategories.filter((x) => x === c).length;
+    return `${c} (${n})`;
+  });
+  return counts.join(', ');
 }

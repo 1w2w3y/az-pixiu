@@ -72,6 +72,18 @@ export interface RenderReportInput {
    * footnoted so reviewers can audit the impact estimates.
    */
   wasteLanes?: WasteLaneResult[];
+  /**
+   * One-line `**Run outcome:**` header for the Run Quality section
+   * (DESIGN-NOTE.md §Bug A). The orchestrator computes this so the
+   * report, run.json `metadata.status`, and the CLI stderr block all
+   * tell the same story. Optional so existing test call sites that
+   * construct `RenderReportInput` by hand continue to work without
+   * threading the field through.
+   */
+  runOutcomeSummary?: {
+    label: 'SUCCESS' | 'PARTIAL' | 'FAILED';
+    sentence: string;
+  };
 }
 
 export function renderMarkdownReport(input: RenderReportInput): string {
@@ -83,6 +95,7 @@ export function renderMarkdownReport(input: RenderReportInput): string {
     inputDataQuality = [],
     transportSummary = [],
     wasteLanes = [],
+    runOutcomeSummary,
   } = input;
   const coverage = computeCostCoverage({ scope, evidence, transportSummary });
   const rollup = rollupTransportSummary(transportSummary);
@@ -95,7 +108,7 @@ export function renderMarkdownReport(input: RenderReportInput): string {
   const sections = [
     title(scope),
     scopeAndDataSources(scope, evidence, metadata),
-    runQualitySection(inputDataQuality, rollup, coverage),
+    runQualitySection(inputDataQuality, rollup, coverage, runOutcomeSummary),
     costSummaryOverview(scope, evidence),
     executiveSummary(reasoning, inputDataQuality, coverage),
     wasteCandidatesSection(wasteLanes),
@@ -128,12 +141,27 @@ function runQualitySection(
   inputDataQuality: readonly DataQualityFinding[],
   rollup: TransportRollup,
   coverage: CostCoverage,
+  runOutcomeSummary:
+    | { label: 'SUCCESS' | 'PARTIAL' | 'FAILED'; sentence: string }
+    | undefined,
 ): string {
   const findings = inputDataQuality.filter((d) => RUN_QUALITY_CATEGORIES.has(d.category));
   const freshnessCount = inputDataQuality.filter(
     (d) => d.category === 'freshness_partial_window' || d.category === 'freshness_uniform_drop',
   ).length;
   const lines: string[] = ['## Run Quality', ''];
+
+  // Run outcome banner (DESIGN-NOTE.md §Bug A). Rendered as the very
+  // first line of Run Quality so a reader skimming the report cannot
+  // miss that retrieval failed even when nothing else made it
+  // visually obvious (e.g. when the partial-success path still landed
+  // a tagging recommendation but cost retrieval as a whole failed).
+  if (runOutcomeSummary) {
+    lines.push(
+      `**Run outcome:** ${runOutcomeSummary.label} — ${runOutcomeSummary.sentence}`,
+      '',
+    );
+  }
 
   // Quantified baseline (Phase 3 §S3): describes the *retrieval pass*,
   // not the analysis. The reference cron's footer ("0 throttles, all 8

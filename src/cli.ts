@@ -36,6 +36,20 @@ const USAGE = `Usage:
   pixiu eval <dataset.json> [flags]     replay each dataset item against its fixture and score
   pixiu diagnose [flags]
 
+exit codes:
+  0    run completed and all rubrics passed
+  1    config error
+  2    usage error (unknown command, mutually-exclusive flags, etc.)
+  3    run completed but at least one rubric failed
+  4    run crashed before producing a report
+  5    subscription auto-discovery failed
+  6    run wrote its report but cost-evidence retrieval failed for the
+       entire scope (e.g. Cost Management 429s across every subscription).
+       The report and run.json are still preserved; re-run after the
+       upstream throttle window or narrow scope (--max-subscriptions 1).
+  99   unhandled error
+
+
 analyze flags:
   --subscription <id>              Azure subscription GUID. May be repeated. If omitted, the agent auto-discovers the
                                    top 3 subscriptions by resource count via AMG-MCP — and, by default, probes each
@@ -141,6 +155,18 @@ interface AnalyzeArgs {
 }
 
 async function main(): Promise<number> {
+  // SIGPIPE-truncation investigation (DESIGN-NOTE.md §Bug B): a prior
+  // reviewer reported `pixiu analyze … | tee out | head -25` "exited
+  // cleanly but produced no run folder." Manual reproduction created the
+  // run folder fine. Node already uses SIG_IGN for SIGPIPE, so a closed
+  // downstream pipe surfaces as an `EPIPE` error event on `process.stdout`
+  // — which, by the time it fires, lands after `runAnalysis` has already
+  // written report.md/run.json inside its ReportAssembly span (see
+  // src/run/orchestrator.ts). No behavioural change made here. If a
+  // future reproduction shows the run folder genuinely missing, the
+  // minimal fix is `process.stdout.on('error', () => {})` in this
+  // function — but only do that with evidence in hand; silently
+  // swallowing stdout errors hides real bugs in the trace-export tail.
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2),
     allowPositionals: true,
@@ -391,6 +417,14 @@ async function runAnalyzeCommand(
         : {}),
     });
 
+    // Exit-code precedence (DESIGN-NOTE.md):
+    //   6  cost retrieval failed across the entire scope — the loudest
+    //      failure mode; the report contains zero grounded recommendations
+    //      and the analysis is not actionable. Surfaced first so it
+    //      eclipses the rubric-failure code.
+    //   3  rubrics failed but the analysis still produced grounded output.
+    //   0  success.
+    if (result.cost_retrieval_outcome === 'failed') return 6;
     return result.score.passed_all ? 0 : 3;
   } catch (err) {
     if (err instanceof ConfigError) {
