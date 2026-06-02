@@ -17,6 +17,10 @@ runs-*/
 .env
 .env.local
 
+# Claude Code isolated worktrees (auto-created under .claude/worktrees/;
+# each has its own .git and must never be committed as a gitlink)
+.claude/worktrees/
+
 # Editor
 .vscode/
 .idea/
