@@ -71,6 +71,18 @@ describe('Reasoner — untrusted-block delimiters', () => {
     expect(prompt).toContain('</evidence_block>');
   });
 
+  it('surfaces valid evidence ids outside the data fence for citation copying', async () => {
+    const mock = new MockModelClient({ responses: canned });
+    const reasoner = new Reasoner({ model: mock, systemPrompt: 'system' });
+    await reasoner.reason({ scope: baseScope, evidence, data_quality: [] });
+    const prompt = mock.calls[0]?.userPrompt ?? '';
+    const ids = prompt.indexOf('## valid_evidence_ids');
+    const open = prompt.indexOf('<evidence_block role="data">');
+    expect(ids).toBeGreaterThan(-1);
+    expect(ids).toBeLessThan(open);
+    expect(prompt).toContain('"ev-1"');
+  });
+
   it('fences data_quality with <data_quality_block role="data">…</data_quality_block>', async () => {
     const mock = new MockModelClient({ responses: canned });
     const reasoner = new Reasoner({ model: mock, systemPrompt: 'system' });

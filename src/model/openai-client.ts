@@ -25,6 +25,7 @@ import { currentInstrumentationFlavor } from '../observability/setup.js';
  */
 
 const FOUNDRY_OPENAI_SCOPE = 'https://cognitiveservices.azure.com/.default';
+const DEFAULT_MODEL_TIMEOUT_MS = 120_000;
 
 export interface OpenAIModelClientOptions {
   endpoint: string;
@@ -32,6 +33,8 @@ export interface OpenAIModelClientOptions {
   credential: TokenCredential;
   /** Foundry API version. Defaults to a recent GA release. */
   apiVersion?: string;
+  /** Per-request timeout in milliseconds. */
+  timeoutMs?: number;
 }
 
 export class OpenAIModelClient implements ModelClient {
@@ -44,6 +47,7 @@ export class OpenAIModelClient implements ModelClient {
       endpoint: options.endpoint,
       apiVersion: options.apiVersion ?? '2024-10-21',
       azureADTokenProvider: getBearerTokenProvider(options.credential, FOUNDRY_OPENAI_SCOPE),
+      timeout: options.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS,
     });
     // observeOpenAI returns a Proxy with the same type, so the parse()
     // call below is unchanged. Only apply it under the langfuse flavor —
@@ -61,7 +65,7 @@ export class OpenAIModelClient implements ModelClient {
         `[debug] ${args.schemaName} JSON schema: ${JSON.stringify(responseFormat, null, 2)}\n`,
       );
     }
-    const response = await this.client.chat.completions.parse({
+    const request = {
       model: this.deployment,
       messages: [
         { role: 'system', content: args.systemPrompt },
@@ -71,7 +75,16 @@ export class OpenAIModelClient implements ModelClient {
       temperature: args.temperature ?? 0,
       ...(args.seed !== undefined ? { seed: args.seed } : {}),
       ...(args.maxOutputTokens !== undefined ? { max_completion_tokens: args.maxOutputTokens } : {}),
-    });
+    } satisfies Parameters<typeof this.client.chat.completions.parse>[0];
+
+    let response: Awaited<ReturnType<typeof this.client.chat.completions.parse>>;
+    try {
+      response = await this.client.chat.completions.parse(request);
+    } catch (err) {
+      if (!isUnsupportedTemperatureError(err)) throw err;
+      const { temperature: _temperature, ...withoutTemperature } = request;
+      response = await this.client.chat.completions.parse(withoutTemperature);
+    }
 
     const parsed = response.choices[0]?.message.parsed;
     if (!parsed) {
@@ -81,4 +94,11 @@ export class OpenAIModelClient implements ModelClient {
     }
     return parsed as z.infer<TSchema>;
   }
+}
+
+export function isUnsupportedTemperatureError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /unsupported value: 'temperature'|temperature.+does not support|unsupported.+temperature/i.test(
+    message,
+  );
 }

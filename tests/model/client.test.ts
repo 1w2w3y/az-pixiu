@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { MockModelClient } from '../../src/model/mock-client.js';
 import { modelConfigHash } from '../../src/model/client.js';
+import { isUnsupportedTemperatureError } from '../../src/model/openai-client.js';
 
 const tiny = z.object({ greeting: z.string() }).strict();
 
@@ -81,5 +82,23 @@ describe('modelConfigHash', () => {
     const a = modelConfigHash({ provider: 'foundry', name: 'gpt-5.4', temperature: 0, seed: 7 });
     const b = modelConfigHash({ name: 'gpt-5.4', seed: 7, temperature: 0, provider: 'foundry' });
     expect(a).toBe(b);
+  });
+});
+
+describe('OpenAIModelClient compatibility helpers', () => {
+  it('recognizes provider errors for models that reject temperature=0', () => {
+    expect(
+      isUnsupportedTemperatureError(
+        new Error(
+          "400 Unsupported value: 'temperature' does not support 0 with this model. Only the default (1) value is supported.",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not classify unrelated model errors as temperature compatibility issues', () => {
+    expect(isUnsupportedTemperatureError(new Error('401 Access denied due to invalid token'))).toBe(
+      false,
+    );
   });
 });

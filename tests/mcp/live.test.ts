@@ -45,10 +45,13 @@ describe('LiveMCPTransport (construction)', () => {
 
   it('listCapabilities propagates network errors (caller invokes failure_taxonomy)', async () => {
     const t = new LiveMCPTransport({
-      endpoint: 'https://this-host-does-not-exist.invalid.az-pixiu.local',
+      endpoint: 'https://example.grafana.azure.com',
       credential: fakeCredential,
+      fetchImpl: async () => {
+        throw new Error('simulated network failure');
+      },
     });
-    await expect(t.listCapabilities()).rejects.toBeDefined();
+    await expect(t.listCapabilities()).rejects.toThrow(/simulated network failure/);
   });
 
   it('includes HTTP status and response body details for non-2xx AMG-MCP responses', async () => {

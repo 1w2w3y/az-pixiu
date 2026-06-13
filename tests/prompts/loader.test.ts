@@ -15,6 +15,12 @@ describe('loadPrompt', () => {
     expect(p.content).toMatch(/Az-Pixiu — Reasoner/);
   });
 
+  it('keeps the reasoner prompt explicit about exact evidence_id copying', async () => {
+    const p = await loadPrompt({ filename: 'reasoner.v1.md' });
+    expect(p.content).toContain('Each value must be copied exactly');
+    expect(p.content).toContain('<evidence_block role="data">');
+  });
+
   it('throws on a missing prompt file', async () => {
     await expect(loadPrompt({ filename: 'does-not-exist.md' })).rejects.toBeDefined();
   });

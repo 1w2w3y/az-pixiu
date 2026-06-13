@@ -34,7 +34,11 @@ export interface LiteLLMModelClientOptions {
   model: string;
   /** Optional API key. Omit for no-auth deployments. */
   apiKey?: string;
+  /** Per-request timeout in milliseconds. */
+  timeoutMs?: number;
 }
+
+const DEFAULT_MODEL_TIMEOUT_MS = 120_000;
 
 export class LiteLLMModelClient implements ModelClient {
   private readonly client: OpenAI;
@@ -46,6 +50,7 @@ export class LiteLLMModelClient implements ModelClient {
     const rawClient = new OpenAI({
       baseURL,
       apiKey: options.apiKey ?? 'no-auth',
+      timeout: options.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS,
     });
     this.client =
       currentInstrumentationFlavor() === 'langfuse' ? observeOpenAI(rawClient) : rawClient;
