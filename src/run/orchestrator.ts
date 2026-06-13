@@ -105,6 +105,11 @@ export interface RunOptions {
   runsDir?: string;
   /** Observability mode; defaults to 'memory' (no external export). */
   observabilityMode?: ObservabilityMode;
+  /**
+   * Optional Azure Monitor / Application Insights connection string for
+   * ms-otel mode. Environment variable still wins in observability setup.
+   */
+  applicationInsightsConnectionString?: string;
   /** Fixture id if running against a fixture transport. */
   fixtureId?: string;
   /**
@@ -320,7 +325,12 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
   const runJsonPath = join(runDir, 'run.json');
 
   const observabilityMode = options.observabilityMode ?? 'memory';
-  await initializeTracing({ mode: observabilityMode });
+  await initializeTracing({
+    mode: observabilityMode,
+    ...(options.applicationInsightsConnectionString
+      ? { applicationInsightsConnectionString: options.applicationInsightsConnectionString }
+      : {}),
+  });
 
   // Analysis type is known up front from either input — used for tags
   // and traceName so the trace is filterable from the moment RunRoot

@@ -49,6 +49,8 @@ export interface EvalRunnerOptions {
   runsDir?: string;
   /** Defaults to 'noop' so eval doesn't pollute the live trace store. */
   observabilityMode?: ObservabilityMode;
+  /** Optional App Insights connection string used when observabilityMode is ms-otel. */
+  applicationInsightsConnectionString?: string;
   /** Override the fixtures root. Defaults to 'fixtures'. */
   fixturesRoot?: string;
   /** Override prompts dir; mainly for tests. */
@@ -216,6 +218,9 @@ async function runOne(
       usePlaybook: options.usePlaybook ?? false,
       runsDir,
       observabilityMode,
+      ...(options.applicationInsightsConnectionString
+        ? { applicationInsightsConnectionString: options.applicationInsightsConnectionString }
+        : {}),
       ...(options.promptsCwd ? { promptsCwd: options.promptsCwd } : {}),
       fixtureId: item.fixture_id,
     });

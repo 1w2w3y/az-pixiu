@@ -77,6 +77,7 @@ export type InstrumentationFlavor = 'langfuse' | 'openinference';
 
 export interface ObservabilityConfig {
   mode: ObservabilityMode;
+  applicationInsightsConnectionString?: string;
 }
 
 export interface ObservabilityState {
@@ -213,7 +214,9 @@ function buildPhoenixProcessor(): SpanProcessor | undefined {
  *   - a365 is hard-disabled — Az-Pixiu is not a Microsoft Agent 365
  *     application; that exporter expects tenant/agent IDs we don't have.
  */
-async function initializeMicrosoftOtelTracing(): Promise<ObservabilityState> {
+async function initializeMicrosoftOtelTracing(
+  config: ObservabilityConfig,
+): Promise<ObservabilityState> {
   // Lazy import so the distro is only required when this mode is selected
   // (memory/langfuse/noop runs — including the test suite — never load it).
   const { useMicrosoftOpenTelemetry, shutdownMicrosoftOpenTelemetry } = await import(
@@ -224,7 +227,7 @@ async function initializeMicrosoftOtelTracing(): Promise<ObservabilityState> {
   // endpoint with no usable iKey (200 OK, no data in App Insights) unless
   // the connection string is passed explicitly via azureMonitorExporterOptions.
   // So forward APPLICATIONINSIGHTS_CONNECTION_STRING through directly.
-  const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING?.trim();
+  const connectionString = resolveApplicationInsightsConnectionString(config);
   useMicrosoftOpenTelemetry({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: TRACER_NAME,
@@ -263,7 +266,7 @@ export async function initializeTracing(
   // doesn't compose with our processors[] / NodeTracerProvider shape.
   // Branch out before the shared path.
   if (config.mode === 'ms-otel') {
-    activeState = await initializeMicrosoftOtelTracing();
+    activeState = await initializeMicrosoftOtelTracing(config);
     return activeState;
   }
 
@@ -324,6 +327,15 @@ export async function initializeTracing(
   };
   activeState = state;
   return state;
+}
+
+export function resolveApplicationInsightsConnectionString(
+  config: Pick<ObservabilityConfig, 'applicationInsightsConnectionString'>,
+): string | undefined {
+  const env = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING?.trim();
+  if (env) return env;
+  const configured = config.applicationInsightsConnectionString?.trim();
+  return configured || undefined;
 }
 
 export function shutdownTracing(): Promise<void> {

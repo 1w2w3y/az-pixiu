@@ -32,6 +32,12 @@ export const AmgConfigSchema = z
   })
   .strict();
 
+export const ObservabilityConfigSchema = z
+  .object({
+    application_insights_connection_string: z.string().min(1).optional(),
+  })
+  .strict();
+
 export const ModelProviderSchema = z.enum(['foundry', 'litellm']);
 
 // The selector lives at the top level so existing `config.json` files
@@ -43,6 +49,7 @@ export const ConfigSchema = z
     foundry: FoundryConfigSchema.optional(),
     litellm: LiteLLMConfigSchema.optional(),
     amg: AmgConfigSchema,
+    observability: ObservabilityConfigSchema.optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {
@@ -65,5 +72,6 @@ export const ConfigSchema = z
 export type FoundryConfig = z.infer<typeof FoundryConfigSchema>;
 export type LiteLLMConfig = z.infer<typeof LiteLLMConfigSchema>;
 export type AmgConfig = z.infer<typeof AmgConfigSchema>;
+export type AzPixiuObservabilityConfig = z.infer<typeof ObservabilityConfigSchema>;
 export type ModelProvider = z.infer<typeof ModelProviderSchema>;
 export type Config = z.infer<typeof ConfigSchema>;

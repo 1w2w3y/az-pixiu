@@ -35,6 +35,32 @@ describe('loadConfig', () => {
     });
   });
 
+  it('loads optional observability settings from config file', async () => {
+    await withTempDir(async (dir) => {
+      const path = join(dir, 'config.json');
+      await writeFile(
+        path,
+        JSON.stringify({
+          foundry: {
+            endpoint: 'https://example.openai.azure.com',
+            deployment: 'gpt-5.4',
+          },
+          amg: {
+            endpoint: 'https://example.grafana.azure.com',
+          },
+          observability: {
+            application_insights_connection_string:
+              'InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://westus2-0.in.applicationinsights.azure.com/',
+          },
+        }),
+      );
+      const config = await loadConfig({ path });
+      expect(config.observability?.application_insights_connection_string).toContain(
+        'InstrumentationKey=',
+      );
+    });
+  });
+
   it('resolves relative paths against cwd option', async () => {
     await withTempDir(async (dir) => {
       await writeFile(join(dir, 'config.json'), validJson);

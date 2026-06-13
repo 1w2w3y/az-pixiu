@@ -4,6 +4,7 @@ import {
   FoundryConfigSchema,
   LiteLLMConfigSchema,
   AmgConfigSchema,
+  ObservabilityConfigSchema,
 } from '../../src/schemas/index.js';
 
 const validConfig = {
@@ -79,6 +80,22 @@ describe('ConfigSchema', () => {
     const { amg: _amg, ...withoutAmg } = validConfig;
     expect(ConfigSchema.safeParse(withoutAmg).success).toBe(false);
   });
+
+  it('accepts optional Application Insights connection string configuration', () => {
+    const result = ConfigSchema.safeParse({
+      ...validConfig,
+      observability: {
+        application_insights_connection_string:
+          'InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://westus2-0.in.applicationinsights.azure.com/;ApplicationId=11111111-1111-1111-1111-111111111111',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.observability?.application_insights_connection_string).toContain(
+        'InstrumentationKey=',
+      );
+    }
+  });
 });
 
 describe('FoundryConfigSchema (standalone)', () => {
@@ -90,6 +107,25 @@ describe('FoundryConfigSchema (standalone)', () => {
 describe('AmgConfigSchema (standalone)', () => {
   it('parses standalone amg config', () => {
     expect(AmgConfigSchema.safeParse(validConfig.amg).success).toBe(true);
+  });
+});
+
+describe('ObservabilityConfigSchema (standalone)', () => {
+  it('parses standalone observability config', () => {
+    expect(
+      ObservabilityConfigSchema.safeParse({
+        application_insights_connection_string:
+          'InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://westus2-0.in.applicationinsights.azure.com/',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects unknown observability keys', () => {
+    expect(
+      ObservabilityConfigSchema.safeParse({
+        application_insights: 'wrong-shape',
+      }).success,
+    ).toBe(false);
   });
 });
 

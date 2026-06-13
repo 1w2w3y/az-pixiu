@@ -83,7 +83,9 @@ analyze flags:
   --observability <mode>           noop | memory | langfuse | ms-otel  (default: langfuse — requires
                                    LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL)
                                    ms-otel uses the Microsoft OpenTelemetry Distro; exports to
-                                   Azure Monitor when APPLICATIONINSIGHTS_CONNECTION_STRING is set.
+                                  Azure Monitor when APPLICATIONINSIGHTS_CONNECTION_STRING is set
+                                  or observability.application_insights_connection_string is present
+                                  in config.json. The env var wins when both are set.
                                    Langfuse and Phoenix sinks are NOT active in ms-otel mode.
   --credential <mode>              azure-cli | default | mock  (default: azure-cli)
 
@@ -113,7 +115,9 @@ env vars (observability):
   PHOENIX_API_KEY                                                 Optional Phoenix bearer token.
   APPLICATIONINSIGHTS_CONNECTION_STRING                           Azure App Insights connection string.
                                                                   Enables the Azure Monitor exporter under
-                                                                  --observability ms-otel. To pick up the
+                                                                  --observability ms-otel; alternatively set
+                                                                  observability.application_insights_connection_string
+                                                                  in config.json. To pick up the
                                                                   distro's HTTP / OpenAI-Agents auto-
                                                                   instrumentations, start the process with
                                                                   \`node --import @microsoft/opentelemetry/loader\`.
@@ -409,6 +413,12 @@ async function runAnalyzeCommand(
       usePlaybook: args.usePlaybook,
       runsDir,
       observabilityMode: args.observability,
+      ...(config.observability?.application_insights_connection_string
+        ? {
+            applicationInsightsConnectionString:
+              config.observability.application_insights_connection_string,
+          }
+        : {}),
       ...(args.fixture ? { fixtureId: args.fixture } : {}),
       ...(langfusePublisher ? { langfusePublisher } : {}),
       runHistoryStore,
@@ -626,6 +636,12 @@ async function runEvalCommand(
         usePlaybook,
         runsDir: outputDir,
         observabilityMode,
+        ...(config.observability?.application_insights_connection_string
+          ? {
+              applicationInsightsConnectionString:
+                config.observability.application_insights_connection_string,
+            }
+          : {}),
         fixturesRoot,
         onProgress: (line) => process.stdout.write(line + '\n'),
         ...(langfusePublisher

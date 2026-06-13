@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { initializeTracing, shutdownTracing } from '../../src/observability/setup.js';
+import {
+  initializeTracing,
+  resolveApplicationInsightsConnectionString,
+  shutdownTracing,
+} from '../../src/observability/setup.js';
 import { withSpan, emitEvent, SpanNames, ATTR } from '../../src/observability/spans.js';
 
 let state: Awaited<ReturnType<typeof initializeTracing>>;
@@ -16,6 +20,36 @@ describe('initializeTracing — memory mode', () => {
   it('exposes an in-memory exporter', () => {
     expect(state.mode).toBe('memory');
     expect(state.inMemoryExporter).toBeDefined();
+  });
+});
+
+describe('Application Insights connection string resolution', () => {
+  const original = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
+    } else {
+      process.env.APPLICATIONINSIGHTS_CONNECTION_STRING = original;
+    }
+  });
+
+  it('uses config when the env var is absent', () => {
+    delete process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
+    expect(
+      resolveApplicationInsightsConnectionString({
+        applicationInsightsConnectionString: 'InstrumentationKey=config-key',
+      }),
+    ).toBe('InstrumentationKey=config-key');
+  });
+
+  it('lets the env var override config', () => {
+    process.env.APPLICATIONINSIGHTS_CONNECTION_STRING = 'InstrumentationKey=env-key';
+    expect(
+      resolveApplicationInsightsConnectionString({
+        applicationInsightsConnectionString: 'InstrumentationKey=config-key',
+      }),
+    ).toBe('InstrumentationKey=env-key');
   });
 });
 

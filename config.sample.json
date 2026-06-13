@@ -10,5 +10,8 @@
   },
   "amg": {
     "endpoint": "https://<your-amg-instance>.grafana.azure.com"
+  },
+  "observability": {
+    "application_insights_connection_string": "InstrumentationKey=<key>;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/;LiveEndpoint=https://<region>.livediagnostics.monitor.azure.com/;ApplicationId=<app-id>"
   }
 }
