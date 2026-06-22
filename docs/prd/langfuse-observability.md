@@ -16,6 +16,10 @@ For Az-Pixiu, weak observability would create three problems. Operators would no
 
 The project needs Langfuse to be load-bearing: traces should explain individual runs, evaluations should measure quality over representative scenarios, experiments should compare meaningful alternatives, and scores should form a durable quality record.
 
+## Current Implementation Status
+
+Langfuse tracing is wired for analyze and eval runs when configured. Analyze runs can publish automated rubric scores to the trace. Eval runs can publish rubric and expectation scores, upsert local dataset items into Langfuse, attach traces to Dataset Run Items, group them under a Dataset Run / Experiment, and run model sweeps. Prompt loading is still file-backed (`prompts/planner.v1.md`, `prompts/reasoner.v1.md`, `prompts/reasoner.v2.md`), and local JSON remains the CLI dataset source. Langfuse-backed prompt loading, Langfuse-as-source datasets, LLM-as-judge, human-review tooling, calibration reports, and configurable redaction remain planned.
+
 ## Goals
 
 - Capture complete, useful traces for every meaningful agent run.

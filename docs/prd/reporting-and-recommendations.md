@@ -8,6 +8,10 @@ Recommendations are not casual chatbot advice. They are review artifacts for ent
 
 The reporting experience should support both interactive local use and reusable review outputs. The agent should help engineers move faster while preserving the discipline expected in cost governance, architecture review, and operational decision-making.
 
+## Current Implementation Status
+
+Each analysis run currently writes `report.md`, `report.html`, and `run.json`. Reports include Scope & Data Sources, Run Quality, Cost Summary Overview for `cost_summary`, Executive Summary, Recommendations, Hypotheses, Observed Facts, Data Quality, and Run Metadata. When waste lanes run, the report renders a deterministic Waste Candidates section; today that section is implemented for `orphan_public_ip` only. Run Quality is always rendered and is fed by `transport_summary`, freshness findings, run outcome, and cost-scope coverage. Continuity markers such as "unchanged for N weeks" remain planned even though prior-run context is already available to the reasoner.
+
 ## Problem Statement
 
 Cost data is often available but hard to turn into a trustworthy optimization plan. Raw tables show where money was spent, but they do not explain whether the spend is expected, whether a resource is underused, whether a cost increase was tied to operational change, or which issue deserves attention first.

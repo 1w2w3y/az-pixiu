@@ -1,12 +1,12 @@
 # Embedded Rate-Limit Detection
 
-> **Status:** Proposed, not yet implemented.  
-> **Scope:** Sub-problem under [cron-comparison-improvements §Gap 7](cron-comparison-improvements.md#gap-7--429--rate-limit-handling-design-named-implementation-missing).  
+> **Status (2026-06):** Implemented in Az-Pixiu; retained as design rationale and upstream-cleanup notes.  
+> **Scope:** Sub-problem under [cron-comparison-improvements §Gap 7](cron-comparison-improvements.md#gap-7--429--rate-limit-handling-mostly-implemented).  
 > **Empirical anchor:** [`runs-modelcompare/gpt-5_4/98bda740-…/run.json`](../../runs-modelcompare/) — a `pixiu analyze cost-summary` run against 3 Grafana subscriptions where every `amgmcp_cost_analysis` call returned a 200-OK envelope wrapping an embedded `"Cost Management API rate limit (429)"` string, and yet `transport_summary.final_outcome` reported `"success"` for all three. Run Quality stated `"full cost-scope coverage (3 of 3 subscription(s) returned cost evidence)"`. Total observed cost: `0.00`. The report was self-contradicting.
 
 ## Problem
 
-§Gap 7 in [cron-comparison-improvements](cron-comparison-improvements.md) named retry-with-backoff as the answer to AMG-MCP 429 responses. The retry substrate exists today in `src/evidence/executor.ts` and `src/evidence/retry-policy.ts` — backoff, jitter, per-call pacing, per-run budgets, and `transport_summary` rollup are all wired. That design assumed AMG-MCP would surface upstream Cost Management 429s as **wire-level transport failures** — thrown exceptions, non-2xx HTTP status, or MCP protocol errors that `client.invoke()` propagates as exceptions and `classifyFailure()` resolves to `category: 'rate_limit'`.
+§Gap 7 in [cron-comparison-improvements](cron-comparison-improvements.md) named retry-with-backoff as the answer to AMG-MCP 429 responses. The retry substrate exists today in `src/evidence/executor.ts` and `src/evidence/retry-policy.ts` — backoff, jitter, per-call pacing, per-run budgets, and `transport_summary` rollup are all wired. The original design assumed AMG-MCP would surface upstream Cost Management 429s as **wire-level transport failures** — thrown exceptions, non-2xx HTTP status, or MCP protocol errors that `client.invoke()` propagates as exceptions and `classifyFailure()` resolves to `category: 'rate_limit'`.
 
 The live AMG-MCP does not behave this way. For `amgmcp_cost_analysis`, the upstream Cost Management 429 is wrapped into a schema-valid JSON success payload:
 
@@ -49,7 +49,7 @@ The reasoner does see the embedded `error` string — it gets the full payload i
 
 ## Design
 
-Detection of embedded rate-limit signals lives at the same lifecycle point as wire-level failure classification: **inside `EvidenceExecutor`, between `client.invoke()` returning a `ToolCallResult` and `raw_evidence.push()`**. The output type matches the existing classifier: a `ClassifiedFailure` whose `category` is one of the retriable categories (`rate_limit`, `timeout`). The downstream substrate — backoff, jitter, budget, pacing, `transport_summary` rollup, Run Quality footer, Langfuse spans — is reused unchanged.
+Detection of embedded rate-limit signals now lives at the same lifecycle point as wire-level failure classification: **inside `EvidenceExecutor`, between `client.invoke()` returning a `ToolCallResult` and `raw_evidence.push()`**. The output type matches the existing classifier: a `ClassifiedFailure` whose `category` is one of the retriable categories (`rate_limit`, `timeout`). The downstream substrate — backoff, jitter, budget, pacing, `transport_summary` rollup, Run Quality footer, Langfuse spans — is reused unchanged.
 
 ### Detection contract
 
@@ -161,6 +161,8 @@ Four PRs that ship now, plus one observational gate that may become a fifth PR l
 
 ### PR 1 — Payload-failure inspector framework
 
+**Status:** Shipped.
+
 **Goal.** Introduce the `PayloadInspector` type, the `inspectPayloadForFailure()` dispatch function, the `EmbeddedPayloadFailure` exception type, and the executor hook. No specific inspector is registered. No behaviour change for any existing capability.
 
 **Files.** `src/evidence/payload-failure.ts` (new), `src/evidence/executor.ts` (one block in `executeOne()`), `src/failure/taxonomy.ts` (short-circuit `EmbeddedPayloadFailure`).
@@ -168,6 +170,8 @@ Four PRs that ship now, plus one observational gate that may become a fifth PR l
 **Verification.** Full test suite passes unchanged. New unit test injects a stub inspector that always returns `rate_limit`; executor with a mock client returns success on attempt 3 → assert `attempt_count=3, retry_count=2, recovered_failure_categories=['rate_limit'], final_outcome='success'`.
 
 ### PR 2 — `amgmcp_cost_analysis` inspector
+
+**Status:** Shipped.
 
 **Goal.** Register the cost-analysis inspector. Match `subscriptions[*].error` for 429 / rate-limit / throttle wording (→ `rate_limit`), unauthorized (→ `auth`), forbidden (→ `authz_gap`), and unknown error on empty data (→ `schema_mismatch`).
 
@@ -177,13 +181,17 @@ Four PRs that ship now, plus one observational gate that may become a fifth PR l
 
 ### PR 3 — Coverage helper reads `transport_summary`
 
-**Goal.** `cost_coverage` helper in `report/coverage.ts` reads `transport_summary` rows and demotes any subscription whose cost-analysis call has `final_outcome != 'success'` from `covered` to `unavailable`. This is correctness defense even after PR 1–2: the helper should not silently rely on "no evidence record → not covered". Today no evidence records are dropped on the embedded-429 path, so the helper's current absence-based check is load-bearing-by-accident.
+**Status:** Shipped.
+
+**Goal.** `cost_coverage` helper in `report/coverage.ts` reads `transport_summary` rows and demotes any subscription whose cost-analysis call has `final_outcome != 'success'` from `covered` to `unavailable`. This is correctness defense even after PR 1–2: the helper should not silently rely on "no evidence record → not covered". In the shipped path, exhausted embedded failures do not get promoted into cost evidence; the transport summary is still the durable source for why the subscription is unavailable.
 
 **Files.** `src/report/coverage.ts`, tests in `tests/report/coverage.test.ts`.
 
 **Verification.** Replay the live `runs-modelcompare/gpt-5_4/...` `run.json` *after* PR 1–2 land (so transport rows reflect retry exhaustion). Coverage helper reports `0 of 3 subscriptions covered, 3 unavailable`. Executive Summary input clearly shows the gap.
 
 ### PR 4 — Upstream AMG-MCP issue
+
+**Status:** Still pending / external.
 
 **Goal.** Open an issue against AMG-MCP requesting that `amgmcp_cost_analysis` surface upstream Cost Management 429s as either `isError: true` on the `ToolCallResult` or a typed structured-partial-failure field. Reference this design document and the inspector module as the workaround.
 
@@ -193,7 +201,7 @@ Four PRs that ship now, plus one observational gate that may become a fifth PR l
 
 ## Document conventions
 
-- `cron-comparison-improvements.md` §Gap 7 gets a one-paragraph amendment pointing here, with the framing **"the §Gap 7 retry substrate handles wire-level rate limits; payload-embedded rate limits are handled by the same substrate via the detection layer described in [embedded-rate-limit.md](embedded-rate-limit.md)"**.
+- `cron-comparison-improvements.md` §Gap 7 now points here with the framing that the §Gap 7 retry substrate handles wire-level rate limits and payload-embedded rate limits through the same retry/backoff path.
 - `cost-summary-depth.md` §Gap 6 (Run Quality surface) needs no change; the new pacing line is one more row of the same shape.
 - The `phase-1.md` failure-taxonomy table line for `rate_limit` ("Backoff with jitter, capped retries; serialize across subs") becomes truthful once these PRs ship; no edit required.
 
@@ -205,7 +213,7 @@ Four PRs that ship now, plus one observational gate that may become a fifth PR l
 - [`src/mcp/content.ts`](../../src/mcp/content.ts) — existing wrapped-error detection (a sibling of the new payload inspector)
 - [`src/evidence/normalizer.ts`](../../src/evidence/normalizer.ts) — `summarize()` cost-analysis branch that today ignores `subscriptions[*].error`
 - [`src/schemas/transport.ts`](../../src/schemas/transport.ts) — `TransportSummaryEntry`, `rollupTransportSummary()`, `runOutcomeFromRollup()`
-- [`docs/design/cron-comparison-improvements.md` §Gap 7](cron-comparison-improvements.md#gap-7--429--rate-limit-handling-design-named-implementation-missing) — parent design
+- [`docs/design/cron-comparison-improvements.md` §Gap 7](cron-comparison-improvements.md#gap-7--429--rate-limit-handling-mostly-implemented) — parent design
 - [`docs/prd/amg-mcp-integration.md`](../prd/amg-mcp-integration.md) lines 17, 85, 88 — rate-limit handling requirement
 - [`~/repos/claw-context/cron-azure-cost-analysis/cron-definition.md`](https://github.com/1w2w3y/claw-context/blob/main/cron-azure-cost-analysis/cron-definition.md) "Key Constraints" — empirical 60s pacing rationale
 - `runs-modelcompare/gpt-5_4/98bda740-5b36-4a28-96fe-0388b4b3c2dd/run.json` — empirical anchor for this design

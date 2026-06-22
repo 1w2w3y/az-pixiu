@@ -8,6 +8,10 @@ The CLI is not a chat shell for arbitrary cloud questions. It is a command-orien
 
 The experience should feel familiar to engineers who use Azure, Grafana, local development tools, and version-controlled review workflows.
 
+## Current Implementation Status
+
+The CLI currently exposes `pixiu analyze cost-surprise`, `pixiu analyze cost-summary`, `pixiu eval <dataset.json>`, and `pixiu diagnose`. Analyze supports explicit subscriptions, auto-discovery by top resource count, subscription-name filtering, time windows, resource groups, resource type filters, fixture replay, playbook mode, mock model mode, output directory selection, observability modes (`noop`, `memory`, `langfuse`, `ms-otel`), credential modes, and billing-access probes with cache. Eval supports fixture-root and output-dir overrides, offline mock runs, Langfuse publishing, dataset/experiment naming, and model sweeps. It does not currently include `review`, `calibrate`, interactive follow-up, or package-managed installation workflows.
+
 ## Problem Statement
 
 Az-Pixiu is intentionally local-first. Without a thoughtful CLI, local-first can become difficult to operate: users may not know what configuration is required, what data will be accessed, why a run failed, where output went, or how to reproduce an analysis.

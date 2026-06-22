@@ -12,7 +12,7 @@ The project is named after the **Pixiu (貔貅)**, a creature in Chinese mytholo
 
 - Discovers Azure subscriptions and resources via AMG-MCP.
 - Pulls cost, configuration, and telemetry signals over the same boundary.
-- Identifies waste candidates (orphan public IPs, unattached disks, deallocated VMs, …) and other cost-relevant patterns.
+- Identifies cost-relevant patterns and, for `cost-summary` today, the first waste lane: orphan public IPs with calibrated weekly list-price estimates. Additional waste lanes are on the roadmap.
 - Writes a human-readable Markdown report where every claim cites the underlying tool call.
 - Records the full reasoning trace — planner steps, tool calls, model output, scores — to [Langfuse](https://langfuse.com) for review and evaluation.
 
@@ -65,19 +65,20 @@ LANGFUSE_PUBLIC_KEY=… LANGFUSE_SECRET_KEY=… LANGFUSE_BASE_URL=… \
 npx pixiu diagnose
 ```
 
-`npx pixiu --help` lists the full flag set. Each run writes its report, `run.json`, and intermediate artefacts to `runs/<run-id>/`.
+`npx pixiu --help` lists the full flag set. Each run writes `report.md`, `report.html`, and `run.json` to a timestamped subdirectory under `runs/`.
 
 ## Project status
 
-**Phase 2 — Langfuse depth — in progress.** Phase 1 (minimum viable agent) is complete: end-to-end runs against live AMG-MCP and Azure AI Foundry, evidence-cited Markdown reports, per-run `run.json`, a Langfuse trace for every invocation, a seeded eval dataset (`eval/phase-1.json`), and six scoring rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence, plus the Phase 3 additions `estimated_impact_calibrated` and `waste_classification_grounding`).
+**Phase 2 — Langfuse depth — in progress; Phase 2.5 shipped; Phase 3 started.** Phase 1 (minimum viable agent) is complete: end-to-end runs against live AMG-MCP and Azure AI Foundry, evidence-cited reports, per-run `run.json`, Langfuse traces when configured, a seeded eval dataset (`eval/phase-1.json`), and six active automated rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence, plus `estimated_impact_calibrated` and `waste_classification_grounding`).
 
 Recently shipped:
 
 - **Phase 2.5 — cross-run continuity foundations.** `RunHistoryStore` over the existing `runs/` artefacts, deterministic `recommendation_signature`, `prior_run_context` evidence, and a first-class "Run Quality" report section.
-- **Phase 3 — first waste lane.** The `cost-summary` analyzer now detects **orphan public IPs** with calibrated weekly impact estimates from an in-repo rate card.
-- **Embedded rate-limit detection.** The agent recognizes 429s embedded in MCP tool payloads and retries with capped backoff plus jitter, separated from the pacing budget; per-attempt Langfuse span events make retries visible in traces.
+- **Phase 2 — Langfuse eval publishing.** Eval runs can publish rubric and expectation scores, upsert local dataset items, group traces into Langfuse Dataset Runs / Experiments, and sweep multiple models.
+- **Phase 3 — first waste lane.** The `cost-summary` analyzer now detects **orphan public IPs** with calibrated weekly impact estimates from an in-repo rate card. This is the only enabled waste lane today.
+- **Transport resilience.** The agent recognizes wire-level and payload-embedded 429s from AMG-MCP cost analysis, retries with capped backoff plus jitter, separates pacing from retry budget, records `transport_summary`, and makes retries visible in Run Quality and trace events.
 
-Next up: the rest of the Phase 3 waste-lane group (unattached disks, deallocated VMs, stopped AKS, "restored-*" PostgreSQL servers, empty ACRs), naming-pattern clustering, and a `reasoner.v2` prompt with new scoring rubrics. See the [roadmap](docs/roadmap.md) and the [cost-summary depth design](docs/design/cost-summary-depth.md) for the full plan.
+Next up: the rest of the Phase 3 waste-lane group (unattached disks, deallocated VMs, stopped AKS, "restored-*" PostgreSQL servers, empty ACRs), naming-pattern clustering, continuity markers that consume `prior_run_context`, uniform-drop freshness detection, and the remaining Phase 2 Langfuse surfaces (prompt loading from Langfuse, Langfuse-sourced datasets, judge scores, human review, redaction). See the [roadmap](docs/roadmap.md) and the [cost-summary depth design](docs/design/cost-summary-depth.md) for the full plan.
 
 ## Audience
 

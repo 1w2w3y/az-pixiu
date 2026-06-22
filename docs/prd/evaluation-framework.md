@@ -8,6 +8,10 @@ Evaluation is not a later hardening task. It is part of the product contract bec
 
 The framework should also serve the project's Langfuse learning goals by showing how datasets, evaluations, experiments, and scoring work together in a realistic AI system.
 
+## Current Implementation Status
+
+The repository currently ships `eval/phase-1.json` with four items and `eval/phase-3-waste.json` with the first orphan-public-IP waste-lane item. Automated scoring includes structural correctness, citation completeness, confidence consistency, read-only adherence, estimated-impact calibration, and waste-classification grounding. The CLI eval runner can run fully offline with fixture replay and mock credentials; when Langfuse credentials are present it can publish rubric and expectation scores, upsert dataset items, attach traces to a Dataset Run / Experiment, and sweep multiple models. LLM-as-judge, human review, calibration reporting, continuity-specific eval items, and `continuity_grounded` remain planned.
+
 ## Problem Statement
 
 LLM-based agents can regress in subtle ways. A prompt change may improve clarity while weakening evidence grounding. A new model may format reports better while hallucinating resource attributes. A broader data retrieval strategy may improve recall while increasing latency and noise.

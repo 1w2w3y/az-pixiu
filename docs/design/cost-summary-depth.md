@@ -1,10 +1,10 @@
 # Cost-Summary Depth
 
-> **Status (2026-05):** Proposal. This design captures the gap between Az-Pixiu's current `cost-summary` analyzer (single-window, descriptive snapshot, no waste classification) and what a recurring real-world cost-review workflow produces. It is the planning document for a cluster of work that lands in two roadmap slots: foundational cross-run state in [Phase 2.5](../roadmap.md#phase-25--cross-run-continuity-foundations), and feature breadth in [Phase 3](../roadmap.md#phase-3--optimization-breadth). The work is admissible against the [hard constraints](../../CLAUDE.md#hard-constraints-architecturally-load-bearing) without modification — read-only, AMG-MCP-bounded, evidence-cited.
+> **Status (2026-06):** Living design, partially implemented. Phase 2.5's cross-run state, Run Quality section, transport summary, and recommendation signatures have shipped. Early Phase 3 has also shipped the first waste lane (`orphan_public_ip`), calibrated weekly impact estimates from `pricing/azure-rate-card.json`, `reasoner.v2` loading for `cost_summary`, and the two active Phase 3 rubrics (`estimated_impact_calibrated`, `waste_classification_grounding`). The broader design still captures the gap between the current analyzer and a mature recurring cost-review workflow: additional waste lanes, naming-pattern clustering, uniform-drop freshness detection, and reasoner-rendered continuity markers remain planned work.
 
 ## Context
 
-The Phase 1 `cost-summary` playbook ([`src/playbooks/cost-summary.ts`](../../src/playbooks/cost-summary.ts)) is deliberately narrow: six deterministic AMG-MCP capability calls per scope (subscription list, per-subscription cost analysis, top resource types overall, top type × location cross-cut, tag-coverage roll-up, per-subscription activity log), no baseline comparison, no result-driven follow-ups. The reasoner describes top services, regional distribution, cost concentration, tagging gaps, and period-defining lifecycle events. The output is one Markdown report plus one `run.json` per invocation, with no awareness of any prior run.
+The Phase 1 `cost-summary` playbook ([`src/playbooks/cost-summary.ts`](../../src/playbooks/cost-summary.ts)) started deliberately narrow: deterministic AMG-MCP capability calls per scope (subscription list, per-subscription cost analysis, top resource types overall, top type x location cross-cut, tag-coverage roll-up, per-subscription activity log), no baseline comparison, and no result-driven follow-ups. That base still exists, but the current implementation now adds a Phase 2.5/Phase 3 layer around it: prior-run context can be injected, retrieval quality is summarized in the report, and `WasteDetectionExecutor` runs the `orphan_public_ip` lane for cost-summary. The reasoner describes top services, regional distribution, cost concentration, tagging gaps, period-defining lifecycle events, and, when the lane finds candidates, can frame the deterministic Waste Candidates section. The output is Markdown, HTML, and `run.json` per invocation.
 
 A reference workflow — an external Claude-Code cron that has been producing weekly Azure cost reports for ~12 runs against 8 subscriptions (the report this design is grounded in lives at `claw-context/cron-azure-cost-analysis/report.md`) — demonstrates that real recurring cost-review output looks different from what the current Az-Pixiu `cost-summary` produces in six distinct ways. This document characterizes those differences, justifies which of them should become Az-Pixiu features, and locks the design choices that close each gap without weakening the project's evidence and observability discipline.
 
@@ -37,7 +37,7 @@ Each gap names the observation, the rough size of the work, and the slot in the 
 
 **Design.** Introduce a `waste-detection` evidence lane within the `cost-summary` playbook. Each lane is one ARG query targeting a specific waste pattern, returning resource IDs plus the few fields needed to defend the classification (SKU, region, provisioning state, age, ipConfiguration, etc.). The reasoner receives the lane outputs as `EvidenceRecord`s with a new `intent: 'waste_candidate'` so it can group them in the report under a dedicated "Waste Candidates" section.
 
-Initial lanes, each anchored to an unambiguous ARG predicate:
+Planned lanes, each anchored to an unambiguous ARG predicate. Only the first row, orphaned public IPs, is enabled in code today:
 
 | Lane | Predicate | Cited evidence |
 |---|---|---|
@@ -141,11 +141,11 @@ The cross-run markers are surfaced as report content (§"Cross-run continuity ma
 | **Local SQLite at `state/run-history.sqlite`** | Fast lookups; queryable; survives operator-local | New dependency; backup/restore semantics; needs migrations |
 | **Langfuse Datasets as the substrate** | Single source of truth; aligns with [Phase 2 design](phase-2.md) §"Dataset migration"; remote backup for free | Requires Langfuse for cross-run continuity; offline operation must still work via local fallback |
 
-Phase 2.5 ships **option 1** (filesystem index over `runs/`) because it is the only one compatible with offline-first operation as a default. It exposes the `RunHistoryStore` interface so option 2 or 3 can be swapped in later without changing the analyzer or the reasoner.
+Phase 2.5 shipped **option 1** (filesystem index over `runs/`) because it is the only one compatible with offline-first operation as a default. It exposes the `RunHistoryStore` interface so option 2 or 3 can be swapped in later without changing the analyzer or the reasoner.
 
 **Trade-off accepted: cross-run continuity is a Phase 2.5 prerequisite for Phase 3, not a Phase 3 sub-item.** Several Phase 3 features (UNCHANGED markers, recurring-pattern detection, "no action taken since week N" recommendations) read from `RunHistoryStore`. Building those features first and bolting on state later would produce a worse interface, because the state-write call sites are inside the analyzer and reasoner. The cleaner sequence is: ship `RunHistoryStore` and `recommendation_signature` first as a foundational Phase 2.5 increment, then build the Phase 3 waste-detection features against that interface.
 
-**Trade-off named, not resolved: scope-drift handling.** When the operator runs the same `analysis_type` with a slightly different subscription list (e.g., a sub was lost to RBAC denial), the `scope_signature` does not match a prior run's. Three options: (a) require an exact match (conservative — no false continuity claims, but loses signal when scopes drift slightly), (b) match on a *subset* relationship (more useful but introduces ambiguity), (c) make the operator opt in with `--prior-run <run-id>` (explicit but burdensome). Phase 2.5 ships (a) plus a documented `--prior-run` override for (c); option (b) is a Phase 3+ research item once real recurring use surfaces the patterns.
+**Trade-off named, not resolved: scope-drift handling.** When the operator runs the same `analysis_type` with a slightly different subscription list (e.g., a sub was lost to RBAC denial), the `scope_signature` does not match a prior run's. Three options: (a) require an exact match (conservative — no false continuity claims, but loses signal when scopes drift slightly), (b) match on a *subset* relationship (more useful but introduces ambiguity), (c) make the operator opt in with `--prior-run <run-id>` (explicit but burdensome). The shipped implementation uses (a). A `--prior-run` override and subset matching remain future options once real recurring use surfaces the patterns.
 
 **Roadmap slot.** Foundational layer in [Phase 2.5](../roadmap.md#phase-25--cross-run-continuity-foundations); first user-visible features in Phase 3.
 
@@ -165,24 +165,24 @@ The Langfuse trace already emits enough information to produce these — Phase 1
 
 ### Playbook structure: extend, not fork
 
-The `cost-summary` playbook gains the waste-detection lane group, the prior-run-context evidence injection (§Gap 5), and the freshness check (§Gap 4). It does *not* fork into a separate `cost-summary-deep` analyzer. The reasons:
+The `cost-summary` playbook is extended by the waste-detection lane group, prior-run-context evidence injection (§Gap 5), and freshness checks (§Gap 4). It does *not* fork into a separate `cost-summary-deep` analyzer. The reasons:
 
 - Keeping the analyzer surface stable means the [evaluation framework PRD](../prd/evaluation-framework.md) FR-13 ("dataset items versioned or stable enough for historical comparison") continues to apply across the Phase 3 expansion. Existing `cost-summary-001` and `cost-summary-002` dataset items remain valid; new fixtures get added for the new lanes.
 - The reasoner's contract is unchanged: facts → hypotheses → recommendations, with citations. New lane outputs are just new `EvidenceRecord`s; the reasoner already knows how to consume them. The §14 trace vocabulary gets new attribute names (listed below) but no structural change.
 - A forked analyzer would double the eval surface and the Langfuse prompt surface (planner + reasoner per fork), which would conflict with [Phase 2 design](phase-2.md) §"Prompt management" and §"Dataset migration".
 
-The orchestrator gains a `WasteDetectionExecutor` (parallel to `EvidenceExecutor`) that runs the waste lanes after the cost-summary evidence plan completes. This keeps the lane code separable from the playbook code, so the lane registry can evolve without touching playbook structure.
+The orchestrator now has a `WasteDetectionExecutor` (parallel to `EvidenceExecutor`) that runs the enabled waste lanes after the cost-summary evidence plan completes. This keeps the lane code separable from the playbook code, so the lane registry can evolve without touching playbook structure.
 
 ### Reasoner prompt changes
 
-The `reasoner.v1.md` prompt gains four small additions:
+The `reasoner.v2.md` prompt carries the first set of additions:
 
-1. A `<waste_candidate_block>` section that fences waste-candidate evidence as data the same way `<evidence_block>` does today. Same prompt-injection guardrails.
-2. Rules for the new evidence intents: `waste_candidate`, `waste_cluster`, `ownership_hint`, `prior_run_context`.
-3. A rule that recommendations must compute and emit a deterministic `recommendation_signature` (§Gap 5).
-4. A rule that estimated weekly impact must be rendered as a range with a cited rate source, never as a single dollar figure (§Gap 3).
+1. Rules for waste-candidate evidence (`query_intent = 'waste_candidate'`, `source_capability = 'az_pixiu_waste_lane'`) with the same prompt-injection guardrails as ordinary evidence.
+2. A rule that recommendations must compute and emit a stable `recommendation_signature` (§Gap 5).
+3. A rule that estimated weekly impact must be rendered as a range with a cited rate source, never as a single dollar figure (§Gap 3).
+4. A rule that lane outputs should usually produce one lane-scoped recommendation rather than one recommendation per candidate.
 
-These are additive. The prompt is versioned as `reasoner.v2.md` (or `reasoner@phase-3` in Langfuse Prompts terms once Phase 2's prompt-management work has landed). Evaluations of v1 against the existing dataset items stay valid; v2 evaluations against the existing items should produce equal-or-better grounding/clarity scores before the prompt is promoted.
+Cluster, ownership-hint, and prior-run continuity rules remain future additions to v2. Once Phase 2's Langfuse prompt-management work lands, the same prompt should be promoted as a Langfuse-managed `reasoner` version rather than only as an in-repo file.
 
 ### Trace vocabulary additions
 
@@ -207,9 +207,9 @@ The names join the existing §14 vocabulary; they do not invent fresh attribute 
 
 Phase 3 requires new dataset items and new rubrics — the existing rubrics measure grounding, citation completeness, confidence consistency, and read-only adherence, but say nothing about whether a waste candidate is correctly classified or whether an estimated impact range is honest.
 
-New evaluation items, landing in Phase 3 (not Phase 2.5):
+Evaluation items:
 
-- `cost-summary-waste-001` — single subscription with 5 orphan IPs, 1 unattached disk, 0 restored-PG. Expects: waste-candidate section emitted, all 6 candidates surfaced, estimated weekly impact present and within ±20% of the rate-card derivation.
+- `cost-summary-waste-001` — **shipped in `eval/phase-3-waste.json`** for the orphan public-IP vertical slice. It expects the waste lane to surface 5 orphan public IPs, exclude an attached IP, preserve the rate-unavailable Basic/Dynamic case, and invoke `az_pixiu_waste_lane`.
 - `cost-summary-waste-cluster-001` — single subscription with 24 orphan IPs sharing a `test-rig-*` prefix. Expects: cluster recommendation emitted, individual recommendations *not* emitted.
 - `cost-summary-freshness-001` — cost-analysis evidence whose `time_window.end_utc` is within 24h of `now`. Expects: `freshness_partial_window` finding present, hypotheses caveated.
 - `cost-summary-continuity-001` — a pair of fixture runs where the second run's `RunHistoryStore` returns the first run's output. Expects: "UNCHANGED week 2" markers on candidates that persist; "RECURRING" marker on a cluster that re-appears after being absent.
@@ -218,7 +218,7 @@ New rubrics:
 
 - `rubric.waste_classification_grounding` — every waste candidate cites the lane evidence and the predicate that classified it.
 - `rubric.estimated_impact_calibrated` — every estimated weekly impact renders as a range with a cited rate source.
-- `rubric.continuity_grounded` — every "UNCHANGED week N" or "RECURRING" marker cites the prior-run-context evidence that justifies it.
+- `rubric.continuity_grounded` — **pending**; every "UNCHANGED week N" or "RECURRING" marker cites the prior-run-context evidence that justifies it.
 
 These get the same booleans-plus-detail treatment as the Phase 1 rubrics ([phase-2 design](phase-2.md) §"Score taxonomy"). They flow through the Phase 2 score-publishing pipeline without further plumbing.
 
@@ -240,21 +240,21 @@ Each step independently shippable, in roadmap-phase order.
 
 **Phase 2.5 — Cross-run continuity foundations.**
 
-1. **`recommendation_signature` field.** Add to the reasoning output schema. Update `reasoner.v1.md` to compute it deterministically. No behaviour change yet — the field is written to `run.json` and to Langfuse trace attributes but no UI reads it.
-2. **`RunHistoryStore` interface + filesystem implementation.** Reads `runs/<run-id>/run.json` files, indexes by `scope_signature`, returns `RunSummary[]` for a query. Tested against a folder of fixture runs.
-3. **`prior_run_context` evidence injection.** Orchestrator queries the store on every run and injects matching prior runs as `EvidenceRecord`s. Reasoner ignores them initially (until Phase 3 prompts use them).
-4. **Run Quality report section.** Promotes transport / freshness findings to a top-of-report section (§Gap 6). This step lands Gap 6 ahead of the rest.
+1. **`recommendation_signature` field.** **Shipped.** The reasoning output schema requires it, and the value is written to `run.json`.
+2. **`RunHistoryStore` interface + filesystem implementation.** **Shipped.** Reads `runs/*/run.json` files, indexes by `scope_signature`, and returns `RunSummary[]` for a query.
+3. **`prior_run_context` evidence injection.** **Shipped as a foundation.** The orchestrator queries the store and injects matching prior runs as `EvidenceRecord`s. Reasoner-rendered continuity markers are still pending.
+4. **Run Quality report section.** **Shipped.** Promotes transport / freshness findings to a top-of-report section (§Gap 6), includes a run-outcome line, and always renders a quantified baseline.
 
 **Phase 3 — Optimization breadth (depends on Phase 2.5).**
 
-5. **`pricing/azure-rate-card.json` seed.** ~20 SKUs covering the initial waste lanes. Captured from public list-price pages with `source_url` and `captured_at` recorded.
-6. **`WasteDetectionExecutor` + initial lane registry.** Six lanes (orphan IP, unattached disk, deallocated VM, stopped/failed AKS, restored-PG, empty registry). Each lane is a small object with an ARG query and a candidate renderer.
-7. **Naming-pattern clusterer.** Deterministic, pure function. Tests cover the cluster examples from the reference report.
-8. **Estimated-impact calculator.** Joins candidates to rate card; produces range estimates with cited sources; emits the `rate_source` trace attribute.
-9. **Freshness check.** Pre-reasoning step in the orchestrator that emits `freshness_partial_window` and `freshness_uniform_drop` findings.
-10. **`reasoner.v2.md` prompt.** Adds rules for waste candidates, clusters, ownership hints, prior-run context, calibrated impact rendering, and continuity markers. Promotion follows the Phase 2 prompt-management workflow.
-11. **Markdown report extensions.** New "Waste Candidates" section, continuity markers on recommendations, estimated impact range rendering with footnoted rate-card citation.
-12. **New eval items + rubrics.** Four dataset items, three rubrics, wired through the Phase 2 score-publishing pipeline.
+5. **`pricing/azure-rate-card.json` seed.** **Shipped for the first waste lane.** Captured rates include source and capture metadata; coverage will expand as new lanes need SKUs.
+6. **`WasteDetectionExecutor` + lane registry.** **Partially shipped.** The executor and registry are live with one enabled lane: `orphan_public_ip`. Additional lanes remain planned.
+7. **Naming-pattern clusterer.** Pending. Deterministic, pure function. Tests should cover the cluster examples from the reference report.
+8. **Estimated-impact calculator.** **Shipped for lane candidates.** Joins candidates to the in-repo rate card, produces range estimates, and marks rate-unavailable candidates explicitly.
+9. **Freshness check.** **Partially shipped.** The `freshness_partial_window` heuristic is implemented and deduplicated; `freshness_uniform_drop` remains pending.
+10. **`reasoner.v2.md` prompt.** **Partially shipped.** v2 adds waste-candidate and calibrated-impact rules and is loaded for `cost_summary`. Cluster, ownership-hint, and prior-run continuity rules remain follow-up work.
+11. **Markdown report extensions.** **Partially shipped.** The "Waste Candidates" section and estimated-impact rendering are live. Continuity markers on recommendations remain pending.
+12. **New eval items + rubrics.** **Partially shipped.** `eval/phase-3-waste.json` covers the orphan-IP lane, and two rubrics are active: `waste_classification_grounding` and `estimated_impact_calibrated`. Continuity eval items and `continuity_grounded` remain pending.
 
 Steps 1–4 are independently useful: with just the Run Quality section and the `RunHistoryStore` interface in place, the operator can already start seeing run-to-run continuity metadata in `run.json` even before the reasoner uses it. Steps 5–12 progressively realize the user-visible Phase 3 features.
 
@@ -266,11 +266,11 @@ The design is satisfied when each item below holds:
 
 - **A `pixiu analyze cost-summary` run against a scope with known orphan resources produces a "Waste Candidates" section listing them, with per-candidate evidence citations.**
 - **Each waste candidate carries an estimated weekly impact as a range or "rate unavailable for SKU X" — never a silent zero.**
-- **A run executed twice against the same scope produces, on the second run, "UNCHANGED week 2" markers on waste candidates that persist, sourced from `RunHistoryStore` evidence.**
-- **A run whose cost-analysis time window ends within the lag threshold produces a `freshness_partial_window` data-quality finding, and the reasoner caveats hypotheses that depend on the affected totals.**
+- **A run executed twice against the same scope injects prior-run context on the second run.** User-visible "UNCHANGED week 2" markers sourced from that context remain a Phase 3 follow-up.
+- **A run whose cost-analysis time window ends within the lag threshold produces a deduplicated `freshness_partial_window` data-quality finding, and the reasoner caveats hypotheses that depend on the affected totals.**
 - **The Run Quality section appears at the top of every report, even when nothing of note happened ("0 throttles, all capabilities returned evidence").**
-- **A waste-cluster fixture (24 names sharing a prefix) produces one cluster recommendation, not 24 individual recommendations.**
-- **The three new rubrics fire on every eval item; their booleans + detail strings are filterable in Langfuse.**
+- **A waste-cluster fixture (24 names sharing a prefix) produces one cluster recommendation, not 24 individual recommendations.** Pending until the clusterer lands.
+- **The active Phase 3 rubrics fire on eval items; their booleans + detail strings are filterable in Langfuse when score publishing is enabled.** `continuity_grounded` lands with continuity markers.
 - **Phase 1 and Phase 2 invariants continue to hold.** No new direct Azure SDK call; no destructive recommendation language; every fact still cites evidence; offline `pixiu eval --mock-model` still passes.
 
 ---
@@ -288,15 +288,15 @@ The documents that ground every choice above:
 - [Phase 1 design](phase-1.md) — §14 trace vocabulary that the new attributes join.
 - [Phase 2 design](phase-2.md) — prompt management, dataset migration, and score taxonomy this design plugs into.
 
-The source surface this design will add or change (forward-looking — no code change in this commit):
+The source surface this design has added or still plans to change:
 
-- **Playbook.** `src/playbooks/cost-summary.ts` gains lane invocation; lane code lives under `src/playbooks/waste-lanes/`.
-- **New orchestrator step.** `src/run/waste-detection.ts` runs the lanes and computes estimated impact.
-- **New orchestrator step.** `src/run/freshness.ts` emits freshness findings.
-- **Run-history.** `src/history/store.ts` (interface) + `src/history/filesystem-store.ts` (default impl).
-- **Reasoner.** Prompt template moves to `prompts/reasoner.v2.md` (or Langfuse `reasoner@phase-3` post-Phase-2). Output schema adds `recommendation_signature`.
-- **Report writer.** `src/report/markdown.ts` gains "Run Quality" and "Waste Candidates" sections and continuity-marker rendering.
-- **Rate card.** `pricing/azure-rate-card.json` (new in-repo data file).
-- **Eval items + rubrics.** New items under `eval/`, new rubrics under `src/evaluation/scoring.ts`.
+- **Playbook / lanes.** Lane code lives under `src/playbooks/waste-lanes/`; the current registry enables `orphan_public_ip`.
+- **Waste executor.** `src/run/waste-detection.ts` runs enabled lanes and computes estimated impact.
+- **Freshness.** `src/run/freshness.ts` emits deduplicated `freshness_partial_window` findings; `freshness_uniform_drop` remains pending.
+- **Run-history.** `src/history/store.ts` (interface) + `src/history/filesystem-store.ts` (default impl) are shipped.
+- **Reasoner.** `prompts/reasoner.v2.md` is loaded for `cost_summary`; output schema includes `recommendation_signature`. Continuity-marker prompt rules remain pending.
+- **Report writer.** `src/report/markdown.ts` renders "Run Quality" and "Waste Candidates"; continuity-marker rendering remains pending.
+- **Rate card.** `pricing/azure-rate-card.json` is the in-repo list-price source for the first waste lane.
+- **Eval items + rubrics.** `eval/phase-3-waste.json` and two Phase 3 rubrics are shipped; continuity-specific evals and rubric remain pending.
 
 Files this design does **not** touch: the `MCPTransport` interface, the failure taxonomy, the read-only allowlist, the `Scope` schema, the existing four Phase 1 rubrics. Those contracts were designed to outlive their original phases; this design honours that.

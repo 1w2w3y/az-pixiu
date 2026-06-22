@@ -1,14 +1,14 @@
 # Reference-Cron Comparison: Improvement Backlog
 
-> **Status (2026-05-23):** Improvement note, not a design lock. Written after a side-by-side comparison of one live `pixiu analyze cost-summary` run (run-id `e8d73b9e`, three GrafanaDevRP-family subscriptions, 2026-05-16 → 2026-05-23) against the reference Claude-Code cron at `claw-context/cron-azure-cost-analysis/report.md` (Run 12, 8 subscriptions, week ending 2026-05-12).
+> **Status (updated 2026-06):** Improvement note, with several items now implemented. Written after a side-by-side comparison of one live `pixiu analyze cost-summary` run (run-id `e8d73b9e`, three GrafanaDevRP-family subscriptions, 2026-05-16 → 2026-05-23) against the reference Claude-Code cron at `claw-context/cron-azure-cost-analysis/report.md` (Run 12, 8 subscriptions, week ending 2026-05-12).
 >
 > The reference cron is currently producing materially better operator value per run than az-pixiu. This document characterizes *why*, ties each finding to either an existing roadmap slot or a previously-unnamed gap, and calls out one operational blocker — 429 handling — that is design-discussed but not implemented.
 
 ## TL;DR
 
 - **The Phase 2.5 / Phase 3 plan in [cost-summary-depth.md](cost-summary-depth.md) is the right plan.** Every major gap surfaced by the comparison maps cleanly onto Gaps 1–6 of that document. No re-design needed for them; the work just hasn't shipped yet.
-- **There is one critical gap the existing design *names* but does not *plan*: 429 / rate-limit retry behaviour.** The current pixiu run dropped 2 of 3 subscriptions to rate-limit errors and produced a one-subscription report without comment. The reference cron handled the same condition with 60–180s backoff and serialized retries across an 8-sub run, never losing a subscription in 12 weeks. This is not a Gap 1–6 item; it is a `MCPTransport` / orchestrator concern that needs its own §7 entry. **§Gap 7 below.**
-- **Three smaller observations are worth landing earlier than the rest of Phase 3** because they cost very little and meaningfully tighten the report on every run: dedupe of repeated freshness findings, executive-summary call-out of dropped subscriptions, and a one-line "operational footer" similar to the reference cron's. **§Smaller items below.**
+- **The critical 429 / rate-limit retry gap is now mostly closed in code.** `EvidenceExecutor` retries retriable wire-level failures with capped backoff and pacing, detects payload-embedded `amgmcp_cost_analysis` 429/auth/authz failures, records `transport_summary`, and feeds Run Quality / coverage disclosure. Proactive QPU-aware throttling remains upstream-dependent and intentionally out of scope.
+- **The smaller report-tightening observations have mostly landed.** Freshness findings are deduplicated, Executive Summary coverage disclosure is deterministic, Run Quality always emits a baseline line, and `run.json` carries transport summaries.
 
 ## Setup: what was compared
 
@@ -41,18 +41,20 @@ These are not new findings; they are confirmations that the Phase 2.5 / Phase 3 
 
 | Plan gap | What the live pixiu run produced | What the reference cron produced | Status |
 |---|---|---|---|
-| Gap 1 — waste detection lane | None — only "top services by spend" | 182 orphan IPs / 7 restored-PG / 2 stopped AKS / 8 disks / 1 deallocated VM, each enumerated by ID | Designed, Phase 3, partially seeded (`pricing/`, `src/run/freshness.ts`) |
+| Gap 1 — waste detection lane | None — only "top services by spend" | 182 orphan IPs / 7 restored-PG / 2 stopped AKS / 8 disks / 1 deallocated VM, each enumerated by ID | Designed, Phase 3, first lane shipped (`orphan_public_ip`) |
 | Gap 2 — naming-pattern clustering | None | `ipv6-pe-pool-test-vhx-*` cluster of 24 IPs called out as one cause, not 24 leaks | Designed, Phase 3, not started |
-| Gap 3 — calibrated weekly impact | None — qualitative "material" tag only | "~$87/week for 182 orphan IPs", "~$700/week for 7 restored-PG" | Designed, Phase 3, **rate card seeded** in commit `7f1e5c9` |
-| Gap 4 — freshness reasoning | **3 findings emitted** (one per sub, repeated body) — partial credit | "🚨 Likely data-freshness artifact" narrative in Run 8/9 when uniform drop fired | Designed, Phase 3, **partial-window check shipped** in commit `b851ff9`. Uniform-drop heuristic still pending; *dedupe* not addressed (see Smaller item §S1) |
+| Gap 3 — calibrated weekly impact | None — qualitative "material" tag only | "~$87/week for 182 orphan IPs", "~$700/week for 7 restored-PG" | Designed, Phase 3, **rate card and lane-level range estimates shipped for orphan public IPs** |
+| Gap 4 — freshness reasoning | **3 findings emitted** (one per sub, repeated body) — partial credit | "Likely data-freshness artifact" narrative in Run 8/9 when uniform drop fired | Designed, Phase 3, **partial-window check and dedupe shipped**. Uniform-drop heuristic still pending. |
 | Gap 5 — cross-run continuity | "found 1 prior run(s) … injecting prior_run_context" — orchestrator path works; reasoner did not surface continuity in the report body | "UNCHANGED week 10", "first movement in 10 weeks", "RECURRING from Run 8" | **Phase 2.5 foundation shipped** (commits `69479e8`, `fdc18a6`); `reasoner.v2` prompt rules to *consume* it pending (Phase 3 step 10) |
-| Gap 6 — Run Quality section | Section emitted but body content is just the three repeated freshness findings | "1 throttle on Jenkins (120s backoff cleared)", "0 throttles, all 8 queries succeeded" | Designed, **section shipped** in `src/report/markdown.ts`; transport/throttle observations not yet plumbed in (see §Gap 7 and §S3) |
+| Gap 6 — Run Quality section | Section emitted but body content is just the three repeated freshness findings | "1 throttle on Jenkins (120s backoff cleared)", "0 throttles, all 8 queries succeeded" | Designed, **section shipped and enriched** in `src/report/markdown.ts`; transport/throttle observations now flow through `transport_summary` |
 
 The Phase 2.5 work has landed. Phase 3 is partly seeded (rate card, freshness check). The user-visible delta will appear when steps 6–11 in [cost-summary-depth.md §Implementation sequencing](cost-summary-depth.md#implementation-sequencing) land in series.
 
 ---
 
-## §Gap 7 — 429 / rate-limit handling: design-named, implementation-missing
+## §Gap 7 — 429 / rate-limit handling: mostly implemented
+
+> **Current status (2026-06):** The retry substrate described below has shipped in `src/evidence/executor.ts` and `src/evidence/retry-policy.ts`: retriable `rate_limit` and `timeout` failures retry with capped exponential backoff and jitter, per-capability pacing is applied after an observed rate limit, and per-request `transport_summary` rows feed Run Quality and run-history rollups. Payload-embedded Cost Management 429s are also handled via `src/evidence/payload-failure.ts`; see [embedded-rate-limit.md](embedded-rate-limit.md). The design text below is retained as the rationale and for remaining gaps such as proactive QPU awareness.
 
 This is the most important gap surfaced by the comparison. It is also the one not currently planned, only acknowledged.
 
@@ -107,13 +109,13 @@ A new section §7 in [cost-summary-depth.md](cost-summary-depth.md) — *or* a s
 
 ### Roadmap slot
 
-**Phase 2.5+ or early Phase 3.** This unblocks Gap 1 (waste detection) at the operationally honest level — running waste lanes across 8 subs sequentially is materially throttle-prone, and the lanes are useless if they fail half the time. It should land *before* the waste-lane work in [§Implementation sequencing](cost-summary-depth.md#implementation-sequencing) step 6.
+**Phase 2.5+ or early Phase 3.** This has landed before the broader waste-lane group, which is the right order: running waste lanes across many subscriptions is materially throttle-prone, and the lanes are not operationally honest without retry/backoff and truthful coverage reporting.
 
 ### Amendment (2026-05-23): payload-embedded rate limits
 
 Live AMG-MCP testing surfaced a second detection surface that this §Gap 7 design did not anticipate. The `amgmcp_cost_analysis` tool wraps upstream Cost Management 429s into a schema-valid 200-OK payload (`subscriptions[*].error: "Cost Management API rate limit (429) hit …"`) rather than surfacing them as MCP transport errors. The retry substrate described above is correct; its **trigger surface is one detection layer too narrow** — `client.invoke()` never throws, so `classifyFailure()` never runs, and the retry loop is bypassed entirely. `transport_summary` rows record `final_outcome=success` for runs that produced zero usable cost data.
 
-The payload-embedded case shares the retry substrate (backoff, jitter, pacing, budget, transport rollup) and only needs a new detection layer that runs between `client.invoke()` success and `raw_evidence.push()`. The full design — detection contract, executor insertion point, proactive 60s pacing borrowed from the reference cron, coverage truth-telling, and 5-PR implementation sequencing — lives in [embedded-rate-limit.md](embedded-rate-limit.md). When that work lands, §Gap 7's retry substrate handles **both** wire-level and payload-embedded rate limits through the same mechanism.
+The payload-embedded case shares the retry substrate (backoff, jitter, pacing, budget, transport rollup) and is now handled by a detection layer that runs between `client.invoke()` success and `raw_evidence.push()`. The full rationale lives in [embedded-rate-limit.md](embedded-rate-limit.md). With that work landed, §Gap 7's retry substrate handles **both** wire-level and payload-embedded rate limits through the same mechanism.
 
 ---
 
@@ -123,35 +125,43 @@ These are not architectural; they are cheap report-tightening wins that would vi
 
 ### §S1 — Deduplicate freshness findings
 
+**Status:** Shipped. `src/run/freshness.ts` groups findings by `(category, source_capability, time_window.end)` and merges affected scope subsets.
+
 **Observation.** The live run emitted `dq-freshness-1`, `dq-freshness-2`, `dq-freshness-3` with byte-identical body text. The freshness check ([`src/run/freshness.ts`](../../src/run/freshness.ts), commit `b851ff9`) runs per cost-analysis evidence record; with three subs it fires three times.
 
-**Fix.** The freshness check should emit at most one `freshness_partial_window` finding per `(category, time_window.end_utc)` tuple per run. The reasoner needs to know the condition exists, not that it exists three times. The dedupe lives where the findings are aggregated (orchestrator), not where they are emitted (the check).
+**Fix.** The freshness check emits at most one `freshness_partial_window` finding per `(category, source_capability, time_window.end_utc)` tuple per run. The reasoner needs to know the condition exists, not that it exists three times.
 
 **Effort.** Single-file change in the aggregator. Eval covers it via the existing `cost-summary-freshness-001` fixture once that lands.
 
 ### §S2 — Executive summary should mention dropped subscriptions
 
+**Status:** Shipped as renderer-owned deterministic coverage disclosure. `src/report/coverage.ts` computes cost-scope coverage from evidence plus `transport_summary`, and `src/report/shared.ts` renders the Executive Summary coverage line. A dedicated rubric is still optional future work.
+
 **Observation.** The live run's Executive Summary names the *top-priority recommendation* (PostgreSQL/Cosmos review) but does not mention that **two of three subscriptions returned no data**. An operator scanning the report header could miss that the scope was effectively 1 sub, not 3. The `dq-1` finding records it, but the summary's framing reads as if the analysis was complete.
 
-**Fix.** The reasoner prompt ([`prompts/reasoner.v1.md`](../../prompts/reasoner.v1.md), and the upcoming `reasoner.v2.md`) needs an explicit rule: when scope coverage is below 100% due to data-quality findings of category `rate_limit`, `auth`, `authz_gap`, `timeout`, or `unsupported_capability`, the executive summary must surface the coverage gap in its first or second sentence. Example phrasing: *"Coverage: 1 of 3 subscriptions returned data (2 rate-limited; see Run Quality)."*
+**Fix.** The coverage disclosure is deterministic report rendering, not model output: when scope coverage is below 100% due to retrieval-stage findings of category `rate_limit`, `auth`, `authz_gap`, `timeout`, or `unsupported_capability`, the Executive Summary surfaces the coverage gap before the model-authored recommendation summary. Example phrasing: *"Coverage: 1 of 3 subscriptions returned cost evidence; 2 had retrieval failures (rate_limit)."*
 
-**Effort.** Prompt rule + one new rubric (`rubric.coverage_disclosure_grounded`). The §Gap 7 retry work will reduce how often this rule fires, but the rule should ship now because retry is not free in 100% of cases.
+**Effort.** Implemented in renderer helpers and report tests. A future `rubric.coverage_disclosure_grounded` may still be useful, but the core product behavior no longer depends on prompt obedience.
 
 ### §S3 — Run Quality section should always emit a baseline line, even when nothing went wrong
 
+**Status:** Shipped. `src/report/markdown.ts` always renders Run Quality and includes the quantified baseline line.
+
 **Observation.** The reference cron's "All 8 cost-analysis queries succeeded with 0 throttles this run" line is genuinely useful — it tells the operator "nothing was hidden". The current `src/report/markdown.ts` Run Quality section only emits when there *are* findings.
 
-**Fix.** Run Quality should always render. When there are no transport / freshness findings, the section emits one line: `0 transport errors, 0 freshness findings across N capabilities; full scope coverage.` This matches the Gap 6 verification criterion already in [cost-summary-depth.md](cost-summary-depth.md): *"The Run Quality section appears at the top of every report, even when nothing of note happened ('0 throttles, all capabilities returned evidence')."* The verification text exists; the implementation does not honour it.
+**Fix.** Run Quality always renders. When there are no transport / freshness findings, the section emits one line such as `0 transport error(s), 0 retry attempt(s), 0 freshness finding(s) across N evidence request(s); full cost-scope coverage.`
 
-**Effort.** Single-file change in `src/report/markdown.ts`. The phase-1 rubrics already cover "report renders all required sections"; this just expands the always-on set.
+**Effort.** Implemented in `src/report/markdown.ts` and covered by report tests.
 
 ### §S4 — Throttle observations should land in `run.json` before they land in the report
 
+**Status:** Shipped. `TransportSummaryEntry` lives in `src/schemas/transport.ts`, `EvidenceExecutor` fills it, `run.json` writes it, and `RunHistoryStore` indexes its rollup.
+
 **Observation.** Today, the only place a 429 / retry attempt is *recorded* is the in-memory `DataQualityFinding`. There is no persistent transport-level summary in `run.json`. Without that, cross-run continuity (Gap 5) cannot reason about "this capability has been throttled for N consecutive runs".
 
-**Fix.** Add a `transport_summary` block to `run.json` (and to the `RunSummary` schema that `RunHistoryStore` indexes). One entry per (capability, attempt outcome) tuple. This is purely additive; existing readers ignore unknown fields. Pairs naturally with §Gap 7's retry work but can land independently — even without retry, recording the failure attempt is useful.
+**Fix.** Add a `transport_summary` block to `run.json` and to the `RunSummary` rollup that `RunHistoryStore` indexes. One entry is recorded per logical evidence request, with attempt count, retry count, final outcome, observed failure categories, backoff total, and scope subset where available. This is purely additive; existing readers ignore unknown fields.
 
-**Effort.** Schema addition + one writer change. Cross-run continuity readers (Phase 3 step 10's `reasoner.v2`) get this for free.
+**Effort.** Implemented across schema, executor, report artifact writer, markdown renderer, and history store.
 
 ---
 

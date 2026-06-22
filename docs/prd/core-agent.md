@@ -8,6 +8,10 @@ The agent is not a general-purpose chatbot. It is a disciplined analysis system 
 
 The agent must be useful to operators and legible to engineers studying observable AI systems. Every meaningful step should be traceable, evaluable, and reproducible enough for a reviewer to understand why a recommendation was made.
 
+## Current Implementation Status
+
+The current code supports two analysis types end-to-end: `cost_surprise` and `cost_summary`. `cost_summary` includes the first Phase 3 waste lane, `orphan_public_ip`, with calibrated weekly list-price estimates; the other planned waste categories remain future work. Phase 2.5 foundations are implemented: `RunHistoryStore`, `scope_signature`, `prior_run_context`, and `recommendation_signature` exist, but the reasoner does not yet render user-facing continuity markers from prior-run evidence. The agent also has retry/backoff, payload-embedded Cost Management 429 detection, transport summaries, and deterministic cost-coverage disclosure.
+
 ## Problem Statement
 
 Azure cost analysis often requires engineers to move between Azure Cost Management, Azure Resource Graph, Azure Monitor, Grafana dashboards, deployment records, tagging systems, and team-specific context. This work is repetitive, time-consuming, and hard to make consistent across subscriptions or review cycles.

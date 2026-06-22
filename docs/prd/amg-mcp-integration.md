@@ -8,6 +8,10 @@ This PRD defines the product requirements for that boundary. It focuses on capab
 
 The integration should make Az-Pixiu a strong example of an MCP-based operational agent: the agent asks for the right evidence, the server exposes data access capabilities in a controlled shape, and every interaction is traceable.
 
+## Current Implementation Status
+
+The current integration uses `MCPTransport` with live and fixture implementations, discovers capabilities before analysis, asserts required read-only capabilities, and rejects mutating capabilities from the allowed operating set. Evidence retrieval records per-request transport summaries, classifies user-meaningful failures, retries `rate_limit` and `timeout` categories with capped backoff and pacing, and detects payload-embedded `amgmcp_cost_analysis` 429/auth/authz/schema-mismatch failures before they can become false-success evidence. Fixture replay remains the default path for tests and evals.
+
 ## Problem Statement
 
 Cloud agents can become tightly coupled to vendor APIs when each agent implements authentication, query construction, paging, retries, and resource-specific data mapping for itself. That approach makes agents hard to audit, hard to extend, and difficult to compare across teams.
