@@ -113,6 +113,7 @@ Az-Pixiu is written for two readers. The first is an engineer or operator who wa
 - [Phase 1 design](docs/design/phase-1.md) — minimum viable agent: components, data shapes, reasoning loop, trace vocabulary.
 - [Phase 2 design](docs/design/phase-2.md) — Langfuse depth: scores, datasets, prompt management, experiments, LLM-as-judge, human review, calibration.
 - [Cost-summary depth](docs/design/cost-summary-depth.md) — Phase 2.5 + Phase 3 analyzer extensions: waste lanes, naming-pattern clustering, calibrated impact, freshness checks, continuity markers.
+- [Local billing cache](docs/design/local-billing-cache.md) — planned local cache for finalized monthly billing evidence to reduce repeated AMG-MCP Cost Management calls.
 
 ## License
 

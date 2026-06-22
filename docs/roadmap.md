@@ -44,6 +44,8 @@ The rest of this cluster is still pending: unattached disks, deallocated VMs, st
 
 A companion improvement note — [cron-comparison-improvements](design/cron-comparison-improvements.md) — grounds these Phase 3 commitments against a live cross-comparison with a long-running reference cron, and adds **§Gap 7 (429 / rate-limit handling)** plus four smaller report-tightening items that the original cost-summary-depth design did not enumerate. That prerequisite has largely shipped: retry-with-backoff, per-capability pacing, payload-embedded rate-limit detection, transport summaries, Run Quality enrichment, and deterministic cost-coverage disclosure are in code. Proactive QPU-aware throttling remains upstream-dependent and out of scope for the current client.
 
+The next cost-evidence foundation is a local finalized-month billing cache, designed in [local billing cache](design/local-billing-cache.md). It should cache per-subscription monthly Cost Management evidence on local disk only after a conservative stabilization day (default: the 5th day of the following month), then let later analyses reuse those finalized months without spending AMG-MCP / Azure Cost Management rate-limit budget. This is a Phase 3 enabler for quarterly reviews, recurring cleanup, and model comparison runs over historical windows; it is not a replacement for live retrieval of recent or partial periods.
+
 This phase is governed by the use cases in the [use cases](use-cases.md) document — particularly the new "Recurring cleanup review" use case that motivates the cross-run work — and by the evaluations established in Phase 2. New capabilities are admitted when they improve those evaluations, not because they are interesting in isolation.
 
 ## Phase 4 — Beyond FinOps

@@ -83,6 +83,7 @@ A maintainer changes a prompt or analysis behavior and runs evaluations from the
 - FR-14: The CLI must avoid logging secrets, credentials, or unnecessary raw Azure telemetry to terminal output.
 - FR-15: The CLI should make it easy to find the generated report, trace identifier, and diagnostic summary after a run.
 - FR-16: For analysis types that auto-discover subscriptions, the CLI must support selecting subscriptions by case-insensitive name pattern, in addition to explicit subscription identifiers and the default top-N-by-resource-count auto-discovery. The pattern must be matched against subscription display names as returned by AMG-MCP. The CLI must reject patterns combined with explicit subscription identifiers and must surface the matched subscriptions in the effective scope summary before analysis.
+- FR-17: The CLI should expose local billing-cache workflows, including warming finalized monthly billing data, reporting cache coverage by subscription and month, forcing a refresh of a finalized month, pruning old cache files, and opting analysis runs into or out of cached billing evidence.
 
 ## Non-Functional Requirements
 

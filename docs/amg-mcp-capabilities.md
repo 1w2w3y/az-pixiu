@@ -23,6 +23,8 @@ The capabilities fall into a small number of categories that map naturally onto 
 
 The single-subscription path is significantly more resilient to throttling than the fan-out path. Cost Management enforces a per-tenant QPU (query units) budget; a wide fan-out across many subscriptions can return 429s for every subscription rather than for some of them, even when each individual call would succeed. The agent should expect to serialize cost queries across subscriptions when the budget is uncertain.
 
+Historical full-month cost data is a strong candidate for local caching because it is expensive to re-read and changes slowly after the billing posting window closes. The planned [local billing cache](design/local-billing-cache.md) keeps this within the AMG-MCP boundary: cache files are populated from `cost_analysis` responses, stored only on the operator's disk, and used only for finalized months whose billing period has passed a conservative stabilization day.
+
 ## Inventory
 
 `query_resource_graph` accepts an Azure Resource Graph (KQL) query and returns the resources that match. This is the primary way for the agent to enumerate resources by type, location, configuration, tags, or any other property that ARG exposes.
