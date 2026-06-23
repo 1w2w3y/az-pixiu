@@ -460,31 +460,39 @@ function summarizeLive(subscriptions: unknown[]): CostSummary | null {
   let monthTotal = 0;
   let currency = 'USD';
   const serviceMap = new Map<string, number>();
+  const regionMap = new Map<string, number>();
+  const typeMap = new Map<string, number>();
+  // Track whether the source carried each axis at all — present-but-empty is
+  // "available" (the data source has the dimension), absent is "missing".
+  let regionPresent = false;
+  let typePresent = false;
+
   for (const sub of subscriptions) {
     if (typeof sub !== 'object' || sub === null) continue;
     const s = sub as Record<string, unknown>;
     if (typeof s.totalCost === 'number') monthTotal += s.totalCost;
     if (typeof s.currency === 'string') currency = s.currency;
-    if (Array.isArray(s.byService)) {
-      for (const entry of s.byService) {
-        if (typeof entry !== 'object' || entry === null) continue;
-        const e = entry as Record<string, unknown>;
-        const name =
-          typeof e.name === 'string'
-            ? e.name
-            : typeof e.serviceName === 'string'
-              ? e.serviceName
-              : undefined;
-        const cost = typeof e.cost === 'number' ? e.cost : 0;
-        if (name) serviceMap.set(name, (serviceMap.get(name) ?? 0) + cost);
-      }
+    mergeDimension(serviceMap, s.byService);
+    if (Array.isArray(s.byRegion)) {
+      regionPresent = true;
+      mergeDimension(regionMap, s.byRegion);
+    }
+    if (Array.isArray(s.byResourceType)) {
+      typePresent = true;
+      mergeDimension(typeMap, s.byResourceType);
     }
   }
-  const serviceMonthly = [...serviceMap.entries()].map(([name, cost]) => ({
-    name,
-    cost: round2(cost),
-  }));
+
+  const serviceMonthly = toMonthly(serviceMap);
   const serviceSum = serviceMonthly.reduce((a, b) => a + b.cost, 0);
+
+  const missing: string[] = [];
+  if (!regionPresent) missing.push('region');
+  if (!typePresent) missing.push('resource_type');
+  // resource_group is never returned by the cost capability; meter_category
+  // is not exposed separately from service name.
+  missing.push('resource_group', 'meter_category');
+
   return {
     totals: {
       currency,
@@ -494,16 +502,46 @@ function summarizeLive(subscriptions: unknown[]): CostSummary | null {
       daily: [],
     },
     dimensions: {
+      // The live response carries period-total rollups per dimension, with no
+      // daily breakdown — so every axis is monthly-only.
       service: { monthly: serviceMonthly, daily: [], daily_status: 'not_available_in_source' },
+      region: regionPresent
+        ? { monthly: toMonthly(regionMap), daily: [], daily_status: 'not_available_in_source' }
+        : { monthly: [], daily: [], status: 'not_available_in_source' },
+      resource_type: typePresent
+        ? { monthly: toMonthly(typeMap), daily: [], daily_status: 'not_available_in_source' }
+        : { monthly: [], daily: [], status: 'not_available_in_source' },
       resource_group: { monthly: [], daily: [], status: 'not_supported_by_current_capability' },
     },
     coverage: {
       complete: true,
       dimensions_reconcile: Math.abs(monthTotal - serviceSum) < 0.01,
-      missing_dimensions: ['region', 'resource_type', 'resource_group', 'meter_category'],
+      missing_dimensions: missing,
       included_charge_classes: ['first_party_usage'],
       excluded_charge_classes: ['marketplace', 'tax', 'credits'],
       warnings: [],
     },
   };
+}
+
+/** Accumulate `[{ name, cost }]`-shaped rollup rows (with a few name aliases) into a map. */
+function mergeDimension(target: Map<string, number>, raw: unknown): void {
+  if (!Array.isArray(raw)) return;
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    const name =
+      typeof e.name === 'string' ? e.name
+      : typeof e.serviceName === 'string' ? e.serviceName
+      : typeof e.region === 'string' ? e.region
+      : typeof e.location === 'string' ? e.location
+      : typeof e.resourceType === 'string' ? e.resourceType
+      : undefined;
+    const cost = typeof e.cost === 'number' ? e.cost : 0;
+    if (name) target.set(name, (target.get(name) ?? 0) + cost);
+  }
+}
+
+function toMonthly(map: Map<string, number>): Array<{ name: string; cost: number }> {
+  return [...map.entries()].map(([name, cost]) => ({ name, cost: round2(cost) }));
 }

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CostEvidenceProvider } from '../../src/run/cost-evidence-provider.js';
+import { CostEvidenceProvider, summarizeCostPayload } from '../../src/run/cost-evidence-provider.js';
 import { FileBillingCacheStore } from '../../src/billing-cache/index.js';
 import { parameterDigest } from '../../src/mcp/digest.js';
 import type { RawEvidence } from '../../src/evidence/executor.js';
@@ -251,5 +251,57 @@ describe('CostEvidenceProvider', () => {
       expect(served.remainingPlan.requests).toEqual([NON_COST_REQUEST]);
       expect(await provider.writeThrough([])).toBe(0);
     });
+  });
+});
+
+describe('summarizeCostPayload dimension rollup', () => {
+  it('rolls up byRegion and byResourceType when the live payload carries them', () => {
+    const summary = summarizeCostPayload({
+      periodStart: '2026-05-01T00:00:00Z',
+      periodEnd: '2026-06-01T00:00:00Z',
+      subscriptions: [
+        {
+          subscriptionId: SUB,
+          totalCost: 300,
+          currency: 'USD',
+          byService: [
+            { name: 'Azure Database for PostgreSQL', cost: 200 },
+            { name: 'Storage', cost: 100 },
+          ],
+          byRegion: [
+            { name: 'westus2', cost: 250 },
+            { name: 'eastus', cost: 50 },
+          ],
+          byResourceType: [
+            { name: 'microsoft.dbforpostgresql/flexibleservers', cost: 200 },
+            { name: 'microsoft.storage/storageaccounts', cost: 100 },
+          ],
+        },
+      ],
+    });
+    expect(summary).not.toBeNull();
+    const s = summary!;
+    expect(s.dimensions.region!.monthly.map((r) => r.name)).toEqual(['westus2', 'eastus']);
+    expect(s.dimensions.resource_type!.monthly).toHaveLength(2);
+    // ...and they are no longer reported as missing.
+    expect(s.coverage.missing_dimensions).not.toContain('region');
+    expect(s.coverage.missing_dimensions).not.toContain('resource_type');
+    // resource_group remains unsupported by the cost capability.
+    expect(s.coverage.missing_dimensions).toContain('resource_group');
+    expect(s.dimensions.resource_group!.status).toBe('not_supported_by_current_capability');
+  });
+
+  it('flags region/resource_type as unavailable when the payload omits those axes', () => {
+    const summary = summarizeCostPayload({
+      subscriptions: [
+        { subscriptionId: SUB, totalCost: 100, currency: 'USD', byService: [{ name: 'Storage', cost: 100 }] },
+      ],
+    });
+    expect(summary).not.toBeNull();
+    const s = summary!;
+    expect(s.coverage.missing_dimensions).toContain('region');
+    expect(s.coverage.missing_dimensions).toContain('resource_type');
+    expect(s.dimensions.region!.status).toBe('not_available_in_source');
+    expect(s.dimensions.resource_type!.status).toBe('not_available_in_source');
   });
 });
