@@ -3,6 +3,7 @@ import type {
   Scope,
   TransportSummaryEntry,
 } from '../schemas/index.js';
+import { COST_EVIDENCE_CAPABILITIES, COST_WIRE_CAPABILITIES } from '../run/cost-capabilities.js';
 
 /**
  * Cost-scope coverage helper (Phase 3 — cron-comparison-improvements §S2/§S3).
@@ -27,10 +28,6 @@ import type {
  * cost capabilities whose `scope_subset.subscription_ids` identify them
  * precisely.
  */
-const COST_CAPABILITIES: ReadonlySet<string> = new Set([
-  'amgmcp_cost_analysis',
-  'cost_analysis',
-]);
 
 export interface CostCoverage {
   /**
@@ -87,7 +84,8 @@ export function computeCostCoverage(input: ComputeCoverageInput): CostCoverage {
   const expectedSet = new Set(expected);
   const covered = new Set<string>();
   for (const record of input.evidence) {
-    if (!COST_CAPABILITIES.has(record.source_capability)) continue;
+    // Cached cost evidence (az_pixiu_billing_cache) counts toward coverage.
+    if (!COST_EVIDENCE_CAPABILITIES.has(record.source_capability)) continue;
     const subs = record.scope_subset.subscription_ids;
     if (!subs) continue;
     for (const id of subs) {
@@ -98,7 +96,7 @@ export function computeCostCoverage(input: ComputeCoverageInput): CostCoverage {
   const unavailable_by_category: Record<string, string[]> = {};
   const unavailable = new Set<string>();
   for (const entry of input.transportSummary ?? []) {
-    if (!COST_CAPABILITIES.has(entry.capability)) continue;
+    if (!COST_WIRE_CAPABILITIES.has(entry.capability)) continue;
     if (entry.final_outcome === 'success') continue;
     const subs = entry.scope_subset?.subscription_ids;
     if (!subs) continue;

@@ -38,6 +38,21 @@ export const ObservabilityConfigSchema = z
   })
   .strict();
 
+// Local billing cache (docs/design/local-billing-cache.md). Opt-in and
+// disabled by default. `stabilization_offset_days` and
+// `invoice_close_horizon_months` are computed relative to the billing-
+// period end in UTC, not a civil day of the month. `cost_view` defaults to
+// amortized (effective per-resource cost) for optimization framing.
+export const BillingCacheConfigSchema = z
+  .object({
+    enabled: z.boolean().optional().default(true),
+    stabilization_offset_days: z.number().int().min(0).max(28).optional().default(5),
+    invoice_close_horizon_months: z.number().int().min(0).max(6).optional().default(2),
+    cost_view: z.enum(['actual', 'amortized']).optional().default('amortized'),
+    root: z.string().min(1).optional(),
+  })
+  .strict();
+
 export const ModelProviderSchema = z.enum(['foundry', 'litellm']);
 
 // The selector lives at the top level so existing `config.json` files
@@ -50,6 +65,7 @@ export const ConfigSchema = z
     litellm: LiteLLMConfigSchema.optional(),
     amg: AmgConfigSchema,
     observability: ObservabilityConfigSchema.optional(),
+    billing_cache: BillingCacheConfigSchema.optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {
@@ -73,5 +89,6 @@ export type FoundryConfig = z.infer<typeof FoundryConfigSchema>;
 export type LiteLLMConfig = z.infer<typeof LiteLLMConfigSchema>;
 export type AmgConfig = z.infer<typeof AmgConfigSchema>;
 export type AzPixiuObservabilityConfig = z.infer<typeof ObservabilityConfigSchema>;
+export type BillingCacheConfig = z.infer<typeof BillingCacheConfigSchema>;
 export type ModelProvider = z.infer<typeof ModelProviderSchema>;
 export type Config = z.infer<typeof ConfigSchema>;

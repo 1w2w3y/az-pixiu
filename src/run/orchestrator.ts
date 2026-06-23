@@ -42,6 +42,14 @@ import {
 import { BillingProbeCache } from './billing-probe-cache.js';
 import { intakeScope, type ScopeIntakeInput } from './scope-intake.js';
 import { computeScopeSignature } from './scope-signature.js';
+import { COST_EVIDENCE_CAPABILITIES, COST_WIRE_CAPABILITIES } from './cost-capabilities.js';
+import { CostEvidenceProvider } from './cost-evidence-provider.js';
+import type {
+  CostView,
+  CurrencyMode,
+  FileBillingCacheStore,
+  MaturityPolicy,
+} from '../billing-cache/index.js';
 import { buildPriorRunContextEvidence } from './prior-run-evidence.js';
 import { checkFreshness } from './freshness.js';
 import { WasteDetectionExecutor } from './waste-detection.js';
@@ -141,6 +149,23 @@ export interface RunOptions {
    * pre-Phase-3 shape. Defaults to false (lanes run for cost_summary).
    */
   disableWasteDetection?: boolean;
+  /**
+   * Local billing-cache read-through / write-through (docs/design/
+   * local-billing-cache.md). When set on a `cost_summary` run, the
+   * orchestrator serves cache-eligible finalized-month cost requests from
+   * the local cache (skipping the live AMG-MCP call) and writes freshly
+   * retrieved finalized months back. Omitted ⇒ the cache is not consulted
+   * and the cost path is byte-identical to its pre-cache shape. The CLI
+   * sets this only behind `--billing-cache` / `billing_cache.enabled`.
+   */
+  billingCache?: {
+    store: FileBillingCacheStore;
+    costView: CostView;
+    currencyMode?: CurrencyMode;
+    policy?: MaturityPolicy;
+    /** Injected clock for the maturity gate; defaults to Date.now. */
+    now?: () => number;
+  };
   /**
    * Data-quality findings produced before the run started — currently
    * the billing-access probe under explicit-pick mode, where the CLI
@@ -744,11 +769,39 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   }
   process.stdout.write(`  ${plan.requests.length} evidence request(s) planned\n`);
 
+  // Billing-cache read-through (design "the CostEvidenceProvider seam"):
+  // lift cache-eligible finalized-month cost requests out of the live plan
+  // and serve them from the local cache; the executor runs only the rest.
+  const billingProvider =
+    ctx.billingCache && ctx.scope.analysis_type === 'cost_summary'
+      ? new CostEvidenceProvider({
+          store: ctx.billingCache.store,
+          scope: ctx.scope,
+          costView: ctx.billingCache.costView,
+          ...(ctx.billingCache.currencyMode
+            ? { currencyMode: ctx.billingCache.currencyMode }
+            : {}),
+          ...(ctx.billingCache.policy ? { policy: ctx.billingCache.policy } : {}),
+          ...(ctx.billingCache.now ? { now: ctx.billingCache.now } : {}),
+        })
+      : undefined;
+  const cacheServed = billingProvider ? await billingProvider.serveFromCache(plan) : undefined;
+  const planToExecute = cacheServed?.remainingPlan ?? plan;
+  if (cacheServed && cacheServed.hitCount > 0) {
+    process.stdout.write(
+      `  billing-cache: ${cacheServed.hitCount} cost request(s) served from cache (live cost call(s) avoided)\n`,
+    );
+  }
+
   // Execute
   process.stdout.write(`→ retrieving evidence from AMG-MCP...\n`);
   const { raw_evidence, failures, transport_summary } = await withSpan(
     SpanNames.EvidenceRetrieval,
     async (span) => {
+      // A fully cache-served plan has nothing left to fetch live.
+      if (planToExecute.requests.length === 0) {
+        return { raw_evidence: [], failures: [], transport_summary: [] };
+      }
       // Per-attempt detail (Codex should-fix #3 / self-review #1): emit
       // transport.retry_scheduled and transport.pacing_applied events on
       // the retrieval span so operator debugging "which attempt of which
@@ -785,7 +838,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
           }
         },
       });
-      const r = await executor.execute(plan);
+      const r = await executor.execute(planToExecute);
       span.setAttribute(ATTR.evidenceRecordsProduced, r.raw_evidence.length);
       span.setAttribute(ATTR.evidenceFailuresClassified, r.failures.length);
       const rollup = rollupTransportSummary(r.transport_summary);
@@ -809,11 +862,25 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       '\n',
   );
 
+  // Write-through: persist freshly-retrieved finalized-month cost evidence
+  // so the next run against this scope hits the cache.
+  if (billingProvider) {
+    const wrote = await billingProvider.writeThrough(raw_evidence);
+    if (wrote > 0) {
+      process.stdout.write(`  billing-cache: ${wrote} finalized month(s) written to cache\n`);
+    }
+  }
+
   // Normalize
   const normalizer = new EvidenceNormalizer();
-  const { records, data_quality: normalizerDq } = normalizer.normalize(raw_evidence, {
+  const normalized = normalizer.normalize(raw_evidence, {
     defaultTimeWindow: ctx.scope.time_window,
   });
+  const normalizerDq = normalized.data_quality;
+  // Cache-served cost records (source_capability = az_pixiu_billing_cache)
+  // join the live records before the reasoner, coverage, and classify see
+  // them. They are excluded from freshness by capability, not here.
+  const records = [...normalized.records, ...(cacheServed?.servedRecords ?? [])];
 
   // Merge failure-classified DQs alongside normalizer DQs
   const failureDqs = failures.map((f, i) => failureToDq(f, i));
@@ -833,6 +900,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   const mergedTransport = [
     ...transport_summary,
     ...(wasteResult?.transport_summary ?? []),
+    ...(cacheServed?.servedTransport ?? []),
   ];
 
   // Freshness check (Phase 3 — design/cost-summary-depth.md §Gap 4):
@@ -1223,17 +1291,6 @@ function failureToDq(failure: ClassifiedFailure, index: number): DataQualityFind
 }
 
 /**
- * Capabilities whose successful evidence is the substrate for
- * cost-summary / cost-surprise analyses. Mirrors the report-layer set
- * in `src/report/coverage.ts` — both surfaces ask the same question
- * ("did we get cost rows?") and must answer it from the same membership.
- */
-const COST_CAPABILITIES: ReadonlySet<string> = new Set([
-  'amgmcp_cost_analysis',
-  'cost_analysis',
-]);
-
-/**
  * Classify the run's cost-evidence retrieval outcome (DESIGN-NOTE.md §Bug A).
  *
  * The flow:
@@ -1260,15 +1317,18 @@ function classifyCostRetrievalOutcome(input: {
   if (!isCostAnalysis) return 'not_applicable';
   if (input.scopeSubscriptionIds.length === 0) return 'not_applicable';
 
+  // A cache-served run makes no wire cost call but emits a synthetic
+  // `az_pixiu_billing_cache` transport entry; count it (and wire calls) so
+  // a fully-cached run is not misread as not_applicable.
   const costCalls = input.transportSummary.filter((e) =>
-    COST_CAPABILITIES.has(e.capability),
+    COST_EVIDENCE_CAPABILITIES.has(e.capability),
   );
   if (costCalls.length === 0) return 'not_applicable';
 
   const expectedSet = new Set(input.scopeSubscriptionIds);
   const coveredSet = new Set<string>();
   for (const ev of input.evidence) {
-    if (!COST_CAPABILITIES.has(ev.source_capability)) continue;
+    if (!COST_EVIDENCE_CAPABILITIES.has(ev.source_capability)) continue;
     const subs = ev.scope_subset.subscription_ids;
     if (!subs) continue;
     for (const id of subs) {
@@ -1348,7 +1408,7 @@ function describeRunOutcome(
 
   const reasons: string[] = [];
   if (costOutcome === 'failed') {
-    const costCalls = transportSummary.filter((e) => COST_CAPABILITIES.has(e.capability));
+    const costCalls = transportSummary.filter((e) => COST_WIRE_CAPABILITIES.has(e.capability));
     const total = costCalls.length;
     const categories = Array.from(
       new Set(

@@ -5,6 +5,7 @@ import type {
   Scope,
 } from '../schemas/index.js';
 import { extractSubscriptions } from '../run/subscription-discovery.js';
+import { COST_EVIDENCE_CAPABILITIES } from '../run/cost-capabilities.js';
 import { isFullCoverage, type CostCoverage } from './coverage.js';
 
 /**
@@ -257,7 +258,10 @@ interface ParsedCostPayload {
 export function summarizeCostEvidence(
   evidence: readonly EvidenceRecord[],
 ): CostSummary | undefined {
-  const costRecords = evidence.filter((e) => e.source_capability === 'amgmcp_cost_analysis');
+  // Includes wire cost evidence and cache-served cost evidence
+  // (`az_pixiu_billing_cache`) so the Cost Summary Overview still renders
+  // when a finalized month was served from the local billing cache.
+  const costRecords = evidence.filter((e) => COST_EVIDENCE_CAPABILITIES.has(e.source_capability));
   if (costRecords.length === 0) return undefined;
 
   let totalFromRows = 0;

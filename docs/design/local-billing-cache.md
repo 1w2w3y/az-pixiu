@@ -6,7 +6,7 @@
 
 Az-Pixiu currently retrieves cost evidence during each analysis run through AMG-MCP, usually by calling `amgmcp_cost_analysis` once per subscription and time window. That keeps the Azure boundary clean, but it has an operational cost: Azure Cost Management is strongly rate-limited, and repeated local analyses can spend scarce query budget re-reading historical billing periods that have already stabilized.
 
-The existing `BillingProbeCache` (`src/run/billing-probe-cache.ts`) solves a different problem. It remembers whether a subscription appears to have Cost Management read access, so auto-discovery can avoid repeatedly probing subscriptions that are likely to fail. It does not cache billing data itself. This design adds a separate cache for the historical billing evidence the agent reasons over, and deliberately reuses the probe cache's filesystem patterns — `~/.az-pixiu` root, atomic temp-file-then-rename writes, endpoint-plus-identity partitioning, and degrade-to-miss on any filesystem failure — wherever they already work.
+The existing `BillingProbeCache` (`src/run/billing-probe-cache.ts`) solves a different problem. It remembers whether a subscription appears to have Cost Management read access, so auto-discovery can avoid repeatedly probing subscriptions that are likely to fail. It does not cache billing data itself. This design adds a separate cache for the historical billing evidence the agent reasons over, and deliberately reuses the probe cache's filesystem patterns — atomic temp-file-then-rename writes and degrade-to-miss on any filesystem failure — wherever they already work. It diverges on two points. First, the root: the billing cache defaults under `runs/billing-cache/` (alongside run output, gitignored), whereas the probe cache lives under `~/.az-pixiu`; either can be relocated. Second, partitioning: the probe cache partitions by endpoint *and* operator identity because a probe *outcome* (does this caller have Cost Management access?) is identity-dependent — but the billing *data* a cell holds is a property of the endpoint + subscription + month, not of the reader, so the billing cache partitions by **endpoint only** (see [cache layout](#cache-layout)).
 
 The cache is deliberately local. It lives under the operator's filesystem, is never committed to the repository, and is treated as sensitive cloud cost data. It is a performance and resilience substrate, not a new source of truth outside the operator's environment.
 
@@ -95,11 +95,11 @@ The default `stabilization_offset_days = 5` should be configurable, but the firs
 
 ## Cache layout
 
-Default root:
+Default root: `runs/billing-cache/v1/` — alongside the run output. It follows `--output-dir`, so it is a stable sibling of the timestamped `runs/<timestamp>/` folders, never nested inside one. `runs/` is already gitignored, so the cache is never committed.
 
 ```text
-~/.az-pixiu/billing-cache/v1/
-  <endpoint-hash>::<identity>/
+runs/billing-cache/v1/                          # follows --output-dir; override with billing_cache.root
+  <endpoint-hash>/
     manifest.json
     subscriptions/
       <subscription-id>/
@@ -111,13 +111,13 @@ Default root:
 
 Rationale:
 
-- The `<endpoint-hash>::<identity>` partition reuses the probe cache's idiom (`hashEndpoint(endpoint)` plus a coarse `identityHint` such as the credential mode) so cost data warmed by one operator or credential mode on a shared workstation is never served to another. Each record also stores `source.amg_mcp_endpoint_hash` and the read path rejects a mismatch as a miss.
+- The cache root is a **stable, run-independent** location — a sibling of the per-run `runs/<timestamp>/` folders, not nested inside any one of them. That is exactly what lets a later run read a month an earlier run warmed; nesting the cache under a per-run timestamped folder would make every cross-run read a guaranteed miss and defeat the cache. For fully out-of-tree storage (an encrypted volume, or one cache shared across checkouts) set `billing_cache.root`.
+- The partition directory is the AMG-MCP endpoint hash (`hashEndpoint(endpoint)`) — and **only** the endpoint. The cache is deliberately *not* partitioned by the operator's credential, because the auth credential *mode* (`azure-cli` / `mock`) is not an identity: two operators share a mode, and one mode can carry different `az login` identities and tenants, so partitioning by it would give false isolation while the billing numbers are identical regardless of who read them. The real boundaries are OS file permissions (`0600`), the per-user run-output directory, and the `source.amg_mcp_endpoint_hash` stored in each record and validated on read. A caller that holds a genuinely *resolved* principal id may still pass it as `identityHint` to scope the partition further (folded in as a non-lossy digest); the CLI does not. What is **not** provided is isolation between two different Azure identities sharing one OS user and endpoint — set `billing_cache.root` per identity, or supply a resolved `identityHint`, when that matters.
 - Subscription id is the natural partition for AMG-MCP cost calls and for cache invalidation.
 - One JSON file per cached cell keeps files reviewable and makes partial refresh cheap. The filename encodes more than the month — see [cache cell identity](#cache-cell-identity).
 - `manifest.json` indexes available cells, schema version, root identity, billing-account type, content checksums, and the last successful warm operation. It is a **rebuildable index, not a transaction log** — see [manifest as a rebuildable index](#manifest-as-a-rebuildable-index).
-- A custom root is supported by config and CLI flags for operators who want the cache under an encrypted volume.
 
-The cache directory must be outside the repository by default, and the store refuses to write to a repository-relative root unless that path is explicitly gitignored.
+The default lives under `runs/`, which is gitignored, so the cache is never committed; for fully out-of-tree storage set `billing_cache.root`. As a planned safeguard, the store will refuse to write to a repository-relative root that is *not* gitignored (not yet enforced in the foundation slice — see [privacy and storage](#privacy-and-storage)).
 
 ## Cache cell identity
 
@@ -281,9 +281,9 @@ Analysis-window behavior:
 
 ```ts
 export interface BillingCacheStoreOptions {
-  root?: string;          // default join(homedir(), '.az-pixiu', 'billing-cache', 'v1')
-  endpoint: string;       // hashed into the root partition, like BillingProbeCache
-  identityHint?: string;  // e.g. credentialMode:AZURE_USER, falls back to 'default'
+  root?: string;          // store fallback: ~/.az-pixiu/billing-cache/v1 (the CLI defaults to runs/billing-cache/v1)
+  endpoint: string;       // the partition discriminator (hashed); cells never cross endpoints
+  identityHint?: string;  // optional RESOLVED principal id, never the auth mode; CLI leaves unset
   enabled?: boolean;
   now?: () => number;     // injected clock for maturity + tmp naming
 }
@@ -310,7 +310,7 @@ export interface FileBillingCacheStore {
 Two things differ from the probe cache and both are deliberate:
 
 - **Permissions.** `BillingProbeCache.writeAtomic` passes no `mode`, so files land at the process umask default (commonly `0644`) under a `0755` home directory — on a shared workstation any local user could read another operator's full Azure spend. There is no `chmod` handling anywhere in `src/` today, so secure permissions cannot be inherited; the store sets them explicitly. It creates the tree with `mkdir(dir, { recursive: true, mode: 0o700 })` and writes the temp file with `writeFile(tmp, data, { mode: 0o600 })`; `rename` preserves the temp inode's mode. On Windows the POSIX mode is advisory and the per-user `%USERPROFILE%\.az-pixiu` ACL is the real boundary — stated explicitly, with a POSIX-only test asserting the created modes.
-- **Identity partitioning.** The root folds in the endpoint hash and the coarse identity hint, reusing `hashEndpoint` and the `cli.ts` identity construction verbatim. The read path additionally validates `source.amg_mcp_endpoint_hash` inside the record against the current endpoint and rejects a mismatch as a miss rather than a wrong hit.
+- **Endpoint partitioning (no identity in the path).** The partition directory is the endpoint hash via `hashEndpoint`, and the credential mode is never placed in the path (a mode is not an identity; see [cache layout](#cache-layout)). The read path additionally validates `source.amg_mcp_endpoint_hash` inside the record against the current endpoint and rejects a mismatch as a miss rather than a wrong hit. An optional resolved `identityHint` is folded in as a non-lossy digest when a caller has a real principal id.
 
 Everything else — atomic temp-file-then-rename, degrade-to-miss on any filesystem error — is copied from the probe cache.
 
@@ -380,7 +380,7 @@ Report behavior:
 - Run Quality shows cache hits, cache misses, live cost calls avoided, live cost calls made, and skipped-not-mature months.
 - Executive Summary does not hide when a recommendation is based on cached usage-stable billing data.
 
-The cache is enabled by default only after the read path is well tested. Before that, the opt-in is the `--billing-cache` / `--no-billing-cache` flag pair (matching the existing `--probe-billing` / `--no-probe-billing` convention) so operators can compare cached and live behavior.
+The cache is **on by default** for `cost_summary` runs. `--no-billing-cache` opts a single run out and `billing_cache.enabled: false` disables it persistently; `--billing-cache` force-enables it when config disabled it (the flag pair matches the existing `--probe-billing` / `--no-probe-billing` convention). Default-on is low blast-radius: only a single-subscription request whose window is exactly one finalized full month is cache-eligible, so recent, partial, or multi-subscription windows still go live unchanged. Two known limitations apply while default-on: the stored `cost_view` is operator-asserted from config rather than read back from the wire call, and the invoice-close-horizon re-verification is not yet implemented, so a cached month is served until a `--force-refresh` (or manual deletion) rather than auto-revalidated.
 
 ### Making cached cost evidence visible to coverage and run-outcome
 
@@ -419,7 +419,7 @@ Billing cache files are sensitive. They include subscription ids, costs, service
 
 Requirements:
 
-- Store under `~/.az-pixiu/` by default, not under the repository. The store refuses to write to a repository-relative root that is not gitignored, rather than relying on an unstated convention.
+- Store under `runs/billing-cache/` by default — alongside the run artifacts and already gitignored, so the cache is never committed. This trades the strongest out-of-tree boundary for co-location with run output and per-checkout locality; set `billing_cache.root` to `~/.az-pixiu` or an encrypted volume when the data must live outside the working tree (and be shared across checkouts). Note `git clean -x` would remove a working-tree cache, where a `~/.az-pixiu` cache survives. As a planned safeguard (not yet enforced), the store will refuse a repository-relative root that is not gitignored, rather than relying on an unstated convention.
 - **File permissions.** Directory mode `0700`, file mode `0600`, set on the temp file before rename (see [FileBillingCacheStore](#filebillingcachestore)). On Windows the per-user profile ACL is the boundary.
 - **At-rest encryption.** The first implementation relies on operator-managed full-disk encryption, with the threat-model boundary stated: disk encryption protects against device or backup theft, not against another local user on the same host reading the files — which is why the `0600` permissions are still required, not optional. Application-level encryption is documented future work.
 - **Integrity.** Each cell's content checksum is recorded out-of-band in `manifest.json` (optionally an HMAC keyed by a per-install secret under `~/.az-pixiu`) and recomputed on read; a mismatch demotes the cell to a miss plus a finding. This keeps a hand-edited or swapped file — whose self-attesting provenance block a tamperer can edit alongside the totals — from being cited as authoritative evidence, which would be worse than an uncited recommendation because it looks trustworthy. At minimum the cache is trusted to the level of OS file permissions plus disk encryption, which makes the permissions fix a prerequisite.
@@ -456,7 +456,7 @@ export const BillingCacheConfigSchema = z
   .strict();
 ```
 
-It attaches to `ConfigSchema` as `billing_cache: BillingCacheConfigSchema.optional()`, the same nested form as the existing `foundry` and `observability` blocks (not a flat dotted key), is read as `config.billing_cache?.stabilization_offset_days ?? 5`, and is documented in `config.sample.json`. The cache root defaults to `join(homedir(), '.az-pixiu', 'billing-cache', 'v1')`, copying the probe cache's `homedir()` convention.
+It attaches to `ConfigSchema` as `billing_cache: BillingCacheConfigSchema.optional()`, the same nested form as the existing `foundry` and `observability` blocks (not a flat dotted key), is read as `config.billing_cache?.stabilization_offset_days ?? 5`, and is documented in `config.sample.json`. The CLI defaults the cache root to `join(runsDir, 'billing-cache', 'v1')` — i.e. `runs/billing-cache/v1`, following `--output-dir` so the cache sits beside the run artifacts (and is gitignored with them). `FileBillingCacheStore`'s own fallback, when constructed without a root, remains `join(homedir(), '.az-pixiu', 'billing-cache', 'v1')` for programmatic callers; operators relocate the CLI cache via `billing_cache.root`.
 
 The CLI is a hand-rolled `parseArgs` dispatcher with a single positional switch (`analyze` | `eval` | `diagnose`). The warm surface needs a two-level positional dispatch added: a `cache` arm routing on `positionals[1] === 'billing'` and `positionals[2]` in `{ warm, status, refresh, prune }`, a `runCacheCommand(values, positionals)` alongside the existing command functions (each loading config first and returning an exit code), the cache flags registered in the single `parseArgs({ options })` block, and the hand-maintained `USAGE` template extended with a `cache flags` section and a `pixiu cache billing warm/status/refresh/prune` synopsis. Standardize the opt-in on `--billing-cache` / `--no-billing-cache` and the refresh override on a single `--force`, dropping the inconsistent `--use-billing-cache` and `read-through`-value spellings.
 
@@ -490,13 +490,13 @@ Possible new rubric:
 
 1. **Design, schema, and seams.** Add `BillingCacheRecord`, the composite `CacheCellKey`, and maturity-policy types under `src/billing-cache/`, with tests. In the same step, land the two cross-cutting seams the rest depends on: thread an injectable clock through `RunOptions` and the eval runner, and extract the shared `COST_CAPABILITIES` set so coverage, freshness, and run-outcome stop duplicating it.
 2. **Config block.** Declare `BillingCacheConfigSchema` and attach it to the strict `ConfigSchema`, with `config.sample.json` and docs, before any flag or command can reference it.
-3. **File store.** Implement `FileBillingCacheStore` with the composite-key path, `0600`/`0700` modes, identity partitioning, atomic writes, manifest-as-index, corruption handling, and rebuild.
+3. **File store.** Implement `FileBillingCacheStore` with the composite-key path, `0600`/`0700` modes, endpoint partitioning (no credential mode in the path), atomic writes, manifest-as-index, corruption handling, and rebuild.
 4. **Warmer CLI.** Add `pixiu cache billing warm/status/refresh/prune`, routed through `EvidenceExecutor` with the finalization gate, fixture-backed tests first.
 5. **Cost evidence provider.** Add a read-through `CostEvidenceProvider` that satisfies full usage-stable months from cache at the `RawEvidence` level and returns an `ExecutionResult`-compatible shape.
 6. **Capability-set and outcome visibility.** Add `az_pixiu_billing_cache` to the coverage and run-outcome sets (not freshness), and emit the synthetic transport-summary entry for cache hits.
-7. **Analyzer integration behind a flag.** Add `--billing-cache` / `--no-billing-cache` for analyze commands. Keep live behavior as the default until report and eval coverage are green.
+7. **Analyzer integration.** Add `--billing-cache` / `--no-billing-cache` for analyze commands and wire the `CostEvidenceProvider` into the cost_summary path.
 8. **Report, run.json, and trace disclosure.** Add cache hit/miss/avoided summaries to Run Quality and Scope & Data Sources, persist the `billing_cache` metadata block in `run.json`, and register the trace constants.
-9. **Default-on for stable months.** Once stable, make cache reads default for usage-stable full months while preserving `--no-billing-cache`.
+9. **Default-on for stable months.** Cache reads/writes default ON for cost_summary (usage-stable full months only), preserving `--no-billing-cache` and `billing_cache.enabled: false` as opt-outs.
 10. **Dimension expansion.** Add resource-group cost if AMG-MCP supports the grouping reliably; defer resource-id and cross-product dimensions until an analysis proves they are necessary.
 
 ## Open questions

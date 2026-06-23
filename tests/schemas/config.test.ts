@@ -5,6 +5,7 @@ import {
   LiteLLMConfigSchema,
   AmgConfigSchema,
   ObservabilityConfigSchema,
+  BillingCacheConfigSchema,
 } from '../../src/schemas/index.js';
 
 const validConfig = {
@@ -95,6 +96,49 @@ describe('ConfigSchema', () => {
         'InstrumentationKey=',
       );
     }
+  });
+});
+
+describe('ConfigSchema with billing_cache', () => {
+  it('accepts a config without a billing_cache block (optional)', () => {
+    expect(ConfigSchema.safeParse(validConfig).success).toBe(true);
+  });
+
+  it('accepts a billing_cache block and applies defaults (enabled on by default)', () => {
+    const result = ConfigSchema.safeParse({ ...validConfig, billing_cache: {} });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.billing_cache?.enabled).toBe(true);
+      expect(result.data.billing_cache?.stabilization_offset_days).toBe(5);
+      expect(result.data.billing_cache?.invoice_close_horizon_months).toBe(2);
+      expect(result.data.billing_cache?.cost_view).toBe('amortized');
+    }
+  });
+
+  it('honors an explicit billing_cache.enabled=false (opt-out)', () => {
+    const result = ConfigSchema.safeParse({ ...validConfig, billing_cache: { enabled: false } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.billing_cache?.enabled).toBe(false);
+    }
+  });
+
+  it('rejects unknown keys inside billing_cache (strict)', () => {
+    const result = ConfigSchema.safeParse({
+      ...validConfig,
+      billing_cache: { stabilisation_day: 5 },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an out-of-range stabilization offset', () => {
+    expect(
+      BillingCacheConfigSchema.safeParse({ stabilization_offset_days: 40 }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an unknown cost view', () => {
+    expect(BillingCacheConfigSchema.safeParse({ cost_view: 'blended' }).success).toBe(false);
   });
 });
 

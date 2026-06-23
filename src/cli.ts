@@ -7,6 +7,7 @@ import { FilesystemRunHistoryStore } from './history/filesystem-store.js';
 import { diagnose, type DiagnoseResult } from './run/diagnose.js';
 import { SubscriptionDiscoveryError } from './run/subscription-discovery.js';
 import { BillingProbeCache, defaultCachePath } from './run/billing-probe-cache.js';
+import { FileBillingCacheStore } from './billing-cache/index.js';
 import { probeBillingAccess } from './run/billing-probe.js';
 import { DataQualityFindingSchema, type DataQualityFinding } from './schemas/index.js';
 import {
@@ -25,7 +26,7 @@ import type { ModelClient } from './model/client.js';
 import type { Config } from './schemas/index.js';
 import type { TokenCredential } from '@azure/identity';
 import { LangfusePublisher } from './evaluation/langfuse-publisher.js';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 import { runEvaluationByPath, type EvalItemResult } from './evaluation/runner.js';
 import type { DatasetItem } from './evaluation/dataset.js';
 import { buildCannedMockModelClient } from './evaluation/canned-mock.js';
@@ -69,6 +70,10 @@ analyze flags:
   --probe-timeout-ms <n>           Per-probe timeout in milliseconds (default: 15000).
   --probe-cache <path>             Probe-outcome cache file (default: ~/.az-pixiu/billing-probe-cache.json).
   --no-probe-cache                 Disable the probe-outcome cache for this run.
+  --billing-cache                  Force-enable the local billing cache for this run. It is ON by
+                                   default for cost_summary: finalized-month cost evidence is read
+                                   from cache and freshly-retrieved finalized months are written back.
+  --no-billing-cache               Disable the local billing cache for this run.
   --resource-group <name>          May be repeated
   --from <iso>                     time_window start (default: now − 7d)
   --to <iso>                       time_window end (default: now)
@@ -204,6 +209,8 @@ async function main(): Promise<number> {
       'probe-timeout-ms': { type: 'string' },
       'probe-cache': { type: 'string' },
       'no-probe-cache': { type: 'boolean' },
+      'billing-cache': { type: 'boolean' },
+      'no-billing-cache': { type: 'boolean' },
     },
   });
 
@@ -380,6 +387,35 @@ async function runAnalyzeCommand(
         }
       : undefined;
 
+    // Local billing cache (docs/design/local-billing-cache.md). ON by
+    // default for cost_summary; `--no-billing-cache` opts out for one run
+    // and `billing_cache.enabled: false` disables it persistently. The
+    // store is partitioned by the AMG-MCP endpoint only — billing data is a
+    // property of the endpoint + subscription + month, and the credential
+    // *mode* is not an identity, so no identity hint is supplied. By default
+    // the cache lives
+    // alongside the run output (`<output-dir>/billing-cache/v1`, i.e.
+    // `runs/billing-cache/v1`), which is already gitignored; set
+    // `billing_cache.root` to relocate it (e.g. ~/.az-pixiu or an
+    // encrypted volume) for out-of-tree storage.
+    const billingCacheEnabled = Boolean(values['no-billing-cache'])
+      ? false
+      : Boolean(values['billing-cache']) || (config.billing_cache?.enabled ?? true);
+    const billingCacheOption =
+      billingCacheEnabled && analysisType === 'cost_summary'
+        ? {
+            store: new FileBillingCacheStore({
+              endpoint: config.amg.endpoint,
+              root: config.billing_cache?.root ?? join(runsDir, 'billing-cache', 'v1'),
+            }),
+            costView: config.billing_cache?.cost_view ?? 'amortized',
+            policy: {
+              stabilizationOffsetDays: config.billing_cache?.stabilization_offset_days ?? 5,
+              invoiceCloseHorizonMonths: config.billing_cache?.invoice_close_horizon_months ?? 2,
+            },
+          }
+        : undefined;
+
     // Explicit-pick mode: probe still runs but does not gate selection.
     // Findings flow in as `preflightDataQuality` so the report surfaces
     // them, but the operator's choice stands.
@@ -422,6 +458,7 @@ async function runAnalyzeCommand(
       ...(args.fixture ? { fixtureId: args.fixture } : {}),
       ...(langfusePublisher ? { langfusePublisher } : {}),
       runHistoryStore,
+      ...(billingCacheOption ? { billingCache: billingCacheOption } : {}),
       ...(preflightDataQuality && preflightDataQuality.length > 0
         ? { preflightDataQuality }
         : {}),

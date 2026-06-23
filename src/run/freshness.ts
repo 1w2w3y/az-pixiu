@@ -3,6 +3,7 @@ import type {
   EvidenceRecord,
   ScopeSubset,
 } from '../schemas/index.js';
+import { COST_WIRE_CAPABILITIES } from './cost-capabilities.js';
 
 /**
  * Freshness check (Phase 3 — design/cost-summary-depth.md §Gap 4).
@@ -53,17 +54,6 @@ export interface FreshnessCheckOptions {
 const DEFAULT_LAG_THRESHOLD_MS = 48 * 60 * 60 * 1000;
 
 /**
- * Source capabilities whose evidence is interpreted as carrying
- * cost-API totals subject to posting lag. Kept narrow on purpose —
- * resource-graph or activity-log timestamps are not affected by the
- * cost-API's posting cadence and would produce false positives.
- */
-const COST_CAPABILITIES: ReadonlySet<string> = new Set([
-  'amgmcp_cost_analysis',
-  'cost_analysis',
-]);
-
-/**
  * Category included in the dedupe key so that, when the cross-subscription
  * `freshness_uniform_drop` heuristic lands (Phase 3 §Gap 4), a
  * partial-window finding and a uniform-drop finding from the same
@@ -91,7 +81,7 @@ export function checkFreshness(
   const nowMs = now.getTime();
   let counter = options.startingCounter ?? 0;
 
-  const costRecords = evidence.filter((e) => COST_CAPABILITIES.has(e.source_capability));
+  const costRecords = evidence.filter((e) => COST_WIRE_CAPABILITIES.has(e.source_capability));
 
   // Group affected records by (category, source_capability, time_window.end)
   // so a fan-out call that produces N near-identical findings becomes one

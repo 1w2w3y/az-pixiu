@@ -13,5 +13,11 @@
   },
   "observability": {
     "application_insights_connection_string": "InstrumentationKey=<key>;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/;LiveEndpoint=https://<region>.livediagnostics.monitor.azure.com/;ApplicationId=<app-id>"
+  },
+  "billing_cache": {
+    "enabled": true,
+    "stabilization_offset_days": 5,
+    "invoice_close_horizon_months": 2,
+    "cost_view": "amortized"
   }
 }
