@@ -5,8 +5,8 @@
     "deployment": "<your-deployment-name>"
   },
   "litellm": {
-    "endpoint": "https://litellm.wus2.sample-dev.azgrafana-test.io",
-    "model": "gpt-5.4"
+    "endpoint": "https://litellm.your-domain.com",
+    "model": "gpt-5.6-sol"
   },
   "amg": {
     "endpoint": "https://<your-amg-instance>.grafana.azure.com",
