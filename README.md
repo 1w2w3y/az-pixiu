@@ -30,7 +30,7 @@ Two reasons, equally weighted:
 Az-Pixiu is a CLI (`pixiu`) you clone and run locally. Requirements:
 
 - **Node.js 22+**
-- **`az login`** against a tenant that can reach an Azure Managed Grafana instance with MCP enabled
+- Access to an Azure Managed Grafana instance with MCP enabled. By default AMG-MCP auth uses Entra ID via `az login`; alternatively, configure a Grafana service account token in `config.json`.
 - An **LLM provider** — either an Azure AI Foundry deployment (Entra ID auth) or any OpenAI-compatible LiteLLM gateway. Pick one in `config.json` via the top-level `"provider"` field (`"foundry"` — the default — or `"litellm"`).
 
 ```bash
@@ -64,6 +64,33 @@ LANGFUSE_PUBLIC_KEY=… LANGFUSE_SECRET_KEY=… LANGFUSE_BASE_URL=… \
 # environment sanity check (credentials, endpoint reachability, MCP capabilities)
 npx pixiu diagnose
 ```
+
+AMG-MCP authentication defaults to Entra ID:
+
+```json
+{
+  "amg": {
+    "endpoint": "https://<your-amg-instance>.grafana.azure.com",
+    "auth": { "mode": "entra" }
+  }
+}
+```
+
+To use a Grafana service account token instead, prefer referencing an environment variable:
+
+```json
+{
+  "amg": {
+    "endpoint": "https://<your-amg-instance>.grafana.azure.com",
+    "auth": {
+      "mode": "service_account_token",
+      "token_env": "GRAFANA_SERVICE_ACCOUNT_TOKEN"
+    }
+  }
+}
+```
+
+The token may also be supplied directly as `amg.auth.token` for local-only configs. The token value is used as the AMG-MCP HTTP `Authorization: Bearer ...` credential and is not printed by the CLI.
 
 `npx pixiu --help` lists the full flag set. Each run writes `report.md`, `report.html`, and `run.json` to a timestamped subdirectory under `runs/`.
 

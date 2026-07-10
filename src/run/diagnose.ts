@@ -3,6 +3,7 @@ import { LiveMCPTransport } from '../mcp/live.js';
 import { MCPClient, assertRequiredCapabilities } from '../mcp/client.js';
 import type { Config } from '../schemas/index.js';
 import type { CredentialIdentity } from './credential-factory.js';
+import { resolveAmgAuthentication } from './amg-auth.js';
 
 /**
  * `pixiu diagnose` — preflight checks before a real run.
@@ -43,29 +44,50 @@ export async function diagnose(
 
   // 1. AMG-scoped token
   let amgTokenOk = false;
+  let amgAuth: ReturnType<typeof resolveAmgAuthentication> | undefined;
   try {
-    const token = await credential.getToken(AMG_SCOPE);
-    if (!token) throw new Error('credential returned null token');
-    amgTokenOk = true;
-    results.push({
-      name: 'amg_token',
-      ok: true,
-      detail: `Acquired AMG-scoped token via ${credentialIdentity.implementation}.`,
-    });
+    amgAuth = resolveAmgAuthentication(config, credential);
   } catch (err) {
     results.push({
-      name: 'amg_token',
+      name: 'amg_auth_config',
       ok: false,
-      detail: `Could not acquire AMG-scoped token: ${describe(err)}`,
-      hint: 'Run `az login` if using AzureCliCredential. Confirm your identity has a Grafana role on the AMG resource.',
+      detail: describe(err),
+      hint: 'Set amg.auth.token or configure the environment variable named by amg.auth.token_env.',
     });
   }
 
+  if (amgAuth?.mode === 'service_account_token') {
+    amgTokenOk = true;
+    results.push({
+      name: 'amg_auth_config',
+      ok: true,
+      detail: `Using configured Grafana service account token from ${credentialIdentity.identity}.`,
+    });
+  } else if (amgAuth?.mode === 'entra') {
+    try {
+      const token = await credential.getToken(AMG_SCOPE);
+      if (!token) throw new Error('credential returned null token');
+      amgTokenOk = true;
+      results.push({
+        name: 'amg_token',
+        ok: true,
+        detail: `Acquired AMG-scoped token via ${credentialIdentity.implementation}.`,
+      });
+    } catch (err) {
+      results.push({
+        name: 'amg_token',
+        ok: false,
+        detail: `Could not acquire AMG-scoped token: ${describe(err)}`,
+        hint: 'Run `az login` if using AzureCliCredential. Confirm your identity has a Grafana role on the AMG resource.',
+      });
+    }
+  }
+
   // 2. AMG-MCP capability discovery (only attempt if token works)
-  if (amgTokenOk) {
+  if (amgTokenOk && amgAuth) {
     let transport: LiveMCPTransport | undefined;
     try {
-      transport = new LiveMCPTransport({ endpoint: config.amg.endpoint, credential });
+      transport = new LiveMCPTransport({ endpoint: config.amg.endpoint, auth: amgAuth });
       const client = new MCPClient({ transport });
       const catalog = await client.discover();
       try {

@@ -15,6 +15,11 @@ import {
   describeCredential,
   type CredentialMode,
 } from './run/credential-factory.js';
+import {
+  AmgAuthConfigError,
+  describeAmgAuthentication,
+  resolveAmgAuthentication,
+} from './run/amg-auth.js';
 import { FixtureMCPTransport } from './mcp/fixture.js';
 import { LiveMCPTransport } from './mcp/live.js';
 import type { MCPTransport } from './mcp/transport.js';
@@ -295,14 +300,18 @@ async function runAnalyzeCommand(
   try {
     const config = await loadConfig(args.configPath ? { path: args.configPath } : {});
 
-    const credentialIdentity = describeCredential(args.credentialMode);
+    const configuredCredentialIdentity = describeCredential(args.credentialMode);
     const credential = buildCredential(args.credentialMode);
+    const credentialIdentity = describeAmgAuthentication(config, configuredCredentialIdentity);
 
     let transport: MCPTransport;
     if (args.fixture) {
       transport = new FixtureMCPTransport({ fixturePath: `fixtures/${args.fixture}` });
     } else {
-      transport = new LiveMCPTransport({ endpoint: config.amg.endpoint, credential });
+      transport = new LiveMCPTransport({
+        endpoint: config.amg.endpoint,
+        auth: resolveAmgAuthentication(config, credential),
+      });
     }
 
     client = new MCPClient({ transport });
@@ -373,7 +382,7 @@ async function runAnalyzeCommand(
       ? new BillingProbeCache({
           path: args.probeCachePath ?? defaultCachePath(),
           endpoint: config.amg.endpoint,
-          identityHint: `${args.credentialMode}:${process.env.AZURE_USER ?? 'default'}`,
+          identityHint: `${credentialIdentity.implementation}:${credentialIdentity.identity}`,
         })
       : undefined;
 
@@ -475,6 +484,10 @@ async function runAnalyzeCommand(
     return result.score.passed_all ? 0 : 3;
   } catch (err) {
     if (err instanceof ConfigError) {
+      process.stderr.write(`Config error: ${err.message}\n`);
+      return 1;
+    }
+    if (err instanceof AmgAuthConfigError) {
       process.stderr.write(`Config error: ${err.message}\n`);
       return 1;
     }
@@ -591,7 +604,7 @@ async function runEvalCommand(
   try {
     const config = await loadConfig(configPath ? { path: configPath } : {});
     const credential = buildCredential(credentialMode);
-    const credentialIdentity = describeCredential(credentialMode);
+    const credentialIdentity = describeAmgAuthentication(config, describeCredential(credentialMode));
 
     // Default the Langfuse dataset name to the file basename so the same
     // local dataset always maps to the same Langfuse-side dataset, and
@@ -719,6 +732,10 @@ async function runEvalCommand(
       process.stderr.write(`Config error: ${err.message}\n`);
       return 1;
     }
+    if (err instanceof AmgAuthConfigError) {
+      process.stderr.write(`Config error: ${err.message}\n`);
+      return 1;
+    }
     process.stderr.write(`eval failed: ${describe(err)}\n`);
     if (err instanceof Error && err.stack) {
       process.stderr.write(err.stack + '\n');
@@ -754,7 +771,7 @@ async function runDiagnoseCommand(values: Record<string, unknown>): Promise<numb
     );
     const credentialMode = parseCredential(values.credential);
     const credential = buildCredential(credentialMode);
-    const identity = describeCredential(credentialMode);
+    const identity = describeAmgAuthentication(config, describeCredential(credentialMode));
 
     process.stdout.write(`Running pixiu diagnose (credential: ${identity.implementation})...\n\n`);
     const result: DiagnoseResult = await diagnose(config, credential, identity);
@@ -767,6 +784,10 @@ async function runDiagnoseCommand(values: Record<string, unknown>): Promise<numb
     return result.ok ? 0 : 1;
   } catch (err) {
     if (err instanceof ConfigError) {
+      process.stderr.write(`Config error: ${err.message}\n`);
+      return 1;
+    }
+    if (err instanceof AmgAuthConfigError) {
       process.stderr.write(`Config error: ${err.message}\n`);
       return 1;
     }

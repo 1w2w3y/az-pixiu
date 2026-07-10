@@ -26,9 +26,30 @@ export const LiteLLMConfigSchema = z
   })
   .strict();
 
+export const AmgAuthConfigSchema = z
+  .union([
+    z.object({ mode: z.literal('entra') }).strict(),
+    z
+      .object({
+        mode: z.literal('service_account_token'),
+        token: z.string().min(1).optional(),
+        token_env: z.string().min(1).optional(),
+      })
+      .strict(),
+  ])
+  .superRefine((auth, ctx) => {
+    if (auth.mode === 'service_account_token' && !auth.token && !auth.token_env) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'service_account_token auth requires either "token" or "token_env".',
+      });
+    }
+  });
+
 export const AmgConfigSchema = z
   .object({
     endpoint: z.string().url(),
+    auth: AmgAuthConfigSchema.optional().default({ mode: 'entra' }),
   })
   .strict();
 
@@ -87,6 +108,7 @@ export const ConfigSchema = z
 
 export type FoundryConfig = z.infer<typeof FoundryConfigSchema>;
 export type LiteLLMConfig = z.infer<typeof LiteLLMConfigSchema>;
+export type AmgAuthConfig = z.infer<typeof AmgAuthConfigSchema>;
 export type AmgConfig = z.infer<typeof AmgConfigSchema>;
 export type AzPixiuObservabilityConfig = z.infer<typeof ObservabilityConfigSchema>;
 export type BillingCacheConfig = z.infer<typeof BillingCacheConfigSchema>;

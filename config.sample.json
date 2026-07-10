@@ -9,7 +9,10 @@
     "model": "gpt-5.4"
   },
   "amg": {
-    "endpoint": "https://<your-amg-instance>.grafana.azure.com"
+    "endpoint": "https://<your-amg-instance>.grafana.azure.com",
+    "auth": {
+      "mode": "entra"
+    }
   },
   "observability": {
     "application_insights_connection_string": "InstrumentationKey=<key>;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/;LiveEndpoint=https://<region>.livediagnostics.monitor.azure.com/;ApplicationId=<app-id>"

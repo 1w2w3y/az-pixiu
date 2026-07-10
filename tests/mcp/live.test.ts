@@ -70,4 +70,34 @@ describe('LiveMCPTransport (construction)', () => {
       /AMG-MCP HTTP 401 Unauthorized.*missing or invalid audience/,
     );
   });
+
+  it('uses a configured Grafana service account token as the bearer token', async () => {
+    let authorization: string | null = null;
+    const t = new LiveMCPTransport({
+      endpoint: 'https://example.grafana.azure.com',
+      auth: { mode: 'service_account_token', token: 'glsa-test-token' },
+      fetchImpl: async (_url, init) => {
+        authorization = new Headers(init?.headers).get('Authorization');
+        return new Response('unauthorized', { status: 401, statusText: 'Unauthorized' });
+      },
+    });
+
+    await expect(t.listCapabilities()).rejects.toThrow(/AMG-MCP HTTP 401 Unauthorized/);
+    expect(authorization).toBe('Bearer glsa-test-token');
+  });
+
+  it('does not duplicate an existing Bearer prefix on service account tokens', async () => {
+    let authorization: string | null = null;
+    const t = new LiveMCPTransport({
+      endpoint: 'https://example.grafana.azure.com',
+      auth: { mode: 'service_account_token', token: 'Bearer glsa-test-token' },
+      fetchImpl: async (_url, init) => {
+        authorization = new Headers(init?.headers).get('Authorization');
+        return new Response('unauthorized', { status: 401, statusText: 'Unauthorized' });
+      },
+    });
+
+    await expect(t.listCapabilities()).rejects.toThrow(/AMG-MCP HTTP 401 Unauthorized/);
+    expect(authorization).toBe('Bearer glsa-test-token');
+  });
 });

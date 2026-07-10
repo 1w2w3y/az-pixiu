@@ -82,6 +82,55 @@ describe('ConfigSchema', () => {
     expect(ConfigSchema.safeParse(withoutAmg).success).toBe(false);
   });
 
+  it('defaults amg.auth to entra when omitted', () => {
+    const result = ConfigSchema.safeParse(validConfig);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.amg.auth).toEqual({ mode: 'entra' });
+    }
+  });
+
+  it('accepts AMG service account token auth from an environment variable name', () => {
+    const result = ConfigSchema.safeParse({
+      ...validConfig,
+      amg: {
+        ...validConfig.amg,
+        auth: {
+          mode: 'service_account_token',
+          token_env: 'GRAFANA_SERVICE_ACCOUNT_TOKEN',
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts AMG service account token auth with a direct token', () => {
+    const result = ConfigSchema.safeParse({
+      ...validConfig,
+      amg: {
+        ...validConfig.amg,
+        auth: {
+          mode: 'service_account_token',
+          token: 'glsa_test',
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects AMG service account token auth without a token source', () => {
+    const result = ConfigSchema.safeParse({
+      ...validConfig,
+      amg: {
+        ...validConfig.amg,
+        auth: {
+          mode: 'service_account_token',
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('accepts optional Application Insights connection string configuration', () => {
     const result = ConfigSchema.safeParse({
       ...validConfig,

@@ -33,11 +33,17 @@ import {
 
 const AMG_RESOURCE_SCOPE = '6f2d169c-08f3-4a4c-a982-bcaf2d038c45/.default';
 
+export type LiveMCPAuthentication =
+  | { mode: 'entra'; credential: TokenCredential }
+  | { mode: 'service_account_token'; token: string };
+
 export interface LiveMCPTransportOptions {
   /** Base URL of the AMG-MCP server (Grafana host). */
   endpoint: string;
-  /** TokenCredential resolved by config (§15.9). */
-  credential: TokenCredential;
+  /** Authentication resolved by config. Defaults to Entra when credential is supplied. */
+  auth?: LiveMCPAuthentication;
+  /** TokenCredential resolved by config (§15.9). Kept for existing callers. */
+  credential?: TokenCredential;
   /** Path under endpoint where the streamable-HTTP MCP server lives. */
   mcpPath?: string;
   /** Client identification reported to the server. */
@@ -50,7 +56,7 @@ export interface LiveMCPTransportOptions {
 export class LiveMCPTransport implements MCPTransport {
   private readonly endpoint: string;
   private readonly mcpPath: string;
-  private readonly credential: TokenCredential;
+  private readonly auth: LiveMCPAuthentication;
   private readonly clientName: string;
   private readonly clientVersion: string;
   private readonly fetchImpl: typeof fetch;
@@ -60,7 +66,15 @@ export class LiveMCPTransport implements MCPTransport {
   constructor(options: LiveMCPTransportOptions) {
     this.endpoint = options.endpoint.replace(/\/$/, '');
     this.mcpPath = options.mcpPath ?? '/api/azure-mcp';
-    this.credential = options.credential;
+    const auth =
+      options.auth ??
+      (options.credential
+        ? { mode: 'entra' as const, credential: options.credential }
+        : undefined);
+    if (!auth) {
+      throw new Error('LiveMCPTransport requires either auth or credential.');
+    }
+    this.auth = auth;
     this.clientName = options.clientName ?? 'az-pixiu';
     this.clientVersion = options.clientVersion ?? '0.1.0';
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -92,20 +106,27 @@ export class LiveMCPTransport implements MCPTransport {
    */
   private buildAuthenticatedFetch(): (url: string | URL, init?: RequestInit) => Promise<Response> {
     return async (url, init) => {
-      const token = await this.credential.getToken(AMG_RESOURCE_SCOPE);
-      if (!token) {
-        throw new Error(
-          `Could not acquire AMG-MCP token from credential. Run \`az login\` if using AzureCliCredential.`,
-        );
-      }
       const headers = new Headers(init?.headers);
-      headers.set('Authorization', `Bearer ${token.token}`);
+      headers.set('Authorization', await this.authorizationHeader());
       const response = await this.fetchImpl(url, { ...init, headers });
       if (!response.ok) {
         throw new Error(await describeHttpFailure(url, init, response));
       }
       return response;
     };
+  }
+
+  private async authorizationHeader(): Promise<string> {
+    if (this.auth.mode === 'service_account_token') {
+      return asBearerHeader(this.auth.token);
+    }
+    const token = await this.auth.credential.getToken(AMG_RESOURCE_SCOPE);
+    if (!token) {
+      throw new Error(
+        `Could not acquire AMG-MCP token from credential. Run \`az login\` if using AzureCliCredential.`,
+      );
+    }
+    return `Bearer ${token.token}`;
   }
 
   async listCapabilities(): Promise<CapabilityCatalog> {
@@ -145,6 +166,11 @@ export class LiveMCPTransport implements MCPTransport {
       this.client = undefined;
     }
   }
+}
+
+function asBearerHeader(rawToken: string): string {
+  const trimmed = rawToken.trim();
+  return /^Bearer\s+/i.test(trimmed) ? trimmed : `Bearer ${trimmed}`;
 }
 
 async function describeHttpFailure(
