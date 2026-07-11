@@ -44,8 +44,8 @@ npm run build                        # or `npm run dev` during development
 npx pixiu analyze cost-summary
 
 # scope it explicitly to one or more subscriptions instead (--subscription repeats),
-# or filter by display-name substring with --subscription-name-filter <text>
-npx pixiu analyze cost-summary --subscription <sub-id>
+# or filter by one or more display-name substrings (comma-separated OR terms)
+npx pixiu analyze cost-summary --subscription-name-filter prod,shared
 
 # baseline-comparison flow: surface what changed vs. the prior window
 npx pixiu analyze cost-surprise --subscription <sub-id> --resource-group <rg>

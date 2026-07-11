@@ -104,9 +104,9 @@ export interface DiscoverTopSubscriptionsOptions {
    */
   onProgress?: DiscoveryProgress;
   /**
-   * Case-insensitive substring filter on the subscription display name.
-   * When provided, only subscriptions whose name contains this text
-   * (case-insensitive) are eligible for selection. Subscriptions
+   * Comma-separated, case-insensitive substring filters on the subscription
+   * display name. When provided, only subscriptions whose name contains at
+   * least one term are eligible for selection. Subscriptions
    * without a display name are excluded from the filtered set — they
    * have no name to match against.
    *
@@ -517,8 +517,8 @@ export function formatSubscription(s: { subscription_id: string; display_name?: 
 }
 
 /**
- * Filter the subscription list by a case-insensitive substring against
- * the display name. Records a diagnostic counting unnamed subs that
+ * Filter the subscription list by comma-separated, case-insensitive
+ * substrings against the display name. Records a diagnostic counting unnamed subs that
  * were excluded purely because they had no name to match against.
  */
 function applyNameFilter(
@@ -527,7 +527,10 @@ function applyNameFilter(
   diagnostics: string[],
   onProgress: DiscoveryProgress,
 ): ParsedSubscription[] {
-  const needle = rawFilter.toLowerCase();
+  const needles = rawFilter
+    .split(',')
+    .map((term) => term.trim().toLowerCase())
+    .filter(Boolean);
   const matched: ParsedSubscription[] = [];
   let unnamedSkipped = 0;
   for (const s of subscriptions) {
@@ -535,7 +538,7 @@ function applyNameFilter(
       unnamedSkipped += 1;
       continue;
     }
-    if (s.display_name.toLowerCase().includes(needle)) {
+    if (needles.some((needle) => s.display_name!.toLowerCase().includes(needle))) {
       matched.push(s);
     }
   }

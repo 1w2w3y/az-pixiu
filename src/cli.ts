@@ -62,8 +62,8 @@ analyze flags:
                                    candidate's Cost Management read access before final selection so RBAC-denied subs
                                    are dropped from the analysis up front (pass --no-probe-billing to skip).
   --max-subscriptions <n>          When auto-discovering, how many top subscriptions to analyze (default: 3)
-  --subscription-name-filter <s>   case-insensitive substring filter on subscription display names. The agent discovers
-                                   all visible subscriptions, keeps only those whose name contains <s>, and analyzes
+  --subscription-name-filter <s>   comma-separated, case-insensitive substring filters on subscription display names.
+                                   The agent keeps names containing any supplied term and analyzes
                                    the top N by resource count. Mutually exclusive with --subscription.
   --probe-billing / --no-probe-billing
                                    Toggle the billing-access pre-flight probe (default: enabled). When enabled, each

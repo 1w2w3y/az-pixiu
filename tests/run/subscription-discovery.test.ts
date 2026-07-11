@@ -151,6 +151,42 @@ describe('discoverTopSubscriptions — name-field aliases', () => {
     expect(result.selected_subscription_ids).toEqual([ID_A]);
   });
 
+  it('matches any comma-separated display-name substring', async () => {
+    const RP = '11111111-1111-1111-1111-111111111111';
+    const TEST = '22222222-2222-2222-2222-222222222222';
+    const LIFTR = '33333333-3333-3333-3333-333333333333';
+    const OTHER = '44444444-4444-4444-4444-444444444444';
+    const client = await makeClient({
+      amgmcp_query_azure_subscriptions: {
+        content: {
+          data: [
+            { subscriptionId: RP, subscriptionName: 'GrafanaDevRP' },
+            { subscriptionId: TEST, subscriptionName: 'GrafanaTest - integration' },
+            { subscriptionId: LIFTR, subscriptionName: 'GrafanaLiftrToolsDev2' },
+            { subscriptionId: OTHER, subscriptionName: 'unrelated-subscription' },
+          ],
+        },
+      },
+      amgmcp_query_resource_graph: {
+        content: {
+          data: [
+            { subscriptionId: RP, resource_count: 4 },
+            { subscriptionId: TEST, resource_count: 3 },
+            { subscriptionId: LIFTR, resource_count: 2 },
+            { subscriptionId: OTHER, resource_count: 100 },
+          ],
+        },
+      },
+    });
+
+    const result = await discoverTopSubscriptions(client, 20, {
+      onProgress: silent,
+      nameFilter: 'GrafanaDevRP, GrafanaTest, LiftrToolsDev',
+    });
+
+    expect(result.selected_subscription_ids.sort()).toEqual([RP, TEST, LIFTR].sort());
+  });
+
   it('excludes subscriptions without a display name when a filter is set', async () => {
     const NAMED = '11111111-1111-1111-1111-111111111111';
     const UNNAMED = '22222222-2222-2222-2222-222222222222';
