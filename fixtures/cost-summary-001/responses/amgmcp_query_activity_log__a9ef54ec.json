@@ -1,0 +1,30 @@
+{
+  "capability": "amgmcp_query_activity_log",
+  "parameters": {
+    "scope": "/subscriptions/33333333-3333-3333-3333-333333333333",
+    "startTime": "2026-05-01T00:00:00Z",
+    "endTime": "2026-05-08T00:00:00Z"
+  },
+  "parameters_digest": "a9ef54ec37996064df3404538a565b50b910e6f28ca9f5892ad3669fed97043d",
+  "response": {
+    "content": {
+      "entries": [
+        {
+          "operation": "Microsoft.Web/sites/write",
+          "resource_id": "/subscriptions/33333333-3333-3333-3333-333333333333/resourceGroups/rg-app/providers/Microsoft.Web/sites/api-prod",
+          "timestamp": "2026-05-03T14:22:00Z",
+          "caller": "deploy-pipeline@example.com",
+          "status": "Succeeded"
+        },
+        {
+          "operation": "Microsoft.Storage/storageAccounts/write",
+          "resource_id": "/subscriptions/33333333-3333-3333-3333-333333333333/resourceGroups/rg-storage/providers/Microsoft.Storage/storageAccounts/logsprod",
+          "timestamp": "2026-05-05T09:11:00Z",
+          "caller": "platform-bot@example.com",
+          "status": "Succeeded"
+        }
+      ]
+    },
+    "isError": false
+  }
+}

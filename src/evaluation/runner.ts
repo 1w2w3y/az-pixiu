@@ -7,7 +7,7 @@ import type { Config } from '../schemas/index.js';
 import type { ModelClient } from '../model/client.js';
 import type { CredentialIdentity } from '../run/credential-factory.js';
 import type { ObservabilityMode } from '../observability/setup.js';
-import { scoreAll, type AggregateScore } from './scoring.js';
+import type { AggregateScore } from './scoring.js';
 import { checkExpectations, type ExpectationsAggregate } from './expectations.js';
 import { loadDataset, fixturePathFor, type Dataset, type DatasetItem } from './dataset.js';
 import { LangfusePublisher, LangfusePublishError, type ScorePayload } from './langfuse-publisher.js';
@@ -225,13 +225,18 @@ async function runOne(
       fixtureId: item.fixture_id,
     });
 
-    const score = scoreAll(result.reasoning, { evidence: result.evidence });
+    // Reuse the orchestrator's score: it was computed against the exact
+    // evidence universe the reasoner received. `result.evidence` also keeps
+    // quarantined provenance for run.json, so rescoring that superset here
+    // would make eval disagree with the analyzed run.
+    const score = result.score;
     const expectations = checkExpectations({
       item,
       reasoning: result.reasoning,
       evidence: result.evidence,
-      invoked_capabilities: result.evidence.map((e) => e.source_capability),
+      invoked_capabilities: result.invoked_capabilities,
       input_dq_categories: result.input_dq_categories,
+      waste_lanes: result.waste_lanes,
     });
 
     return {

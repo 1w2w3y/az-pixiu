@@ -24,8 +24,30 @@ export const DatasetItemSchema = z
         min_recommendations: z.number().int().nonnegative().optional(),
         expected_dq_categories: z.array(z.string().min(1)).optional(),
         expected_capabilities_invoked: z.array(z.string().min(1)).optional(),
+        /** Exact deterministic waste-lane recall contract for fixture items. */
+        expected_waste_lane: z.string().min(1).optional(),
+        expected_candidate_ids: z.array(z.string().min(1)).optional(),
+        excluded_candidate_ids: z.array(z.string().min(1)).optional(),
+        expected_candidate_count: z.number().int().nonnegative().optional(),
+        max_unparsed_rows: z.number().int().nonnegative().optional(),
+        max_rejected_rows: z.number().int().nonnegative().optional(),
       })
       .strict()
+      .superRefine((value, ctx) => {
+        const hasLaneContract =
+          value.expected_candidate_ids !== undefined ||
+          value.excluded_candidate_ids !== undefined ||
+          value.expected_candidate_count !== undefined ||
+          value.max_unparsed_rows !== undefined ||
+          value.max_rejected_rows !== undefined;
+        if (hasLaneContract && value.expected_waste_lane === undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['expected_waste_lane'],
+            message: 'expected_waste_lane is required for waste-candidate expectations',
+          });
+        }
+      })
       .optional(),
   })
   .strict();

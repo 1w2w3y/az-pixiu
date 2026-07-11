@@ -1,0 +1,10 @@
+{
+  "capability": "amgmcp_query_activity_log",
+  "parameters": {
+    "scope": "/subscriptions/88888888-8888-8888-8888-888888888888",
+    "startTime": "2026-05-01T00:00:00Z",
+    "endTime": "2026-05-08T00:00:00Z"
+  },
+  "parameters_digest": "9e4650c582ccbfe15cdc1aac70b43db9978ab629b3bc4f8cad6aadfa3738a268",
+  "response": { "content": { "entries": [] }, "isError": false }
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -117,6 +117,32 @@ describe('runEvaluation — Phase 3 waste-orphan-ip vertical slice', () => {
       const rubricNames = item.score.results.map((r) => r.rubric);
       expect(rubricNames).toContain('estimated_impact_calibrated');
       expect(rubricNames).toContain('waste_classification_grounding');
+
+      // Deterministic contract checks: prose-quality rubrics must not let a
+      // wire-decoding false negative pass. The fixture's lane response is a
+      // real MCP text-content envelope.
+      const artifact = JSON.parse(
+        await readFile(join(item.run_dir, 'run.json'), 'utf8'),
+      ) as {
+        waste_lanes?: Array<{
+          name: string;
+          candidates: Array<{ resource_id: string }>;
+          unparsed_row_count: number;
+          rejected_row_count: number;
+        }>;
+      };
+      const lane = artifact.waste_lanes?.find((entry) => entry.name === 'orphan_public_ip');
+      expect(lane?.unparsed_row_count).toBe(0);
+      expect(lane?.rejected_row_count).toBe(0);
+      expect(lane?.candidates.map((candidate) => candidate.resource_id).sort()).toEqual(
+        [
+          '/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-legacy-prototype/providers/Microsoft.Network/publicIPAddresses/pip-legacy-basic-001',
+          '/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-inbound-001',
+          '/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-inbound-002',
+          '/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-outbound-001',
+          '/subscriptions/88888888-8888-8888-8888-888888888888/resourceGroups/rg-sandbox-app/providers/Microsoft.Network/publicIPAddresses/pip-sandbox-bastion-stale',
+        ].sort(),
+      );
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

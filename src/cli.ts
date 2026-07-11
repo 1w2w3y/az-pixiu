@@ -26,7 +26,6 @@ import type { MCPTransport } from './mcp/transport.js';
 import { MCPClient } from './mcp/client.js';
 import { OpenAIModelClient } from './model/openai-client.js';
 import { LiteLLMModelClient } from './model/litellm-client.js';
-import { MockModelClient } from './model/mock-client.js';
 import type { ModelClient } from './model/client.js';
 import type { Config } from './schemas/index.js';
 import type { TokenCredential } from '@azure/identity';
@@ -76,8 +75,8 @@ analyze flags:
   --probe-cache <path>             Probe-outcome cache file (default: ~/.az-pixiu/billing-probe-cache.json).
   --no-probe-cache                 Disable the probe-outcome cache for this run.
   --billing-cache                  Force-enable the local billing cache for this run. It is ON by
-                                   default for cost_summary: finalized-month cost evidence is read
-                                   from cache and freshly-retrieved finalized months are written back.
+                                   default for cost_summary: usage-stable full-month cost evidence
+                                   is read from cache and newly retrieved stable months are written back.
   --no-billing-cache               Disable the local billing cache for this run.
   --resource-group <name>          May be repeated
   --from <iso>                     time_window start (default: now − 7d)
@@ -88,7 +87,7 @@ analyze flags:
   --user-context <text>            free-text context for the reasoner (never cited as evidence)
   --fixture <id>                   replay a fixture instead of live AMG-MCP
   --use-playbook                   skip the planner LLM; use the deterministic cost-surprise playbook
-  --mock-model                     skip Foundry; use a hard-coded mock model response
+  --mock-model                     skip Foundry; use a canned reasoning response. Requires --use-playbook
   --output-dir <path>              where to write the run subdir (default: runs/)
   --observability <mode>           noop | memory | langfuse | ms-otel  (default: langfuse — requires
                                    LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL)
@@ -254,11 +253,20 @@ async function runAnalyzeCommand(
   const explicitSubs = stringArrayOrUndefined(values.subscription) ?? [];
   const maxSubs = parsePositiveInt(values['max-subscriptions'], 3);
   const nameFilter = stringOrUndefined(values['subscription-name-filter']);
+  const usePlaybook = Boolean(values['use-playbook']);
+  const mockModel = Boolean(values['mock-model']);
 
   if (nameFilter !== undefined && explicitSubs.length > 0) {
     process.stderr.write(
       `analyze: --subscription-name-filter and --subscription are mutually exclusive. ` +
         `The filter selects subscriptions by name from auto-discovery; --subscription supplies them directly.\n`,
+    );
+    return 2;
+  }
+
+  if (mockModel && !usePlaybook) {
+    process.stderr.write(
+      'analyze --mock-model requires --use-playbook (the planner LLM is not mocked).\n',
     );
     return 2;
   }
@@ -283,8 +291,8 @@ async function runAnalyzeCommand(
     baselineTo: stringOrUndefined(values['baseline-to']),
     userContext: stringOrUndefined(values['user-context']),
     fixture: stringOrUndefined(values.fixture),
-    usePlaybook: Boolean(values['use-playbook']),
-    mockModel: Boolean(values['mock-model']),
+    usePlaybook,
+    mockModel,
     outputDir: stringOrUndefined(values['output-dir']),
     observability: parseObservability(values.observability),
     credentialMode: parseCredential(values.credential),
@@ -340,14 +348,7 @@ async function runAnalyzeCommand(
     let model: ModelClient;
     let modelProvider: string;
     if (args.mockModel) {
-      model = new MockModelClient({
-        responses: {
-          facts: [],
-          hypotheses: [],
-          recommendations: [],
-          data_quality: [],
-        },
-      });
+      model = buildCannedMockModelClient();
       modelProvider = 'mock';
     } else {
       model = buildModelClient(config, credential);

@@ -85,6 +85,8 @@ export interface WasteLanesBlockEntry {
   failed: boolean;
   /** Rows the parser could not interpret; surfaced for transparency. */
   unparsed_row_count: number;
+  /** Parsed rows rejected by effective-scope validation. */
+  rejected_row_count: number;
 }
 
 export interface WriteRunArtifactOptions {
@@ -161,5 +163,6 @@ function toWasteLaneBlockEntry(result: WasteLaneResult): WasteLanesBlockEntry {
     lane_total: result.lane_total,
     failed: result.failed,
     unparsed_row_count: result.unparsed_row_count,
+    rejected_row_count: result.rejected_row_count,
   };
 }

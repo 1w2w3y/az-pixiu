@@ -108,12 +108,21 @@ describe('EvidenceExecutor — happy path', () => {
           capability: 'amgmcp_query_resource_graph',
           parameters: { query: 'select *' },
           intent: 'inventory',
+          intended_scope_subset: {
+            subscription_ids: [subId],
+            resource_group_names: ['rg-finops'],
+            resource_ids: null,
+          },
         },
       ],
     };
     const { transport_summary } = await executor.execute(plan);
     expect(transport_summary[0]?.scope_subset?.subscription_ids).toEqual([subId]);
-    expect(transport_summary[1]?.scope_subset).toBeNull();
+    expect(transport_summary[1]?.scope_subset).toEqual({
+      subscription_ids: [subId],
+      resource_group_names: ['rg-finops'],
+      resource_ids: null,
+    });
   });
 
   it('falls back to "unknown" capability_version when discovery did not record one', async () => {
@@ -132,6 +141,47 @@ describe('EvidenceExecutor — happy path', () => {
 describe('EvidenceExecutor — failure paths', () => {
   const fastSleep = () => Promise.resolve();
   const noJitter = () => 0;
+
+  it.each([
+    ['amgmcp_query_resource_graph', { data: [], count: 0 }],
+    [
+      'amgmcp_cost_analysis',
+      {
+        subscriptions: [
+          {
+            subscriptionId: '11111111-1111-1111-1111-111111111111',
+            totalCost: 42,
+          },
+        ],
+      },
+    ],
+  ] as const)('never admits %s content when ToolCallResult.isError is true', async (capability, content) => {
+    const transport = new FakeTransport(phase1Catalog, async () => ({
+      content,
+      isError: true,
+    }));
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const executor = new EvidenceExecutor({ client, catalog });
+
+    const result = await executor.execute({
+      requests: [
+        {
+          capability,
+          parameters: {},
+          intent: capability === 'amgmcp_cost_analysis' ? 'cost_breakdown' : 'inventory',
+        },
+      ],
+    });
+    expect(result.raw_evidence).toHaveLength(0);
+    expect(result.failures).toEqual([
+      expect.objectContaining({ category: 'schema_mismatch', capability }),
+    ]);
+    expect(result.transport_summary[0]).toMatchObject({
+      final_outcome: 'transport',
+      failure_category: 'schema_mismatch',
+    });
+  });
 
   it('exhausts retries on persistent 429 and emits one classified failure', async () => {
     const transport = new FakeTransport(phase1Catalog, async (cap) => {
@@ -747,20 +797,18 @@ describe('EvidenceExecutor — against the seeded fixture', () => {
         {
           capability: 'amgmcp_cost_analysis',
           parameters: {
-            subscription_id: '11111111-1111-1111-1111-111111111111',
-            time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
-            granularity: 'Daily',
-            grouping: ['ServiceName'],
+            subscriptionId: '11111111-1111-1111-1111-111111111111',
+            startTime: '2026-05-01T00:00:00Z',
+            endTime: '2026-05-08T00:00:00Z',
           },
           intent: 'cost_breakdown',
         },
         {
           capability: 'amgmcp_cost_analysis',
           parameters: {
-            subscription_id: '11111111-1111-1111-1111-111111111111',
-            time_window: { start: '2026-04-24T00:00:00Z', end: '2026-05-01T00:00:00Z' },
-            granularity: 'Daily',
-            grouping: ['ServiceName'],
+            subscriptionId: '11111111-1111-1111-1111-111111111111',
+            startTime: '2026-04-24T00:00:00Z',
+            endTime: '2026-05-01T00:00:00Z',
           },
           intent: 'cost_breakdown',
         },

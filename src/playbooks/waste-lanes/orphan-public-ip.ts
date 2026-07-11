@@ -1,4 +1,6 @@
 import type { EvidenceRequest, ToolCallResult } from '../../schemas/index.js';
+import { extractText, tryParseJson } from '../../mcp/content.js';
+import { scopeResourceGraphQuery } from '../../mcp/resource-graph.js';
 import type { WasteCandidate, WasteLane, WasteLaneRunContext } from './types.js';
 
 /**
@@ -6,11 +8,10 @@ import type { WasteCandidate, WasteLane, WasteLaneRunContext } from './types.js'
  * §Gap 1, first lane row).
  *
  * Classification predicate: a `microsoft.network/publicipaddresses`
- * resource whose `properties.ipConfiguration` is null is, by Azure's
- * own data model, not attached to anything — the IP accrues charges
- * with no associated workload. The lane carries the predicate text on
- * every candidate so the report can defend the classification with the
- * same KQL the agent actually ran, rather than free-form narrative.
+ * resource whose `properties.ipConfiguration` and `properties.natGateway`
+ * are both null is not currently associated through either supported
+ * attachment shape. This makes it a human-review candidate, not proof of
+ * waste: deployment pools and reserved capacity can be intentionally idle.
  *
  * Scope of `microsoft.network/publicipaddresses` only — the design
  * table names only public IP addresses. `microsoft.network/publicipprefixes`
@@ -25,7 +26,8 @@ import type { WasteCandidate, WasteLane, WasteLaneRunContext } from './types.js'
 // executed ARG query (the lane's buildRequest composes the query with
 // the same chained-where shape) — that lets a reviewer match the cite
 // against the wire payload character-for-character without re-derivation.
-const PREDICATE = "where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration)";
+const PREDICATE =
+  "where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration) | where isnull(properties.natGateway)";
 
 /**
  * Form the SKU key the rate card is queried with. The ARG projection
@@ -42,39 +44,48 @@ export function formatPublicIpSku(skuName: string, allocationMethod: string): st
 
 export const orphanPublicIpLane: WasteLane = {
   name: 'orphan_public_ip',
-  title: 'Orphan public IPs',
+  resource_types: ['microsoft.network/publicipaddresses'],
+  title: 'Unassociated public IP review candidates',
   predicate_text: PREDICATE,
 
   buildRequest(ctx: WasteLaneRunContext): EvidenceRequest {
     // The ARG query body is the predicate text the report cites,
     // followed by a `project` of the fields needed to defend the
     // classification and to derive the SKU for impact estimation.
-    // Subscription scoping rides through the `subscription_ids`
-    // parameter on the capability — the resource-graph capability
-    // already accepts it (the cost-summary playbook uses the same
-    // shape).
-    const query =
+    // Live AMG-MCP exposes no subscription_ids argument for ARG. Scope
+    // therefore lives in supported KQL and subscriptionId is projected
+    // so the executor can validate every returned row before admitting it.
+    const query = scopeResourceGraphQuery(
       "Resources " +
-      "| where type =~ 'microsoft.network/publicipaddresses' " +
-      "| where isnull(properties.ipConfiguration) " +
+      `| ${PREDICATE} ` +
       "| project id, name, subscriptionId, resourceGroup, location, " +
-      "skuName=tostring(sku.name), allocationMethod=tostring(properties.publicIPAllocationMethod)";
+      "skuName=tostring(sku.name), allocationMethod=tostring(properties.publicIPAllocationMethod), " +
+      "ipConfigurationId=tostring(properties.ipConfiguration.id), natGatewayId=tostring(properties.natGateway.id)",
+      ctx.scope.subscription_ids,
+      {
+        resourceGroupNames: ctx.scope.resource_group_names,
+        resourceTypes: ctx.scope.resource_type_filter,
+      },
+    );
     return {
       capability: 'amgmcp_query_resource_graph',
       parameters: {
-        subscription_ids: ctx.scope.subscription_ids,
         query,
       },
       intent: 'waste_candidate',
-      expected_role: 'orphan public IP candidates (publicipaddresses with null ipConfiguration)',
+      expected_role:
+        'unassociated public IP review candidates (no IP configuration or NAT Gateway association)',
     };
   },
 
   parseRows(result: ToolCallResult): { candidates: WasteCandidate[]; unparsed_row_count: number } {
     const candidates: WasteCandidate[] = [];
-    let unparsed = 0;
-    const content = result.content;
-    const rows = extractRows(content);
+    const text = extractText(result);
+    const parsed = tryParseJson(text);
+    const decoded = parsed ?? (text.length > 0 ? text : result.content);
+    const extracted = extractRows(decoded);
+    let unparsed = extracted.contract_issue_count;
+    const rows = extracted.rows;
     for (const row of rows) {
       if (typeof row !== 'object' || row === null) {
         unparsed += 1;
@@ -88,9 +99,30 @@ export const orphanPublicIpLane: WasteLane = {
       const location = asString(r.location);
       const skuName = asString(r.skuName ?? r.sku_name);
       const allocationMethod = asString(r.allocationMethod ?? r.allocation_method);
-      if (!id || !subscriptionId) {
+      const ipConfigurationProjection = Object.hasOwn(r, 'ipConfigurationId')
+        ? r.ipConfigurationId
+        : r.ip_configuration_id;
+      const natGatewayProjection = Object.hasOwn(r, 'natGatewayId')
+        ? r.natGatewayId
+        : r.nat_gateway_id;
+      const hasIpConfigurationProjection = typeof ipConfigurationProjection === 'string';
+      const hasNatGatewayProjection = typeof natGatewayProjection === 'string';
+      const ipConfigurationId = asString(ipConfigurationProjection);
+      const natGatewayId = asString(natGatewayProjection);
+      if (
+        !id ||
+        !subscriptionId ||
+        !hasIpConfigurationProjection ||
+        !hasNatGatewayProjection
+      ) {
         // resource_id + subscription_id are load-bearing — without them
         // the EvidenceRecord cannot honestly scope the candidate.
+        unparsed += 1;
+        continue;
+      }
+      if (ipConfigurationId || natGatewayId) {
+        // A row that contradicts the lane predicate is never admitted as
+        // evidence even if an upstream ARG implementation returned it.
         unparsed += 1;
         continue;
       }
@@ -104,6 +136,8 @@ export const orphanPublicIpLane: WasteLane = {
         fields: {
           skuName: skuName || '(unknown)',
           allocationMethod: allocationMethod || '(unknown)',
+          ipConfigurationId: '(none)',
+          natGatewayId: '(none)',
         },
       });
     }
@@ -118,14 +152,30 @@ export const orphanPublicIpLane: WasteLane = {
  * shape and a bare-array shape so the lane works against both fixture
  * conventions and real AMG-MCP output.
  */
-function extractRows(content: unknown): unknown[] {
-  if (Array.isArray(content)) return content;
+function extractRows(content: unknown): { rows: unknown[]; contract_issue_count: number } {
+  // Preserve bare-array rows for diagnostics, but treat the missing count
+  // envelope as incomplete. This prevents a bare empty array from becoming
+  // an authoritative clean no-match if the upstream contract drifts.
+  if (Array.isArray(content)) return { rows: content, contract_issue_count: 1 };
   if (typeof content === 'object' && content !== null) {
     const obj = content as Record<string, unknown>;
-    if (Array.isArray(obj.data)) return obj.data;
-    if (Array.isArray(obj.rows)) return obj.rows;
+    const rows = Array.isArray(obj.data) ? obj.data : Array.isArray(obj.rows) ? obj.rows : undefined;
+    if (rows) {
+      if (typeof obj.count !== 'number' || !Number.isInteger(obj.count) || obj.count < 0) {
+        return { rows, contract_issue_count: 1 };
+      }
+      if (obj.count !== rows.length) {
+        return {
+          rows,
+          contract_issue_count: Math.max(1, Math.abs(obj.count - rows.length)),
+        };
+      }
+      return { rows, contract_issue_count: 0 };
+    }
   }
-  return [];
+  // Unknown envelope means one contract-level parse failure, never a
+  // clean zero-match result.
+  return { rows: [], contract_issue_count: 1 };
 }
 
 function asString(v: unknown): string {

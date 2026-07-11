@@ -1,6 +1,6 @@
 # Cost-Summary Depth
 
-> **Status (2026-06):** Living design, partially implemented. Phase 2.5's cross-run state, Run Quality section, transport summary, and recommendation signatures have shipped. Early Phase 3 has also shipped the first waste lane (`orphan_public_ip`), calibrated weekly impact estimates from `pricing/azure-rate-card.json`, `reasoner.v2` loading for `cost_summary`, and the two active Phase 3 rubrics (`estimated_impact_calibrated`, `waste_classification_grounding`). The broader design still captures the gap between the current analyzer and a mature recurring cost-review workflow: additional waste lanes, naming-pattern clustering, uniform-drop freshness detection, and reasoner-rendered continuity markers remain planned work.
+> **Status (2026-07):** Living design, partially implemented. Phase 2.5's cross-run state, Run Quality section, transport summary, and recommendation signatures have shipped. Early Phase 3 has shipped the first waste lane (`orphan_public_ip`), calibrated weekly impact estimates, `reasoner.v2`, and the two active Phase 3 rubrics. The July live-contract gate has also shipped: MCP `isError` is terminal before parsing; real MCP text envelopes are replayed in fixtures; both deterministic playbooks use the live Cost Analysis and Activity Log parameter schemas; ARG scope is normalized, carried in supported KQL, and retained as internal provenance; first-lane rows are validated for subscription/RG/ARM type/association/type-filter consistency; partial rows fail closed; exact duplicate-free candidate recall is bound to a successfully completed named lane; and unsafe zero, missing-total, malformed, or wrong-scope cost evidence is quarantined from reasoning, coverage, arithmetic, and cache admission. The next product increment is the bounded, cost-guided second pass. PostgreSQL is the first planned service evidence pack, followed by Log Analytics, AKS, Cosmos DB, and ACR. Additional waste lanes, naming-pattern clustering, uniform-drop freshness detection, and reasoner-rendered continuity markers remain planned work.
 
 ## Context
 
@@ -8,7 +8,9 @@ The Phase 1 `cost-summary` playbook ([`src/playbooks/cost-summary.ts`](../../src
 
 A reference workflow — an external Claude-Code cron that has been producing weekly Azure cost reports for ~12 runs against 8 subscriptions (the report this design is grounded in lives at `claw-context/cron-azure-cost-analysis/report.md`) — demonstrates that real recurring cost-review output looks different from what the current Az-Pixiu `cost-summary` produces in six distinct ways. This document characterizes those differences, justifies which of them should become Az-Pixiu features, and locks the design choices that close each gap without weakening the project's evidence and observability discipline.
 
-This is not a critique of the existing playbook. Phase 1's narrowness was a deliberate validation choice ([phase-1 design](phase-1.md) §"What Phase 1 deliberately leaves to later") and the resulting agent is sound. The work here extends the analyzer surface; it does not rewrite it.
+This is not a critique of the existing playbook. Phase 1's narrowness was a deliberate validation choice ([phase-1 design](phase-1.md) §"What Phase 1 deliberately leaves to later"). The work here extends the analyzer surface; it does not rewrite it.
+
+A July 2026 investigation performed directly through the live AMG-MCP surface adds a second grounding source. It confirmed the intended evidence chain — portfolio cost to ARG configuration to raw metrics, logs, and activity — and exposed where the current implementation can overstate certainty. The most important example was a valid ARG response wrapped in MCP `content` text blocks: the orphan-public-IP lane counted the envelope as one unparsed row, produced zero candidates, and the report rendered that partial parse as "No matching resources." The same investigation found a complete historical cost window returning zero while an adjacent current window carried material spend. Neither observation proves the upstream data is wrong; both prove that a structurally successful call is not sufficient evidence for an authoritative zero. The additions below turn those lessons into product contracts without embedding tenant-specific costs or resource names in the design.
 
 ---
 
@@ -25,11 +27,11 @@ The same constraints that shaped Phase 1 and Phase 2 still apply:
 
 ---
 
-## The six gaps
+## The original six gaps and live-investigation additions
 
-Each gap names the observation, the rough size of the work, and the slot in the roadmap where it lands.
+The first six gaps come from the recurring reference workflow. The two additions after them come from live AMG-MCP investigation and now gate further Phase 3 breadth.
 
-> **2026-05-23 follow-up note.** A live cross-comparison against the same reference workflow, captured in [cron-comparison-improvements.md](cron-comparison-improvements.md), confirms that the six gaps below are the right gaps. The follow-up adds a **§Gap 7 (429 / rate-limit handling)** that this document only assumes happens, plus four smaller report-tightening items (§S1–§S4). Readers planning the Phase 3 implementation should treat that note as a sibling to this document; §Gap 7 lands *before* the waste-lane work in [Implementation sequencing](#implementation-sequencing) step 6.
+> **2026-05-23 follow-up note.** A live cross-comparison against the same reference workflow, captured in [cron-comparison-improvements.md](cron-comparison-improvements.md), confirms that the six original gaps below are the right gaps. The follow-up adds a **§Gap 7 (429 / rate-limit handling)** that this document only assumes happens, plus four smaller report-tightening items (§S1–§S4). Retry, pacing, payload-embedded failure detection, and transport summaries have since largely shipped. The evidence-contract gate added here is distinct: it governs successful responses whose wire shape, scope, or zero value does not justify the conclusion drawn from them.
 
 ### Gap 1 — Zombie / waste detection as a separate analysis lane
 
@@ -41,16 +43,16 @@ Planned lanes, each anchored to an unambiguous ARG predicate. Only the first row
 
 | Lane | Predicate | Cited evidence |
 |---|---|---|
-| orphaned public IPs | `microsoft.network/publicipaddresses` with empty `ipConfiguration` | ID, SKU, location, allocation method |
+| unassociated public IP candidates (`orphan_public_ip`) | `microsoft.network/publicipaddresses` with empty `ipConfiguration` and no NAT Gateway association | ID, SKU, location, allocation method, NAT association, age |
 | unattached managed disks | `microsoft.compute/disks` with `diskState == 'Unattached'` | ID, size GB, SKU, location, age |
 | deallocated VMs | `microsoft.compute/virtualmachines` with power state `deallocated` for ≥7d | ID, SKU, location, deallocation timestamp |
-| stopped or failed AKS | `microsoft.containerservice/managedclusters` with provisioning state `Stopped` or `Failed` | ID, region, agent pool count, last operation |
-| "restored-*" Postgres | `microsoft.dbforpostgresql/flexibleservers` with name starting `restored-` | ID, SKU, region, create timestamp |
-| empty container registries | `microsoft.containerregistry/registries` with no repositories in last 90d | ID, SKU, region, last push timestamp |
+| stopped or failed AKS | `microsoft.containerservice/managedclusters` with `properties.powerState.code == 'Stopped'` or failed provisioning | ID, region, power state, provisioning state, agent pool count, last operation |
+| "restored-*" Postgres | `microsoft.dbforpostgresql/flexibleservers` with name starting `restored-`, outside a configurable creation grace period | ID, SKU, region, create timestamp, recent activity |
+| empty container registries | `microsoft.containerregistry/registries` with no pull, push, or material storage activity in the review window | ID, SKU, region, age, replication count, pull/push/storage metrics |
 
-The lane list is **extensible by configuration**, not hardcoded. Each lane is a small object with a name, an ARG query, and a renderer for the per-candidate evidence record. New lanes admit when the use case is documented and the predicate is unambiguous.
+The lane list is **extensible by configuration**, not hardcoded. Each lane is a small object with a name, an ARG query, and a renderer for the per-candidate evidence record. New lanes admit when the use case is documented and the predicate is unambiguous. A structural match is still a *review candidate*, not proof of waste: public-IP pools, private-link NICs, stopped disaster-recovery capacity, and security controls can all be intentionally idle.
 
-**Trade-off named, not resolved: how aggressive is the "restored-*" heuristic?** The reference report treats name-prefix-only matching as sufficient. That's pragmatic but fragile — a legitimately named production server starting with `restored-` would be a false positive. The lane carries this as an explicit `false_positive_considerations` field on every candidate, which feeds the reasoner's `false_positive_considerations` field on the recommendation (reporting PRD FR-13).
+**Trade-off resolved conservatively: name-only and state-only matches are insufficient.** A legitimately named production server starting with `restored-`, a newly created restore under investigation, or a reserved public-IP pool would be a false positive. Each candidate therefore carries lifecycle context and an explicit `false_positive_considerations` field, which feeds the reasoner's corresponding field (reporting PRD FR-13). The report can recommend an owner or TTL review before a grace period expires; it cannot recommend deletion or attach a savings estimate as though the resource were confirmed waste.
 
 **Roadmap slot.** Phase 3.
 
@@ -147,7 +149,7 @@ Phase 2.5 shipped **option 1** (filesystem index over `runs/`) because it is the
 
 **Trade-off named, not resolved: scope-drift handling.** When the operator runs the same `analysis_type` with a slightly different subscription list (e.g., a sub was lost to RBAC denial), the `scope_signature` does not match a prior run's. Three options: (a) require an exact match (conservative — no false continuity claims, but loses signal when scopes drift slightly), (b) match on a *subset* relationship (more useful but introduces ambiguity), (c) make the operator opt in with `--prior-run <run-id>` (explicit but burdensome). The shipped implementation uses (a). A `--prior-run` override and subset matching remain future options once real recurring use surfaces the patterns.
 
-**Roadmap slot.** Foundational layer in [Phase 2.5](../roadmap.md#phase-25--cross-run-continuity-foundations); first user-visible features in Phase 3.
+**Roadmap slot.** Foundational layer in [Phase 2.5](../roadmap.md#phase-25--cross-run-continuity-foundations-complete); first user-visible features in Phase 3.
 
 ### Gap 6 — Run-quality observations surfaced in the report
 
@@ -159,19 +161,65 @@ The Langfuse trace already emits enough information to produce these — Phase 1
 
 **Roadmap slot.** Phase 2 (current). This is small enough to land alongside Phase 2's existing Langfuse work without disrupting it, and it is what makes the recurring-run experience legible without waiting for Phase 3.
 
+### Live prerequisite A — Evidence-contract correctness
+
+**Observation.** AMG-MCP tools return a `ToolCallResult`, not a domain object. A common successful shape is `content: [{ type: 'text', text: '<JSON>' }]`, while fixture tests often hand the consumer an already-decoded object. The first orphan-public-IP lane accepted both a bare array and a decoded `data` array in tests, but did not decode the live text envelope. It then treated the envelope as an unparseable ARG row. The renderer allowed `candidate_count == 0` to become "No matching resources" even though `unparsed_row_count > 0` proved the enumeration was incomplete.
+
+Scope has a separate version of the same problem. The live `query_resource_graph` schema accepts the query (and, where configured, a datasource selector), not an arbitrary `subscription_ids` field. A client can therefore believe it requested a narrow scope while the server ignores the unsupported field. Request intent is not effective scope; the response must carry enough subscription identity to validate where each row came from.
+
+**Design.** Evidence consumers share one wire-decoding boundary and fail closed after it:
+
+1. Decode MCP content blocks with the shared JSON-content decoder before inspecting domain rows. Wire-shaped fixture responses are the default contract-test shape; already-decoded objects remain a convenience only for focused parser unit tests.
+2. Construct parameters from the discovered capability schema. When ARG exposes no separate subscription parameter, embed the subscription predicate in KQL and project `subscriptionId` in every returned row. Reject or quarantine rows outside the intended scope.
+3. Distinguish `zero_matches` from `incomplete_enumeration`. Only a successfully decoded response with an upstream count of zero, zero parsed candidates, zero unparsed rows, and validated scope may render "No matching resources." Any decode failure, schema mismatch, missing scope identity, or unparsed row makes the lane partial or failed and produces a Run Quality finding.
+4. Apply the same rule to cost evidence. MCP `isError` is terminal before domain parsing. A zero total is valid only when the payload is internally consistent and no available adjacent-window or dimensional evidence contradicts it. A missing or malformed numeric total/dimension or unrecognized successful shape emits `zero_unresolved`; a contradictory zero emits `cost_zero_suspected`; and a structured response whose returned subscription set does not exactly match the request emits `cost_scope_mismatch`, even when its total is non-zero. All three quarantine states stay partial, are excluded from reasoning, coverage, trend, and savings arithmetic, and are never admitted to or replayed from the [local billing cache](local-billing-cache.md).
+
+This is not a new Azure dependency and does not broaden the read-only allowlist. It makes the existing AMG-MCP boundary explicit at the point where wire evidence becomes product evidence.
+
+**Evaluation.** The orphan-IP dataset gains a wire-shaped MCP envelope, exact expected candidate IDs, an attached and a NAT-associated exclusion, effective-subscription assertions, and a maximum unparsed-row expectation of zero. Separate cost fixtures cover a legitimate zero and a structurally successful but contradictory zero. Candidate recall, scope confinement, and parse completeness are deterministic expectations; LLM rubrics do not substitute for them.
+
+**Roadmap slot.** Phase 3 correctness gate, before additional waste lanes or service evidence packs.
+
+### Live addition B — Bounded service evidence packs
+
+**Observation.** The live portfolio investigation found that material cost and actionable evidence did not align one-to-one with structural waste predicates. PostgreSQL required SKU, age, high availability, and CPU, memory, I/O, and connection distributions; AKS required node-pool configuration and per-pool metrics because a cool cluster average hid a hot pool; Log Analytics required table-level ingestion attribution; Cosmos DB required provisioned-throughput and collection lifecycle; ACR required pull, push, storage, age, and replication context. A static top-resource query can name these services but cannot defend an optimization recommendation about them.
+
+**Design.** Extend `cost_summary` with a bounded two-pass flow:
+
+1. **Portfolio pass.** Discover visible scope, retrieve cost one subscription at a time, disclose intended versus cost-covered scope, rank material services, and gather only the broad ARG summaries needed to choose a follow-up. This pass remains deterministic and can finish as a useful partial report when RBAC or throttling removes subscriptions.
+2. **Evidence-pack pass.** Select from an allowlisted registry of service packs using deterministic materiality and capability-availability rules. Each pack has a declared call budget, required and optional signals, supported resource types, metric definitions, time windows, dimensionality, minimum sample coverage, and a stop condition. A pack returns facts, hypotheses, lifecycle context, and data-quality findings through the existing evidence model. The reasoner never invents a follow-up outside that registry.
+
+The first packs, in implementation order:
+
+| Pack | Required evidence | Guardrail |
+|---|---|---|
+| PostgreSQL rightsizing | cost materiality; ARG SKU, HA, storage, age; 7/30-day hourly and full-window CPU, memory, I/O, connections; recent activity | require a mature observation window; preserve p95/max and recent-change context; no SKU recommendation from average CPU alone |
+| Log Analytics ingestion | workspace cost; billable ingestion by workspace, table, and day; DCR/diagnostic configuration where exposed | attribute ingestion before recommending retention or sampling; overlapping table names are a review signal, not proof of duplication |
+| AKS node-pool efficiency | cluster and pool size/SKU/autoscaler bounds; pool-level CPU and memory distributions; unschedulable and reliability signals | reason per pool, not from cluster average; `min == max` is a configuration fact, not automatic proof of excess |
+| Cosmos DB throughput | account and child collection throughput mode; RU, throttling, requests, data size, regions, age | isolated maximum RU does not justify expansion; near-zero test collections need a lifecycle window before cleanup framing |
+| ACR inactivity / replication | SKU, age, replication topology, 30/90-day pull, push, and storage activity | distinguish an unused registry from a low-traffic distribution or disaster-recovery registry |
+
+Every pack shares `lifecycle_context`: creation time and age, owner and purpose evidence, recent management activity, grace-period state, and prior-run persistence. Name prefixes and tags can supply ownership or purpose *hints*, never facts without corroboration. Where a required child-resource or configuration surface is absent from AMG-MCP — detailed Cosmos collection enumeration is the likely first case — the pack reports the capability gap and waits for an upstream addition rather than calling an Azure SDK.
+
+`pulse_check` is allowed as a candidate generator when its capability is present, but its severity thresholds and instantaneous peaks are not final recommendation evidence. The selected pack still retrieves raw metric definitions and time series, records aggregation and dimensionality, and validates the hypothesis against averages, p95 or an equivalent distribution, maxima, and sample coverage. This prevents boundary-condition warnings, brief spikes, and cluster-level aggregation from being promoted into rightsizing advice.
+
+**Roadmap slot.** Phase 3, after Evidence-contract correctness. PostgreSQL is the first vertical slice; the remaining packs follow in the order above unless live materiality changes the priority.
+
 ---
 
 ## Cross-cutting design choices
 
 ### Playbook structure: extend, not fork
 
-The `cost-summary` playbook is extended by the waste-detection lane group, prior-run-context evidence injection (§Gap 5), and freshness checks (§Gap 4). It does *not* fork into a separate `cost-summary-deep` analyzer. The reasons:
+The `cost-summary` playbook is extended by the waste-detection lane group, prior-run-context evidence injection (§Gap 5), freshness checks (§Gap 4), and the bounded service-pack pass. It does *not* fork into a separate `cost-summary-deep` analyzer. The reasons:
 
 - Keeping the analyzer surface stable means the [evaluation framework PRD](../prd/evaluation-framework.md) FR-13 ("dataset items versioned or stable enough for historical comparison") continues to apply across the Phase 3 expansion. Existing `cost-summary-001` and `cost-summary-002` dataset items remain valid; new fixtures get added for the new lanes.
 - The reasoner's contract is unchanged: facts → hypotheses → recommendations, with citations. New lane outputs are just new `EvidenceRecord`s; the reasoner already knows how to consume them. The §14 trace vocabulary gets new attribute names (listed below) but no structural change.
 - A forked analyzer would double the eval surface and the Langfuse prompt surface (planner + reasoner per fork), which would conflict with [Phase 2 design](phase-2.md) §"Prompt management" and §"Dataset migration".
 
 The orchestrator now has a `WasteDetectionExecutor` (parallel to `EvidenceExecutor`) that runs the enabled waste lanes after the cost-summary evidence plan completes. This keeps the lane code separable from the playbook code, so the lane registry can evolve without touching playbook structure.
+
+The service-pack pass follows the same separation. A deterministic selector receives normalized portfolio cost evidence, effective coverage, and the discovered read-only catalog; it returns zero or more named packs within a run-level call budget. Each pack constructs an ordinary `EvidencePlan` or delegates to a bounded executor and emits ordinary evidence and data-quality records. This keeps replay and evaluation possible: fixture datasets know which pack was selected and which finite calls it is permitted to make. The LLM planner does not control the number of iterations and cannot turn `cost_summary` into an unbounded exploratory loop.
 
 ### Reasoner prompt changes
 
@@ -181,6 +229,8 @@ The `reasoner.v2.md` prompt carries the first set of additions:
 2. A rule that recommendations must compute and emit a stable `recommendation_signature` (§Gap 5).
 3. A rule that estimated weekly impact must be rendered as a range with a cited rate source, never as a single dollar figure (§Gap 3).
 4. A rule that lane outputs should usually produce one lane-scoped recommendation rather than one recommendation per candidate.
+5. A rule that service-pack recommendations cite configuration, utilization distribution, lifecycle context, and effective scope together; absence of any required signal downgrades the output to a hypothesis or data-quality finding.
+6. A rule that `pulse_check`, name patterns, low averages, and isolated maxima are candidate hints rather than sufficient optimization evidence.
 
 Cluster, ownership-hint, and prior-run continuity rules remain future additions to v2. Once Phase 2's Langfuse prompt-management work lands, the same prompt should be promoted as a Langfuse-managed `reasoner` version rather than only as an in-repo file.
 
@@ -200,6 +250,12 @@ Following the [phase-1 design](phase-1.md) §14 convention, new span attributes 
 | `prior_run.matched_count` | span attribute | how many prior runs the store returned |
 | `recommendation.signature` | score / attribute | deterministic ID, written as a Langfuse string attribute |
 | `recommendation.continuity_weeks` | score | how many consecutive runs this signature has appeared in |
+| `evidence_contract.unparsed_count` | span attribute | decoded rows that could not be admitted as domain evidence |
+| `evidence_contract.scope_validated` | span attribute | whether returned subscription identity matched intended scope |
+| `cost.zero_suspected` | event | a structurally successful all-zero response contradicted available evidence |
+| `service_pack.name` | span attribute | bounded service evidence pack selected for the second pass |
+| `service_pack.call_budget` / `.calls_used` | span attribute | declared and consumed read-only call budget |
+| `service_pack.sample_coverage` | span attribute | usable metric samples versus the pack's requested observation window |
 
 The names join the existing §14 vocabulary; they do not invent fresh attribute namespaces.
 
@@ -213,6 +269,12 @@ Evaluation items:
 - `cost-summary-waste-cluster-001` — single subscription with 24 orphan IPs sharing a `test-rig-*` prefix. Expects: cluster recommendation emitted, individual recommendations *not* emitted.
 - `cost-summary-freshness-001` — cost-analysis evidence whose `time_window.end_utc` is within 24h of `now`. Expects: `freshness_partial_window` finding present, hypotheses caveated.
 - `cost-summary-continuity-001` — a pair of fixture runs where the second run's `RunHistoryStore` returns the first run's output. Expects: "UNCHANGED week 2" markers on candidates that persist; "RECURRING" marker on a cluster that re-appears after being absent.
+- `cost-summary-waste-wire-001` — a wire-shaped ARG response in MCP text-content blocks with in-scope, attached, NAT-associated, and out-of-scope rows. Expects exact candidate IDs, zero unparsed rows, and no scope leakage.
+- `cost-summary-zero-suspected-001` — a full-month zero that contradicts adjacent non-zero cost evidence. Expects `cost_zero_suspected`, partial outcome, no trend or savings arithmetic, and no cache write.
+- `cost-summary-missing-total-001` — a successful MCP envelope whose cost payload has no numeric aggregate. Expects `zero_unresolved`, partial outcome, no zero-cost fact, and no cache write.
+- `cost-summary-scope-mismatch-001` — a structurally successful, non-zero cost response whose returned subscription set differs from the request. Expects `cost_scope_mismatch`, partial outcome, no cost fact, and no cache write or replay.
+- `cost-summary-zero-valid-001` — an internally consistent zero for a genuinely empty scope. Expects a valid zero without a false warning.
+- `cost-summary-postgres-rightsizing-001` — mature and newly created PostgreSQL resources with similar low averages but different age and peak behavior. Expects a review candidate only for the mature, distribution-supported case.
 
 New rubrics:
 
@@ -221,6 +283,8 @@ New rubrics:
 - `rubric.continuity_grounded` — **pending**; every "UNCHANGED week N" or "RECURRING" marker cites the prior-run-context evidence that justifies it.
 
 These get the same booleans-plus-detail treatment as the Phase 1 rubrics ([phase-2 design](phase-2.md) §"Score taxonomy"). They flow through the Phase 2 score-publishing pipeline without further plumbing.
+
+Dataset expectations also become stricter. A waste-lane item names exact expected and excluded resource IDs, intended subscriptions, maximum unparsed rows, and whether a no-match claim is permitted. A service-pack item names the expected selected pack, required capability set, maximum call count, minimum sample coverage, and candidates that must be withheld because lifecycle or telemetry evidence is incomplete. These deterministic checks close a gap that prose-quality rubrics cannot: a well-written report must still fail evaluation when it silently missed the resources it was meant to enumerate.
 
 ---
 
@@ -247,16 +311,22 @@ Each step independently shippable, in roadmap-phase order.
 
 **Phase 3 — Optimization breadth (depends on Phase 2.5).**
 
-5. **`pricing/azure-rate-card.json` seed.** **Shipped for the first waste lane.** Captured rates include source and capture metadata; coverage will expand as new lanes need SKUs.
-6. **`WasteDetectionExecutor` + lane registry.** **Partially shipped.** The executor and registry are live with one enabled lane: `orphan_public_ip`. Additional lanes remain planned.
-7. **Naming-pattern clusterer.** Pending. Deterministic, pure function. Tests should cover the cluster examples from the reference report.
-8. **Estimated-impact calculator.** **Shipped for lane candidates.** Joins candidates to the in-repo rate card, produces range estimates, and marks rate-unavailable candidates explicitly.
-9. **Freshness check.** **Partially shipped.** The `freshness_partial_window` heuristic is implemented and deduplicated; `freshness_uniform_drop` remains pending.
-10. **`reasoner.v2.md` prompt.** **Partially shipped.** v2 adds waste-candidate and calibrated-impact rules and is loaded for `cost_summary`. Cluster, ownership-hint, and prior-run continuity rules remain follow-up work.
-11. **Markdown report extensions.** **Partially shipped.** The "Waste Candidates" section and estimated-impact rendering are live. Continuity markers on recommendations remain pending.
-12. **New eval items + rubrics.** **Partially shipped.** `eval/phase-3-waste.json` covers the orphan-IP lane, and two rubrics are active: `waste_classification_grounding` and `estimated_impact_calibrated`. Continuity eval items and `continuity_grounded` remain pending.
+5. **Live evidence-contract gate.** **Shipped across both deterministic playbooks, the first waste lane, and the cost-zero path.** Cost Analysis and Activity Log use their discovered camelCase/ARM-scope wire parameters; ARG calls use supported query-only parameters; KQL carries subscription/resource-group/type scope while `intended_scope_subset` preserves provenance outside the wire call; and the first lane validates returned subscription plus ARM identity before admission.
+6. **Fail-closed rendering and deterministic contract evaluation.** **Shipped for `orphan_public_ip`.** A lane renders "No matching resources" only after a complete, scope-validated enumeration. Wire-shaped fixtures bind expectations to the named lane, require it to complete without failure, assert exact candidate IDs/count, and require zero unparsed/rejected rows.
+7. **Cost evidence quarantine.** **Shipped as the first conservative state machine.** `valid_zero`, `cost_zero_suspected`, `zero_unresolved`, and `cost_scope_mismatch` are distinguished; contradictory zeros, malformed/missing numeric aggregates or dimensions, unrecognized successful payloads, and structured returned-scope mismatches become partial, quarantined provenance, are withheld from reasoning and coverage, and cannot enter or be replayed from the cache. See [local billing cache](local-billing-cache.md) §"Cache admission gate".
+8. **`pricing/azure-rate-card.json` seed.** **Shipped for the first waste lane.** Captured rates include source and capture metadata; coverage will expand as new lanes need SKUs.
+9. **`WasteDetectionExecutor` + lane registry.** **Partially shipped.** The executor and registry are live with one enabled lane, `orphan_public_ip`, and its live-contract completion bar is satisfied. Additional lanes remain planned.
+10. **Bounded portfolio-to-service selector.** Pending. Rank material services from normalized cost evidence, select only allowlisted packs within a declared call budget, and preserve intended-versus-effective coverage.
+11. **PostgreSQL rightsizing pack.** Pending, first service vertical slice. Ship a seeded fixture and an eval item covering age, recent changes, averages, p95/max, and missing-metric withholding.
+12. **Log Analytics, AKS, Cosmos DB, and ACR packs.** Pending, in that order. Each admits only after its required evidence and false-positive guardrails are fixture-replayable; missing AMG-MCP surfaces become visible capability gaps.
+13. **Naming-pattern clusterer.** Pending. Deterministic, pure function. Tests should cover the cluster examples from the reference report.
+14. **Estimated-impact calculator.** **Shipped for lane candidates.** Joins candidates to the in-repo rate card, produces range estimates, and marks rate-unavailable candidates explicitly.
+15. **Freshness check.** **Partially shipped.** The `freshness_partial_window` heuristic and suspicious-zero quarantine are implemented; `freshness_uniform_drop` remains pending.
+16. **`reasoner.v2.md` prompt.** **Partially shipped.** v2 adds structural review-candidate, false-positive, calibrated-impact, and quarantined-zero rules and is loaded for `cost_summary`. Service-pack, cluster, ownership-hint, and prior-run continuity rules remain follow-up work.
+17. **Markdown report extensions.** **Partially shipped.** The "Waste Candidates" section, fail-closed no-match rendering, partial lower-bound labeling, and estimated-impact rendering are live. Service-pack disclosure and continuity markers remain pending.
+18. **New eval items + rubrics.** **Partially shipped.** `eval/phase-3-waste.json` covers the orphan-IP lane, and two rubrics are active: `waste_classification_grounding` and `estimated_impact_calibrated`. Wire-contract, valid/suspicious-zero, service-pack, and continuity eval items remain pending.
 
-Steps 1–4 are independently useful: with just the Run Quality section and the `RunHistoryStore` interface in place, the operator can already start seeing run-to-run continuity metadata in `run.json` even before the reasoner uses it. Steps 5–12 progressively realize the user-visible Phase 3 features.
+Steps 1–4 are independently useful: with just the Run Quality section and the `RunHistoryStore` interface in place, the operator can already start seeing run-to-run continuity metadata in `run.json` even before the reasoner uses it. Steps 5–7 are a correctness gate, not optional hardening. Steps 8–18 progressively realize the user-visible Phase 3 features after that gate holds.
 
 ---
 
@@ -264,12 +334,17 @@ Steps 1–4 are independently useful: with just the Run Quality section and the 
 
 The design is satisfied when each item below holds:
 
-- **A `pixiu analyze cost-summary` run against a scope with known orphan resources produces a "Waste Candidates" section listing them, with per-candidate evidence citations.**
+- **A `pixiu analyze cost-summary` run against a scope with known orphan resources produces a "Waste Candidates" section listing the exact in-scope candidates, with per-candidate evidence citations.** The same fixture delivered through a real MCP text envelope produces the same candidates as its decoded parser fixture.
+- **A lane with any undecoded content, missing effective-scope identity, or unparsed row never renders "No matching resources."** It renders partial or failed status and a Run Quality finding instead.
+- **An unsupported out-of-band ARG scope parameter is never relied upon.** Scope is present in supported parameters or query text, projected into returned rows, and validated before the rows become evidence.
+- **A contradictory all-zero cost payload emits `cost_zero_suspected`; a missing or malformed aggregate/dimension emits `zero_unresolved`; and an exact returned-subscription mismatch emits `cost_scope_mismatch`. All three make the cost outcome partial, are excluded from reasoning, coverage, trend and savings arithmetic, and are neither cached nor replayed from a legacy cell.** A separate genuinely empty fixture remains a valid zero.
 - **Each waste candidate carries an estimated weekly impact as a range or "rate unavailable for SKU X" — never a silent zero.**
 - **A run executed twice against the same scope injects prior-run context on the second run.** User-visible "UNCHANGED week 2" markers sourced from that context remain a Phase 3 follow-up.
 - **A run whose cost-analysis time window ends within the lag threshold produces a deduplicated `freshness_partial_window` data-quality finding, and the reasoner caveats hypotheses that depend on the affected totals.**
 - **The Run Quality section appears at the top of every report, even when nothing of note happened ("0 throttles, all capabilities returned evidence").**
 - **A waste-cluster fixture (24 names sharing a prefix) produces one cluster recommendation, not 24 individual recommendations.** Pending until the clusterer lands.
+- **The PostgreSQL service-pack fixture selects one bounded pack, stays within its declared call budget, recommends review only for the mature candidate with distribution-supported underuse, and withholds a SKU recommendation for a new or peak-constrained server.** Pending until the first service pack lands.
+- **`pulse_check` findings alone never satisfy a utilization recommendation's evidence requirements.** Raw metrics, aggregation, dimensions, and sample coverage must be present in the same evidence chain.
 - **The active Phase 3 rubrics fire on eval items; their booleans + detail strings are filterable in Langfuse when score publishing is enabled.** `continuity_grounded` lands with continuity markers.
 - **Phase 1 and Phase 2 invariants continue to hold.** No new direct Azure SDK call; no destructive recommendation language; every fact still cites evidence; offline `pixiu eval --mock-model` still passes.
 
@@ -291,7 +366,9 @@ The documents that ground every choice above:
 The source surface this design has added or still plans to change:
 
 - **Playbook / lanes.** Lane code lives under `src/playbooks/waste-lanes/`; the current registry enables `orphan_public_ip`.
+- **MCP content decoder.** `src/mcp/content.ts` is the shared boundary for decoding JSON carried in MCP content blocks; lane-specific parsers should not reimplement the envelope.
 - **Waste executor.** `src/run/waste-detection.ts` runs enabled lanes and computes estimated impact.
+- **Service packs.** A bounded pack registry and PostgreSQL implementation are planned under the playbook/run boundary; exact paths should follow the existing `EvidencePlan` and executor separation rather than introducing a second analyzer.
 - **Freshness.** `src/run/freshness.ts` emits deduplicated `freshness_partial_window` findings; `freshness_uniform_drop` remains pending.
 - **Run-history.** `src/history/store.ts` (interface) + `src/history/filesystem-store.ts` (default impl) are shipped.
 - **Reasoner.** `prompts/reasoner.v2.md` is loaded for `cost_summary`; output schema includes `recommendation_signature`. Continuity-marker prompt rules remain pending.

@@ -14,6 +14,8 @@ import {
   reasoning,
   metadata,
 } from './fixtures.js';
+import type { WasteLaneResult } from '../../src/playbooks/waste-lanes/types.js';
+import { rollUpLaneTotal } from '../../src/pricing/impact.js';
 
 describe('renderHtmlReport', () => {
   it('produces a well-formed, self-contained HTML5 document', () => {
@@ -40,6 +42,28 @@ describe('renderHtmlReport', () => {
     };
     const html = renderHtmlReport({ scope: summaryScope, reasoning, evidence, metadata });
     expect(html).toContain('<title>Az-Pixiu Cost Summary Report</title>');
+  });
+
+  it('renders an incomplete zero-candidate waste lane without claiming no matches', () => {
+    const lane: WasteLaneResult = {
+      lane: 'orphan_public_ip',
+      title: 'Unassociated public IP review candidates',
+      predicate_text:
+        "where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration) | where isnull(properties.natGateway)",
+      source_capability: 'az_pixiu_waste_lane',
+      candidates: [],
+      lane_total: rollUpLaneTotal([]),
+      rate_source_captured_at: '2026-05-23',
+      unparsed_row_count: 1,
+      rejected_row_count: 1,
+      failed: false,
+    };
+    const html = renderHtmlReport({ scope, reasoning, evidence, metadata, wasteLanes: [lane] });
+
+    expect(html).toContain('Enumeration incomplete');
+    expect(html).toContain('cannot make an authoritative &quot;No matching resources&quot; claim');
+    expect(html).not.toContain('No matching resources in scope.');
+    expect(html).toContain('rejected because subscription scope or the ARM resource ID was inconsistent');
   });
 
   it('emits one <article class="rec rec--high"> per HIGH-priority recommendation with the id matching recommendation_id', () => {

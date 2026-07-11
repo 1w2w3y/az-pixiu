@@ -10,9 +10,11 @@
  * Idempotent — overwrites the same files each time.
  */
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parameterDigest, shortDigest } from '../src/mcp/digest.js';
+import { activityLogParameters, costAnalysisParameters } from '../src/mcp/amg-parameters.js';
+import { scopeResourceGraphQuery } from '../src/mcp/resource-graph.js';
 
 const FIXTURE_ROOT = 'fixtures/cost-surprise-001';
 
@@ -91,12 +93,10 @@ const calls: FixtureCall[] = [
   },
   {
     capability: 'amgmcp_cost_analysis',
-    parameters: {
-      subscription_id: SUBSCRIPTION_ID,
-      time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
-      granularity: 'Daily',
-      grouping: ['ServiceName'],
-    },
+    parameters: costAnalysisParameters(SUBSCRIPTION_ID, {
+      start: '2026-05-01T00:00:00Z',
+      end: '2026-05-08T00:00:00Z',
+    }),
     response: {
       content: {
         columns: [
@@ -119,12 +119,10 @@ const calls: FixtureCall[] = [
   },
   {
     capability: 'amgmcp_cost_analysis',
-    parameters: {
-      subscription_id: SUBSCRIPTION_ID,
-      time_window: { start: '2026-04-24T00:00:00Z', end: '2026-05-01T00:00:00Z' },
-      granularity: 'Daily',
-      grouping: ['ServiceName'],
-    },
+    parameters: costAnalysisParameters(SUBSCRIPTION_ID, {
+      start: '2026-04-24T00:00:00Z',
+      end: '2026-05-01T00:00:00Z',
+    }),
     response: {
       content: {
         columns: [
@@ -151,9 +149,10 @@ const calls: FixtureCall[] = [
   {
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: [SUBSCRIPTION_ID],
-      query:
+      query: scopeResourceGraphQuery(
         "Resources | where type =~ 'Microsoft.DBforPostgreSQL/flexibleServers' | project id, name, location, sku, tags",
+        [SUBSCRIPTION_ID],
+      ),
     },
     response: {
       content: {
@@ -181,9 +180,50 @@ const calls: FixtureCall[] = [
   {
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: [SUBSCRIPTION_ID],
-      query:
-        "Resources | where resourceGroup =~ 'rg-db-prod' | project id, name, type, location, sku, tags",
+      query: scopeResourceGraphQuery(
+        'Resources | project id, name, type, location, sku, tags',
+        [SUBSCRIPTION_ID],
+        {
+          resourceGroupNames: ['rg-db-prod'],
+          resourceTypes: ['Microsoft.DBforPostgreSQL/flexibleServers'],
+        },
+      ),
+    },
+    response: {
+      content: {
+        data: [
+          {
+            id: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-db-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-prod-1`,
+            name: 'db-prod-1',
+            type: 'Microsoft.DBforPostgreSQL/flexibleServers',
+            location: 'eastus',
+            sku: { name: 'Standard_D4ds_v5', tier: 'GeneralPurpose' },
+            tags: { owner: 'platform-team', env: 'prod' },
+          },
+          {
+            id: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-db-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-prod-2`,
+            name: 'db-prod-2',
+            type: 'Microsoft.DBforPostgreSQL/flexibleServers',
+            location: 'eastus',
+            sku: { name: 'Standard_D8ds_v5', tier: 'GeneralPurpose' },
+            tags: {},
+          },
+        ],
+        count: 2,
+      },
+      isError: false,
+    },
+  },
+  // RG-only deterministic playbook variant used by orchestrator tests
+  // that do not apply a resource-type filter.
+  {
+    capability: 'amgmcp_query_resource_graph',
+    parameters: {
+      query: scopeResourceGraphQuery(
+        'Resources | project id, name, type, location, sku, tags',
+        [SUBSCRIPTION_ID],
+        { resourceGroupNames: ['rg-db-prod'] },
+      ),
     },
     response: {
       content: {
@@ -212,11 +252,11 @@ const calls: FixtureCall[] = [
   },
   {
     capability: 'amgmcp_query_activity_log',
-    parameters: {
-      subscription_id: SUBSCRIPTION_ID,
-      time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
-      resource_group_name: 'rg-db-prod',
-    },
+    parameters: activityLogParameters(
+      SUBSCRIPTION_ID,
+      { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
+      'rg-db-prod',
+    ),
     response: {
       content: {
         entries: [
@@ -237,6 +277,7 @@ const calls: FixtureCall[] = [
 
 async function main(): Promise<void> {
   const responsesDir = join(FIXTURE_ROOT, 'responses');
+  await rm(responsesDir, { recursive: true, force: true });
   await mkdir(responsesDir, { recursive: true });
 
   await writeFile(join(FIXTURE_ROOT, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');

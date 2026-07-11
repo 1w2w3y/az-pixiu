@@ -6,6 +6,7 @@ import {
 } from '../failure/taxonomy.js';
 import type { MCPClient, DiscoveredCatalog } from '../mcp/client.js';
 import { inspectToolCallResultForFailure } from './payload-failure.js';
+import { extractText } from '../mcp/content.js';
 import type { EvidencePlan, EvidenceRequest, ToolCallResult } from '../schemas/index.js';
 import {
   failureCategoryToOutcome,
@@ -215,6 +216,13 @@ export class EvidenceExecutor {
         attempt += 1;
         try {
           const result = await this.client.invoke(request.capability, request.parameters);
+          if (result.isError === true) {
+            const detail = extractText(result).trim();
+            throw new Error(
+              `MCP ToolCallResult set isError=true for ${request.capability}` +
+                (detail.length > 0 ? `: ${detail.slice(0, 500)}` : ''),
+            );
+          }
           // Embedded-failure detection (design/embedded-rate-limit.md).
           // For capabilities with a registered inspector (today only
           // `amgmcp_cost_analysis`), look inside the otherwise-
@@ -289,7 +297,8 @@ export class EvidenceExecutor {
         transport_summary.push({
           logical_request_id,
           capability: request.capability,
-          scope_subset: scopeSubsetFromParameters(request.parameters),
+          scope_subset:
+            request.intended_scope_subset ?? scopeSubsetFromParameters(request.parameters),
           parameters_digest,
           attempt_count: attempt,
           retry_count: attempt - 1,
@@ -309,7 +318,8 @@ export class EvidenceExecutor {
         transport_summary.push({
           logical_request_id,
           capability: request.capability,
-          scope_subset: scopeSubsetFromParameters(request.parameters),
+          scope_subset:
+            request.intended_scope_subset ?? scopeSubsetFromParameters(request.parameters),
           parameters_digest,
           attempt_count: attempt,
           retry_count: attempt - 1,

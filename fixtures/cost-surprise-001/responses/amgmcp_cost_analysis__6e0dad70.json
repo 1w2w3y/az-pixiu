@@ -1,0 +1,68 @@
+{
+  "capability": "amgmcp_cost_analysis",
+  "parameters": {
+    "subscriptionId": "11111111-1111-1111-1111-111111111111",
+    "startTime": "2026-05-01T00:00:00Z",
+    "endTime": "2026-05-08T00:00:00Z"
+  },
+  "parameters_digest": "6e0dad7092914d18e350969a158c2d781bc52d5227b3526fa693682646e43649",
+  "response": {
+    "content": {
+      "columns": [
+        {
+          "name": "UsageDate",
+          "type": "string"
+        },
+        {
+          "name": "ServiceName",
+          "type": "string"
+        },
+        {
+          "name": "Cost",
+          "type": "decimal"
+        },
+        {
+          "name": "Currency",
+          "type": "string"
+        }
+      ],
+      "rows": [
+        [
+          "2026-05-01",
+          "Virtual Machines",
+          145.32,
+          "USD"
+        ],
+        [
+          "2026-05-01",
+          "Azure Database for PostgreSQL flexible servers",
+          89.21,
+          "USD"
+        ],
+        [
+          "2026-05-01",
+          "App Service",
+          62.14,
+          "USD"
+        ],
+        [
+          "2026-05-04",
+          "Azure Database for PostgreSQL flexible servers",
+          158.87,
+          "USD"
+        ],
+        [
+          "2026-05-07",
+          "Azure Database for PostgreSQL flexible servers",
+          162.04,
+          "USD"
+        ]
+      ],
+      "total": {
+        "cost": 617.58,
+        "currency": "USD"
+      }
+    },
+    "isError": false
+  }
+}

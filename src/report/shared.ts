@@ -84,6 +84,9 @@ export const RUN_QUALITY_CATEGORIES: ReadonlySet<DataQualityFinding['category']>
   'stale_data',
   'freshness_partial_window',
   'freshness_uniform_drop',
+  'cost_zero_suspected',
+  'zero_unresolved',
+  'cost_scope_mismatch',
   // Phase 3 — billing-access pre-flight probe excludes a candidate
   // before the analysis runs; the finding belongs in Run Quality
   // because it describes the operational state of subscription
@@ -260,7 +263,7 @@ export function summarizeCostEvidence(
 ): CostSummary | undefined {
   // Includes wire cost evidence and cache-served cost evidence
   // (`az_pixiu_billing_cache`) so the Cost Summary Overview still renders
-  // when a finalized month was served from the local billing cache.
+  // when a usage-stable month was served from the local billing cache.
   const costRecords = evidence.filter((e) => COST_EVIDENCE_CAPABILITIES.has(e.source_capability));
   if (costRecords.length === 0) return undefined;
 

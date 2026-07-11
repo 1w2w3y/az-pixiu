@@ -1,4 +1,9 @@
-import { ScopeSchema, type AnalysisType, type Scope } from '../schemas/index.js';
+import {
+  ScopeFilterValuesSchema,
+  ScopeSchema,
+  type AnalysisType,
+  type Scope,
+} from '../schemas/index.js';
 
 /**
  * Convert CLI arguments to a validated Scope (design §4.2). All time
@@ -47,6 +52,12 @@ export function intakeScope(input: ScopeIntakeInput): Scope {
   }
 
   const analysisType: AnalysisType = input.analysis_type ?? 'cost_surprise';
+  const resourceGroupNames = input.resource_group_names
+    ? ScopeFilterValuesSchema.parse(input.resource_group_names)
+    : undefined;
+  const resourceTypeFilter = input.resource_type_filter
+    ? ScopeFilterValuesSchema.parse(input.resource_type_filter)
+    : undefined;
 
   const now = input.now ?? new Date();
   const day = 86_400_000;
@@ -85,8 +96,8 @@ export function intakeScope(input: ScopeIntakeInput): Scope {
           .join(', ')}`;
 
   const rgPart =
-    input.resource_group_names && input.resource_group_names.length > 0
-      ? `${input.resource_group_names.length} resource group(s): ${input.resource_group_names.join(', ')}`
+    resourceGroupNames && resourceGroupNames.length > 0
+      ? `${resourceGroupNames.length} resource group(s): ${resourceGroupNames.join(', ')}`
       : 'no resource-group filter';
 
   const baselinePart = baselineWindow
@@ -112,11 +123,11 @@ export function intakeScope(input: ScopeIntakeInput): Scope {
 
   return ScopeSchema.parse({
     subscription_ids: input.subscription_ids,
-    resource_group_names: input.resource_group_names,
+    resource_group_names: resourceGroupNames,
     time_window: { start: startIso, end: endIso },
     ...(baselineWindow ? { baseline_window: baselineWindow } : {}),
     analysis_type: analysisType,
-    resource_type_filter: input.resource_type_filter,
+    resource_type_filter: resourceTypeFilter,
     user_context: input.user_context,
     effective_scope_summary: summary,
     ...(filteredNames && Object.keys(filteredNames).length > 0

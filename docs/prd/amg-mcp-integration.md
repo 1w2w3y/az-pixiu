@@ -10,7 +10,7 @@ The integration should make Az-Pixiu a strong example of an MCP-based operationa
 
 ## Current Implementation Status
 
-The current integration uses `MCPTransport` with live and fixture implementations, discovers capabilities before analysis, asserts required read-only capabilities, and rejects mutating capabilities from the allowed operating set. Evidence retrieval records per-request transport summaries, classifies user-meaningful failures, retries `rate_limit` and `timeout` categories with capped backoff and pacing, and detects payload-embedded `amgmcp_cost_analysis` 429/auth/authz/schema-mismatch failures before they can become false-success evidence. Fixture replay remains the default path for tests and evals.
+The current integration uses `MCPTransport` with live and fixture implementations, discovers capabilities before analysis, asserts required read-only capabilities, and rejects mutating capabilities from the allowed operating set. Deterministic playbooks use the discovered live parameter contracts for Cost Analysis, Activity Log, and ARG rather than internal scope field names. Evidence retrieval records per-request transport summaries, classifies user-meaningful failures, retries `rate_limit` and `timeout` categories with capped backoff and pacing, and detects protocol-level or payload-embedded `amgmcp_cost_analysis` 429/auth/authz/schema-mismatch failures before they can become false-success evidence. Fixture replay remains the default path for tests and evals, with response digests keyed from the same live parameter shapes.
 
 ## Problem Statement
 
@@ -81,7 +81,7 @@ AMG-MCP adds a new capability or changes a schema version. Az-Pixiu detects the 
 - FR-12: The integration must support replay or fixture-based testing of representative MCP responses for evaluations and regression analysis.
 - FR-13: Capability gaps that block useful analysis must be captured as product feedback, not buried in generic errors.
 - FR-14: The integration must be compatible with future non-FinOps Azure operational agents that need the same protocol boundary.
-- FR-15: The integration should support a local finalized-month billing cache for Cost Management evidence retrieved through AMG-MCP. Cached records must preserve AMG-MCP provenance, must not be written for current or not-yet-stabilized billing periods, and must be disclosed as cached evidence in reports and traces.
+- FR-15: The integration should support a local usage-stable full-month billing cache for Cost Management evidence retrieved through AMG-MCP. Cached records must preserve AMG-MCP provenance, must not be written for current or not-yet-stabilized billing periods, must not be described as invoice-finalized without an invoice-backed signal, and must be disclosed as cached evidence in reports and traces.
 
 ## Non-Functional Requirements
 
@@ -91,7 +91,7 @@ AMG-MCP adds a new capability or changes a schema version. Az-Pixiu detects the 
 - Compatibility: The integration should tolerate additive server capabilities and clearly report incompatible changes.
 - Performance: The agent should minimize unnecessary data retrieval and communicate when broad scopes may produce long-running analysis.
 - Back-pressure awareness: AMG-MCP and the Azure APIs it fronts apply their own rate limits — for example, the Cost Management QPU budget and the ARM token bucket throttling documented in the server's built-in scanner. The agent should plan query patterns that respect these limits, such as serializing across subscriptions where the budget is uncertain, batching metric queries when the underlying tool supports it, and scoping scans deliberately, rather than fanning out blindly and relying on retries to recover.
-- Cache correctness: Local billing-cache reads must be limited to finalized, full-month periods and must never cause the agent to present recent or partial Cost Management data as finalized.
+- Cache correctness: Local billing-cache reads must be limited to usage-stable full-month periods and must never cause the agent to present recent, partial, or merely usage-stable Cost Management data as invoice-finalized.
 - Privacy: Retrieved evidence should be minimized to what the analysis requires and handled according to the local-first product posture.
 - Testability: Representative MCP responses should be usable in datasets and evaluation fixtures without requiring live Azure access.
 - Legibility: Operators should understand what Azure data categories are accessed for each analysis type.
@@ -126,7 +126,7 @@ AMG-MCP adds a new capability or changes a schema version. Az-Pixiu detects the 
 - Support operator-facing data access summaries before each run.
 - Develop sanitized fixture libraries based on realistic MCP responses for public evaluations.
 - Explore shared governance patterns for MCP tool allowlists in enterprise deployments.
-- Add the finalized-month billing cache described in [local billing cache](../design/local-billing-cache.md), including cache warm/status CLI workflows and report disclosure.
+- Complete the usage-stable-month billing cache described in [local billing cache](../design/local-billing-cache.md), including cache warm/status CLI workflows and detailed report disclosure.
 
 ## Success Criteria
 

@@ -1,0 +1,40 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('11111111-1111-1111-1111-111111111111') | where resourceGroup in~ ('rg-db-prod') | project id, name, type, location, sku, tags"
+  },
+  "parameters_digest": "b7a4799e01c0d1bbba618d174a722c7060e18b4147fd06d062b61f7addbc7eec",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-db-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-prod-1",
+          "name": "db-prod-1",
+          "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+          "location": "eastus",
+          "sku": {
+            "name": "Standard_D4ds_v5",
+            "tier": "GeneralPurpose"
+          },
+          "tags": {
+            "owner": "platform-team",
+            "env": "prod"
+          }
+        },
+        {
+          "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-db-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-prod-2",
+          "name": "db-prod-2",
+          "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+          "location": "eastus",
+          "sku": {
+            "name": "Standard_D8ds_v5",
+            "tier": "GeneralPurpose"
+          },
+          "tags": {}
+        }
+      ],
+      "count": 2
+    },
+    "isError": false
+  }
+}

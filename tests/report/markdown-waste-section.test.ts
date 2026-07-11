@@ -159,6 +159,7 @@ function makeLane(): WasteLaneResult {
     lane_total: rollUpLaneTotal(estimates),
     rate_source_captured_at: '2026-05-23',
     unparsed_row_count: 0,
+    rejected_row_count: 0,
     failed: false,
   };
 }
@@ -274,6 +275,43 @@ describe('renderMarkdownReport — Waste Candidates section', () => {
     expect(md).toContain('Azure Resource Graph (ARG) row(s) were unparseable');
   });
 
+  it('never turns an incomplete zero-candidate enumeration into a no-match claim', () => {
+    const incompleteLane: WasteLaneResult = {
+      ...makeLane(),
+      candidates: [],
+      lane_total: rollUpLaneTotal([]),
+      unparsed_row_count: 1,
+      rejected_row_count: 1,
+    };
+    const md = renderMarkdownReport({
+      scope,
+      reasoning,
+      evidence,
+      metadata,
+      wasteLanes: [incompleteLane],
+    });
+
+    expect(md).toContain('Enumeration incomplete');
+    expect(md).toContain('cannot make an authoritative "No matching resources" claim');
+    expect(md).not.toContain('_No matching resources in scope._');
+    expect(md).toContain('rejected because subscription scope or the ARM resource ID was inconsistent');
+  });
+
+  it('labels totals from a partially parsed lane as a lower bound', () => {
+    const partialLane: WasteLaneResult = {
+      ...makeLane(),
+      rejected_row_count: 1,
+    };
+    const md = renderMarkdownReport({
+      scope,
+      reasoning,
+      evidence,
+      metadata,
+      wasteLanes: [partialLane],
+    });
+    expect(md).toContain('**Partial lane lower bound (2 priced candidate(s)):**');
+  });
+
   it('renders a failed lane with the predicate cited but no candidates enumerated', () => {
     const failedLane: WasteLaneResult = {
       lane: 'orphan_public_ip',
@@ -284,6 +322,7 @@ describe('renderMarkdownReport — Waste Candidates section', () => {
       lane_total: rollUpLaneTotal([]),
       rate_source_captured_at: '2026-05-23',
       unparsed_row_count: 0,
+      rejected_row_count: 0,
       failed: true,
     };
     const md = renderMarkdownReport({

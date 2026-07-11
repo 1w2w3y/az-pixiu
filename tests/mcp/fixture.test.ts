@@ -302,10 +302,9 @@ describe('FixtureMCPTransport — against the seeded cost-surprise-001 fixture',
   it('returns the recorded cost_analysis response for the analysis window', async () => {
     const t = new FixtureMCPTransport({ fixturePath: FIXTURE_PATH });
     const result = await t.invoke('amgmcp_cost_analysis', {
-      subscription_id: '11111111-1111-1111-1111-111111111111',
-      time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
-      granularity: 'Daily',
-      grouping: ['ServiceName'],
+      subscriptionId: '11111111-1111-1111-1111-111111111111',
+      startTime: '2026-05-01T00:00:00Z',
+      endTime: '2026-05-08T00:00:00Z',
     });
     expect(result.isError).toBe(false);
     const content = result.content as { total: { cost: number } };
@@ -315,10 +314,9 @@ describe('FixtureMCPTransport — against the seeded cost-surprise-001 fixture',
   it('returns a different recorded cost_analysis response for the baseline window', async () => {
     const t = new FixtureMCPTransport({ fixturePath: FIXTURE_PATH });
     const result = await t.invoke('amgmcp_cost_analysis', {
-      subscription_id: '11111111-1111-1111-1111-111111111111',
-      time_window: { start: '2026-04-24T00:00:00Z', end: '2026-05-01T00:00:00Z' },
-      granularity: 'Daily',
-      grouping: ['ServiceName'],
+      subscriptionId: '11111111-1111-1111-1111-111111111111',
+      startTime: '2026-04-24T00:00:00Z',
+      endTime: '2026-05-01T00:00:00Z',
     });
     expect(result.isError).toBe(false);
   });

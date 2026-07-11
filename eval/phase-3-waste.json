@@ -4,7 +4,7 @@
     {
       "id": "cost-summary-waste-001",
       "fixture_id": "waste-orphan-ip",
-      "description": "Phase 3 PR 1 — orphan public-IP waste lane vertical slice. Two subscriptions; the lane surfaces 5 orphan public IPs (one of which has an unknown SKU — Basic/Dynamic — so its weekly impact renders 'rate unavailable'). The fixture's logical inventory also includes one attached IP that the ARG predicate already filters out, so the lane must not surface it. Cost-summary playbook output is intentionally quiet — the focus of this item is the lane output, not the cost narrative.",
+      "description": "Phase 3 orphan_public_ip live-contract slice. A real MCP text-content envelope carries 5 exact in-scope unassociated public-IP review candidates; attached and NAT-associated logical resources are excluded by the ARG predicate, and a Basic/Dynamic candidate preserves the rate-unavailable case. The focus is deterministic candidate recall, scope confinement, and parse completeness rather than the cost narrative.",
       "scope": {
         "subscription_ids": [
           "77777777-7777-7777-7777-777777777777",
@@ -25,7 +25,18 @@
           "amgmcp_query_resource_graph",
           "amgmcp_query_activity_log",
           "az_pixiu_waste_lane"
-        ]
+        ],
+        "expected_waste_lane": "orphan_public_ip",
+        "expected_candidate_ids": [
+          "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-inbound-001",
+          "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-inbound-002",
+          "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-outbound-001",
+          "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-legacy-prototype/providers/Microsoft.Network/publicIPAddresses/pip-legacy-basic-001",
+          "/subscriptions/88888888-8888-8888-8888-888888888888/resourceGroups/rg-sandbox-app/providers/Microsoft.Network/publicIPAddresses/pip-sandbox-bastion-stale"
+        ],
+        "expected_candidate_count": 5,
+        "max_unparsed_rows": 0,
+        "max_rejected_rows": 0
       }
     }
   ]

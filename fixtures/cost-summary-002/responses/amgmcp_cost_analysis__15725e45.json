@@ -1,0 +1,41 @@
+{
+  "capability": "amgmcp_cost_analysis",
+  "parameters": {
+    "subscriptionId": "66666666-6666-6666-6666-666666666666",
+    "startTime": "2026-05-12T00:00:00Z",
+    "endTime": "2026-05-19T00:00:00Z"
+  },
+  "parameters_digest": "15725e456405e58620a50410be7729226fe6ee4588b0d73eb56da60c58c48afa",
+  "response": {
+    "content": {
+      "periodStart": "2026-05-12",
+      "periodEnd": "2026-05-19",
+      "subscriptions": [
+        {
+          "subscriptionId": "66666666-6666-6666-6666-666666666666",
+          "totalCost": 0.01,
+          "currency": "USD",
+          "byService": [
+            {
+              "name": "Microsoft Defender for Cloud",
+              "cost": 0.01
+            }
+          ],
+          "byRegion": [
+            {
+              "name": "global",
+              "cost": 0.01
+            }
+          ],
+          "byResourceType": [
+            {
+              "name": "microsoft.security/pricings",
+              "cost": 0.01
+            }
+          ]
+        }
+      ]
+    },
+    "isError": false
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('44444444-4444-4444-4444-444444444444', '55555555-5555-5555-5555-555555555555', '66666666-6666-6666-6666-666666666666') | where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration) | where isnull(properties.natGateway) | project id, name, subscriptionId, resourceGroup, location, skuName=tostring(sku.name), allocationMethod=tostring(properties.publicIPAllocationMethod), ipConfigurationId=tostring(properties.ipConfiguration.id), natGatewayId=tostring(properties.natGateway.id)"
+  },
+  "parameters_digest": "fef568b316c4d51f5f3cdae492e972c440dd1c9ceaf99dd83787a7becf8a5c86",
+  "response": {
+    "content": {
+      "data": [],
+      "count": 0
+    },
+    "isError": false
+  }
+}

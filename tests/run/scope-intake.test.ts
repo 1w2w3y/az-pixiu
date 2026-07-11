@@ -29,6 +29,17 @@ describe('intakeScope — happy path', () => {
     expect(scope.effective_scope_summary).toContain('rg-a');
   });
 
+  it('normalizes scope filters before building the effective-scope summary', () => {
+    const scope = intakeScope({
+      subscription_ids: [subId],
+      resource_group_names: ['  rg-a  ', 'RG-A', 'rg-b'],
+      resource_type_filter: [' Microsoft.Network/publicIPAddresses '],
+    });
+    expect(scope.resource_group_names).toEqual(['rg-a', 'rg-b']);
+    expect(scope.resource_type_filter).toEqual(['Microsoft.Network/publicIPAddresses']);
+    expect(scope.effective_scope_summary).toContain('2 resource group(s): rg-a, rg-b');
+  });
+
   it('respects explicit time windows', () => {
     const scope = intakeScope({
       subscription_ids: [subId],
@@ -105,6 +116,15 @@ describe('intakeScope — validation', () => {
         time_window_start: '2026-05-08T00:00:00Z',
         time_window_end: '2026-05-01T00:00:00Z',
       }),
+    ).toThrow();
+  });
+
+  it('throws on whitespace-only scope filters', () => {
+    expect(() =>
+      intakeScope({ subscription_ids: [subId], resource_group_names: ['   '] }),
+    ).toThrow();
+    expect(() =>
+      intakeScope({ subscription_ids: [subId], resource_type_filter: ['\n'] }),
     ).toThrow();
   });
 });

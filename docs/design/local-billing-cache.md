@@ -1,10 +1,10 @@
 # Local Billing Cache
 
-> **Status (2026-06):** Proposal. This design plans a local, file-backed cache for historical Azure Cost Management data retrieved through AMG-MCP. It is not implemented yet. The goal is to reduce repeated calls to the rate-limited `amgmcp_cost_analysis` capability while preserving Az-Pixiu's local-first, read-only, AMG-MCP-bounded evidence contract.
+> **Status (2026-07):** Partially implemented. The cache schema and key, maturity policy, file store, configuration, read-through/write-through `CostEvidenceProvider`, cache-aware coverage and run-outcome handling, synthetic cache-served transport entries, cost-overview visibility, and suspicious-zero admission gate have shipped. A zero is written only after a `valid_zero` assessment; contradictory zeros, missing numeric totals, and unrecognized successful payloads remain live partial evidence, while legacy zero cells without an assessment marker are refreshed rather than served. Detailed cache provenance and counters in reports and `run.json`, the standalone warm/status/refresh/prune CLI, invoice-close-horizon re-verification, and several storage hardening items remain planned.
 
 ## Context
 
-Az-Pixiu currently retrieves cost evidence during each analysis run through AMG-MCP, usually by calling `amgmcp_cost_analysis` once per subscription and time window. That keeps the Azure boundary clean, but it has an operational cost: Azure Cost Management is strongly rate-limited, and repeated local analyses can spend scarce query budget re-reading historical billing periods that have already stabilized.
+Az-Pixiu retrieves cost evidence through AMG-MCP, usually by calling `amgmcp_cost_analysis` once per subscription and time window. The shipped provider can now serve or write an eligible usage-stable full month from local cache; current, partial, multi-subscription, missed, and explicitly uncached requests still call AMG-MCP. That keeps the Azure boundary clean, but historical misses still have an operational cost: Azure Cost Management is strongly rate-limited, and repeated local analyses can spend scarce query budget re-reading billing periods that have already stabilized.
 
 The existing `BillingProbeCache` (`src/run/billing-probe-cache.ts`) solves a different problem. It remembers whether a subscription appears to have Cost Management read access, so auto-discovery can avoid repeatedly probing subscriptions that are likely to fail. It does not cache billing data itself. This design adds a separate cache for the historical billing evidence the agent reasons over, and deliberately reuses the probe cache's filesystem patterns — atomic temp-file-then-rename writes and degrade-to-miss on any filesystem failure — wherever they already work. It diverges on two points. First, the root: the billing cache defaults under `runs/billing-cache/` (alongside run output, gitignored), whereas the probe cache lives under `~/.az-pixiu`; either can be relocated. Second, partitioning: the probe cache partitions by endpoint *and* operator identity because a probe *outcome* (does this caller have Cost Management access?) is identity-dependent — but the billing *data* a cell holds is a property of the endpoint + subscription + month, not of the reader, so the billing cache partitions by **endpoint only** (see [cache layout](#cache-layout)).
 
@@ -35,7 +35,7 @@ One scope assumption is load-bearing and stated up front: this design assumes a 
 
 ## What the cached total means
 
-A cached `month_total` is a gross, pre-credit, pre-tax, **estimated** Cost Management amount. It is the same number Cost Management would show for the period, with the same exclusions: credits, refunds, rebates, tax, and support are out of model, and figures remain estimated until an invoice is generated. It is suitable for trend and anomaly analysis and for framing cost movement, but it is not the operator's net spend. A recommendation that frames a cached number as "money saved" can materially overstate net impact for any subscription funded by Azure credits, a MACC commitment, or sponsorship. Scope & Data Sources echoes this caveat whenever an impact figure derives from a cached total.
+A cached `month_total` is a gross, pre-credit, pre-tax, **estimated** Cost Management amount. It is the same number Cost Management would show for the period, with the same exclusions: credits, refunds, rebates, tax, and support are out of model, and figures remain estimated until an invoice is generated. It is suitable for trend and anomaly analysis and for framing cost movement, but it is not the operator's net spend. A recommendation that frames a cached number as "money saved" can materially overstate net impact for any subscription funded by Azure credits, a MACC commitment, or sponsorship. The planned cache-specific Scope & Data Sources block will echo this caveat whenever an impact figure derives from a cached total.
 
 The cost **view** also has to be explicit, because the same subscription-month returns different totals under different views:
 
@@ -44,7 +44,7 @@ The cost **view** also has to be explicit, because the same subscription-month r
 
 The two views produce different `month_total`s, and per-dimension breakdowns under the amortized view do **not** sum to `month_total`, because unused-commitment cost is not attributable to any resource, region, or resource group. The cache therefore stores the residual explicitly (an `unattributed` bucket) and the coverage check carries a reconciliation flag rather than assuming the dimensions tie out.
 
-For optimization and waste framing the natural default is `AmortizedCost` (effective per-resource cost); for raw daily-shape anomaly detection `cost_surprise` may prefer `ActualCost`. The first implementation picks one default (`amortized`), records it in `maturity.cost_view`, surfaces it in Scope & Data Sources, and folds it into the cache key so the two views never collide. Amortized totals for a past month are not permanently stable — a later reservation purchase, exchange, or refund re-spreads amortization onto already-stabilized months — so amortized files carry a shorter re-verification horizon than actual-cost files.
+For optimization and waste framing the natural default is `AmortizedCost` (effective per-resource cost); for raw daily-shape anomaly detection `cost_surprise` may prefer `ActualCost`. The first implementation picks one default (`amortized`), records it in `maturity.cost_view`, and folds it into the cache key so the two views never collide. Explicit Scope & Data Sources disclosure remains part of the planned report-metadata slice. Amortized totals for a past month are not permanently stable — a later reservation purchase, exchange, or refund re-spreads amortization onto already-stabilized months — so amortized files carry a shorter re-verification horizon than actual-cost files.
 
 ## Maturity policy
 
@@ -89,7 +89,7 @@ export function evaluateMaturity(
 ): MaturityDecision;
 ```
 
-This replaces the original "immutable forever once past the 5th" rule with a refresh posture: read freely once `usage_stable`, but re-verify the trailing few months (the invoice-close horizon) on the next warm or status run, then stop. A `--force-refresh` option still lets an operator replace a stabilized period explicitly when they believe Azure posted late adjustments. Live analyses for recent periods are unaffected; those results are not written to the cache at all, or are recorded only as transient run artifacts under `runs/`.
+The target policy replaces the original "immutable forever once past the 5th" rule with a refresh posture: read freely once `usage_stable`, but re-verify the trailing few months (the invoice-close horizon) on a future warm or status run, then stop. That maintenance CLI is not shipped yet; today an operator must delete the relevant local cache cell to force a refresh. The planned refresh command uses `--force`. Live analyses for recent periods are unaffected; those results are not written to the cache at all, or are recorded only as transient run artifacts under `runs/`.
 
 The default `stabilization_offset_days = 5` should be configurable, but the first implementation keeps it conservative and computes it from the period end, not from a civil date.
 
@@ -232,7 +232,7 @@ Required dimensions:
 
 - `subscription_total`: total cost per subscription per month.
 - `daily_total`: total cost per day within the month.
-- `service`: monthly and, where the source provides it, daily cost by service name. (The agent today requests `grouping: ['ServiceName']` at daily granularity, so service is the one dimension with reliable daily rows.)
+- `service`: monthly and, where the source provides it, daily cost by service name. The current live wire schema does not accept a grouping parameter; service and daily detail are therefore admitted only when the returned Cost Analysis payload actually carries `byService` or dated tabular rows.
 - `region`: monthly cost by Azure region; daily marked `not_available_in_source`.
 - `resource_type`: monthly cost by resource type; daily marked `not_available_in_source`.
 
@@ -344,19 +344,28 @@ Default warm behavior:
 2. Compute cacheable periods using the maturity policy and the injected clock.
 3. Skip cells already present and valid unless `--force` is passed.
 4. Query AMG-MCP one subscription-month at a time, through `EvidenceExecutor`, with the existing retry / backoff and pacing substrate.
-5. Apply the finalization gate (below) before writing anything other than `not_mature`.
+5. Apply the cache admission gate (below) before writing anything other than `not_mature`.
 6. Write each cell atomically: temp file first, then rename, then best-effort manifest update.
-7. Print a concise summary: cells written, cache hits, skipped-not-mature, skipped-existing, skipped-not-finalized, failures by category.
+7. Print a concise summary: cells written, cache hits, skipped-not-mature, skipped-existing, skipped-not-admitted, failures by category.
 
 The warmer uses low concurrency by default, ideally one live Cost Management call at a time. The point is to move query cost into an intentional maintenance command, not to create a faster rate-limit storm.
 
-### Finalization gate (rejecting throttled and partial responses)
+### Cache admission gate (rejecting throttled and partial responses)
 
 `amgmcp_cost_analysis` returns Cost Management throttling and RBAC failures as an HTTP 200-OK whose payload carries `subscriptions[*].error` text — which is exactly why `inspectToolCallResultForFailure` / the cost-analysis inspector exist in `src/evidence/payload-failure.ts`. Because a warmed cell is written as effectively durable (read by default until a forced refresh), a warmer that trusts `isError: false` would persist a throttled zero-cost or partially-covered response as authoritative billing data, and every later analysis would silently read it.
 
 The warm path closes this by routing real serialized calls through `EvidenceExecutor` rather than the concurrent, observability-only `probeBillingAccess`. The executor is already sequential, applies `DEFAULT_RETRY_POLICY` with `computeBackoffMs`, paces per capability after a 429, and throws `EmbeddedPayloadFailure` so an embedded 429 flows through the same retry and transport-summary accounting as a wire 429. The warmer reuses the probe's parameter shape and classification helpers, not its worker pool, and mirrors `WasteDetectionExecutor`'s delegation structure (including the `executorOverrides` sleep/jitter seam so tests stay fast).
 
-Before writing `maturity.status` as anything other than `not_mature`, the warmer runs `inspectToolCallResultForFailure('amgmcp_cost_analysis', result)` and the wrapped-error checks (`isWrappedError` / `classifyWrappedError`). On any `rate_limit`, `auth`, `authz_gap`, or `schema_mismatch` for a subscription — or a suspicious all-zero total — that subscription-month is not written: it is recorded as skipped-not-finalized, counted in the warm summary, and left uncached so a later warm retries it live. A test asserts that a throttled 200-OK response is never written as a stabilized cell, sibling to the force-refresh test.
+Before writing `maturity.status` as anything other than `not_mature`, the shipped write-through provider treats MCP `isError: true` as terminal, then runs `inspectToolCallResultForFailure('amgmcp_cost_analysis', result)` and the wrapped-error checks (`isWrappedError` / `classifyWrappedError`); the planned warmer must use the same boundary. Decoding happens through the shared MCP content-envelope boundary before admission is considered; an undecoded text block is not a zero-row cost payload. On any `rate_limit`, `auth`, `authz_gap`, or `schema_mismatch` for a subscription, that subscription-month is not written and remains uncached so a later run retries it live. Detailed skipped-not-admitted counters belong to the planned maintenance/report slice.
+
+Zero and missing totals require a separate rule because zero is a valid cost result for a genuinely empty scope, while an absent aggregate must never be interpreted as zero. The provider computes a `ZeroCostAssessment` from every decoded cost payload and available comparison context:
+
+- `valid_zero` — requested and returned scope match exactly, every required total and dimension is finite and internally consistent, no embedded error or unparsed content exists, no available adjacent-window evidence contradicts the zero, and the current conservative implementation has corroborating subscription inventory with zero resources. It can be cached once the ordinary maturity gate passes.
+- `cost_zero_suspected` — the total is zero but the payload contains non-zero dimensional rows, an adjacent comparable period for the same subscription has material cost, or another cost record in the same response contradicts the claimed zero. It is never cached.
+- `zero_unresolved` — the response is internally zero but comparison or empty-inventory evidence is insufficient to establish a valid zero, or the successful payload omits a finite numeric total / dimensions or does not match a recognized cost shape. The first implementation treats this conservatively as live partial evidence and does not cache it; a later run retries it live.
+- `cost_scope_mismatch` — the structured response's returned subscription set does not exactly equal the requested set, including missing, extra, or duplicate subscription identities. This applies to non-zero as well as zero responses. It is never cached or used as cost evidence.
+
+ARG inventory can raise suspicion and trigger re-query, but inventory alone does not prove billable spend. A stopped or free resource can legitimately coexist with zero cost. Conversely, an adjacent non-zero month is a contradiction signal, not permission to invent a replacement total. `cost_zero_suspected`, `zero_unresolved`, and `cost_scope_mismatch` produce data-quality findings, make the affected cost window partial, and are excluded from reasoning, coverage, trend, savings, and impact arithmetic. The same quarantine applies when the numeric aggregate is absent; no fallback manufactures zero or substitutes a prior month's dollars. Cache reads replay the same admission checks against retained raw evidence, so legacy or contradictory cells cannot bypass the write-side gate.
 
 ## Analysis workflow
 
@@ -374,29 +383,24 @@ Responsibilities:
 
 Provenance on a cache-served record follows the established synthetic-source convention. `source_capability` is `az_pixiu_billing_cache`, alongside `az_pixiu_waste_lane` and `az_pixiu_run_history` (see `src/schemas/common.ts`, `src/run/prior-run-evidence.ts`). This is **not** an MCP wire capability and must not be added to the read-only allowlist or required-capabilities set, which only gate `MCPClient.invoke` and the planner; it will not trip `isMutatingCapabilityName`. `data_freshness` on a cache-served record is set so that usage-stable cached months are exempt from the recent-window posting-lag caveat, consistent with excluding the cache capability from the freshness capability set (below).
 
-Report behavior:
+Planned detailed report behavior:
 
 - Scope & Data Sources lists cached billing evidence separately from live AMG-MCP evidence, and names the cost view, currency mode, covered subscription-months, maturity status, retrieval timestamp, and any missing dimensions or charge classes.
 - Run Quality shows cache hits, cache misses, live cost calls avoided, live cost calls made, and skipped-not-mature months.
 - Executive Summary does not hide when a recommendation is based on cached usage-stable billing data.
 
-The cache is **on by default** for `cost_summary` runs. `--no-billing-cache` opts a single run out and `billing_cache.enabled: false` disables it persistently; `--billing-cache` force-enables it when config disabled it (the flag pair matches the existing `--probe-billing` / `--no-probe-billing` convention). Default-on is low blast-radius: only a single-subscription request whose window is exactly one finalized full month is cache-eligible, so recent, partial, or multi-subscription windows still go live unchanged. Two known limitations apply while default-on: the stored `cost_view` is operator-asserted from config rather than read back from the wire call, and the invoice-close-horizon re-verification is not yet implemented, so a cached month is served until a `--force-refresh` (or manual deletion) rather than auto-revalidated.
+The cache is **on by default** for `cost_summary` runs. `--no-billing-cache` opts a single run out and `billing_cache.enabled: false` disables it persistently; `--billing-cache` force-enables it when config disabled it (the flag pair matches the existing `--probe-billing` / `--no-probe-billing` convention). Default-on is low blast-radius: only a single-subscription request whose window is exactly one usage-stable full month is cache-eligible, so recent, partial, or multi-subscription windows still go live unchanged. Two known limitations apply while default-on: the stored `cost_view` is operator-asserted from config rather than read back from the wire call, and invoice-close-horizon re-verification is not yet implemented. Today a cached month is served until its cell is manually deleted; the planned maintenance CLI will provide an explicit forced refresh.
 
 ### Making cached cost evidence visible to coverage and run-outcome
 
-Cost-aware logic is gated on a hardcoded two-element set `{ amgmcp_cost_analysis, cost_analysis }` that is duplicated in three places: `computeCostCoverage` (`src/report/coverage.ts`), `checkFreshness` (`src/run/freshness.ts`), and `classifyCostRetrievalOutcome` (`src/run/orchestrator.ts`). With `source_capability = 'az_pixiu_billing_cache'`, cached cost evidence is silently excluded from every one of them: coverage skips the record so `covered_ids` stays empty, and the SUCCESS / PARTIAL / FAILED banner computes zero coverage — so a cache-only run that *fully answered* the question would render as a failed, zero-coverage run. This is the single most consequential code-versus-doc mismatch, and an implementer must address all three sites.
+This integration is shipped. Cost capabilities are defined centrally in `src/run/cost-capabilities.ts`: cache-served `az_pixiu_billing_cache` evidence counts toward cost coverage and run-outcome classification, while freshness deliberately remains limited to live Cost Management capabilities. Usage-stable cached months therefore answer the cost question without acquiring a false recent-window posting-lag warning.
 
-The fix is deliberate and asymmetric:
-
-- Extract one shared, exported `COST_CAPABILITIES` set so the three sites cannot drift, and add `az_pixiu_billing_cache` to the **coverage** and **run-outcome classification** sets so cached evidence counts toward `covered_ids` and toward a successful outcome.
-- Do **not** add it to the **freshness** set. Usage-stable cached months must not be treated as subject to posting lag, or the natural "add it everywhere" change would re-introduce false freshness findings on stable months.
-
-There is a second gate. `classifyCostRetrievalOutcome` returns `not_applicable` when no cost-capability calls appear in `transport_summary`, and a successful cache-only run makes no wire calls at all. To keep the Run Quality banner honest, a cache hit should emit a synthetic `transport_summary` entry marked as cache-served (no wire attempt, success outcome). That single change lets the existing `rollupTransportSummary` and the outcome classifier produce both the banner and the "live cost calls avoided / made" counters from one path, rather than teaching the classifier to count evidence records separately.
+A cache hit also emits a synthetic successful `transport_summary` entry with no wire attempt. This prevents a fully cache-served run from falling into `not_applicable` or zero coverage simply because it made no live cost call. The current report can render the cache-backed Cost Summary Overview and capability visibility from that evidence. Dedicated cache hit/miss/avoided/made counters and a versioned `billing_cache` metadata block are still planned rather than inferred from generic transport rows.
 
 ## Freshness and correctness rules
 
 - Usage-stable means "retrieved after the configured stabilization window", not "financially audited invoice". The schema reserves `finalized` for a stronger, invoice-backed signal the first implementation rarely sets.
-- Any cached month can be manually refreshed, and the trailing few months inside the invoice-close horizon are re-verified on the next warm rather than trusted forever.
+- Any cached month can currently be refreshed by deleting its local cell. Automatic invoice-close-horizon re-verification and the maintenance refresh command remain planned.
 - The agent must never blend cached and live evidence without making the boundary visible in report metadata.
 - If AMG-MCP later exposes stronger billing-export semantics, this cache adds a new source version rather than changing the meaning of existing files.
 
@@ -468,6 +472,8 @@ Initial test surface:
 - Unit tests for cache-cell path derivation (the full composite key), atomic write/read, and the `0600`/`0700` modes (POSIX-only).
 - Unit tests for cache miss, corrupt file, schema mismatch, identity mismatch, digest mismatch, integrity mismatch, and force refresh.
 - A test that a throttled 200-OK `amgmcp_cost_analysis` response is never written as a stabilized cell, and that an interrupted write leaves no temp file visible to the reader.
+- Wire-shaped tests for `valid_zero`, `cost_zero_suspected`, `zero_unresolved`, and `cost_scope_mismatch`: the valid zero may be cached, while contradictory, wrong-scope, malformed-dimension, missing-total, `isError`, or unrecognized cost responses remain live partial evidence and produce no cache file.
+- A regression test in which a historical zero and an adjacent non-zero period are both structurally successful; the provider emits `cost_zero_suspected`, coverage does not claim the historical window is complete, and report arithmetic does not treat the drop as savings.
 - Integration test that warms a fixture-backed subscription-month, then runs `cost_summary` from cache with zero live `amgmcp_cost_analysis` calls — asserting `FixtureMCPTransport` records zero cost replays for the cache-only item.
 - Report tests that verify Run Quality and Scope & Data Sources disclose cache hits, cost view, and skipped recent months.
 
@@ -488,16 +494,16 @@ Possible new rubric:
 
 ## Implementation sequencing
 
-1. **Design, schema, and seams.** Add `BillingCacheRecord`, the composite `CacheCellKey`, and maturity-policy types under `src/billing-cache/`, with tests. In the same step, land the two cross-cutting seams the rest depends on: thread an injectable clock through `RunOptions` and the eval runner, and extract the shared `COST_CAPABILITIES` set so coverage, freshness, and run-outcome stop duplicating it.
-2. **Config block.** Declare `BillingCacheConfigSchema` and attach it to the strict `ConfigSchema`, with `config.sample.json` and docs, before any flag or command can reference it.
-3. **File store.** Implement `FileBillingCacheStore` with the composite-key path, `0600`/`0700` modes, endpoint partitioning (no credential mode in the path), atomic writes, manifest-as-index, corruption handling, and rebuild.
-4. **Warmer CLI.** Add `pixiu cache billing warm/status/refresh/prune`, routed through `EvidenceExecutor` with the finalization gate, fixture-backed tests first.
-5. **Cost evidence provider.** Add a read-through `CostEvidenceProvider` that satisfies full usage-stable months from cache at the `RawEvidence` level and returns an `ExecutionResult`-compatible shape.
-6. **Capability-set and outcome visibility.** Add `az_pixiu_billing_cache` to the coverage and run-outcome sets (not freshness), and emit the synthetic transport-summary entry for cache hits.
-7. **Analyzer integration.** Add `--billing-cache` / `--no-billing-cache` for analyze commands and wire the `CostEvidenceProvider` into the cost_summary path.
-8. **Report, run.json, and trace disclosure.** Add cache hit/miss/avoided summaries to Run Quality and Scope & Data Sources, persist the `billing_cache` metadata block in `run.json`, and register the trace constants.
-9. **Default-on for stable months.** Cache reads/writes default ON for cost_summary (usage-stable full months only), preserving `--no-billing-cache` and `billing_cache.enabled: false` as opt-outs.
-10. **Dimension expansion.** Add resource-group cost if AMG-MCP supports the grouping reliably; defer resource-id and cross-product dimensions until an analysis proves they are necessary.
+1. **Design, schema, and seams.** **Shipped.** `BillingCacheRecord`, the composite `CacheCellKey`, maturity-policy types, the injectable clock, and shared cost-capability definitions are in code with tests.
+2. **Config block.** **Shipped.** `BillingCacheConfigSchema` is attached to the strict `ConfigSchema` and documented in `config.sample.json`.
+3. **File store.** **Core shipped.** `FileBillingCacheStore` provides endpoint-partitioned composite-key cells, atomic writes, and manifest-backed lookup. Permission, reconciliation, and maintenance hardening remain follow-up work where the current implementation does not yet meet the full design.
+4. **Warmer CLI.** **Pending.** Add `pixiu cache billing warm/status/refresh/prune`, routed through `EvidenceExecutor` with the cache admission gate, fixture-backed tests first.
+5. **Cost evidence provider.** **Shipped with suspicious-zero hardening.** The read-through/write-through `CostEvidenceProvider` satisfies eligible full usage-stable months from cache at the `RawEvidence` level. `ZeroCostAssessment` gates zero and missing-total payloads before write, and reads reject legacy zero cells that lack the `valid_zero` marker or contradict it dimensionally.
+6. **Capability-set and outcome visibility.** **Shipped.** `az_pixiu_billing_cache` participates in coverage and run-outcome sets (not freshness), and cache hits emit synthetic transport-summary entries.
+7. **Analyzer integration.** **Shipped.** `--billing-cache` / `--no-billing-cache` control the `CostEvidenceProvider` in the `cost_summary` path.
+8. **Report, run.json, and trace disclosure.** **Pending in full.** Cache-backed evidence already appears in the Cost Summary Overview and capability set; dedicated hit/miss/avoided summaries, the `billing_cache` metadata block, and cache-specific trace constants remain to be added.
+9. **Default-on for stable months.** **Shipped.** Cache reads/writes default on for `cost_summary` usage-stable full months, preserving `--no-billing-cache` and `billing_cache.enabled: false` as opt-outs.
+10. **Dimension expansion.** **Pending.** Add resource-group cost if AMG-MCP supports the grouping reliably; defer resource-id and cross-product dimensions until an analysis proves they are necessary.
 
 ## Open questions
 
@@ -515,5 +521,6 @@ Possible new rubric:
 - The report clearly states that billing evidence came from local cached usage-stable data, names the cost view and the months covered, and distinguishes it from live AMG-MCP evidence and from recent periods intentionally left uncached.
 - Under a frozen clock, the warmer refuses to stabilize a period before `billing_period_end + stabilization_offset_days`, evaluated in UTC.
 - A throttled 200-OK response is never written as a stabilized cell.
+- A contradictory all-zero response, wrong returned subscription set, missing or malformed numeric aggregate/dimensions, MCP `isError`, or unrecognized successful cost payload is never written as a stabilized cell or replayed from a legacy cell, never treated as a savings event, and leaves a visible `cost_zero_suspected`, `zero_unresolved`, or `cost_scope_mismatch` finding. A fixture-proven genuine zero remains cacheable.
 - Missing resource-group / meter-category dimensions and excluded marketplace / credit / tax charge classes are visible as cache coverage gaps rather than silent omissions.
 - All cache-derived recommendations remain evidence-cited and read-only.

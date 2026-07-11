@@ -22,9 +22,11 @@
  * Idempotent — overwrites the same files each time.
  */
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parameterDigest, shortDigest } from '../src/mcp/digest.js';
+import { scopeResourceGraphQuery } from '../src/mcp/resource-graph.js';
+import { activityLogParameters, costAnalysisParameters } from '../src/mcp/amg-parameters.js';
 
 const FIXTURE_ROOT = 'fixtures/cost-summary-002';
 
@@ -350,41 +352,29 @@ const calls: FixtureCall[] = [
   // for cost_summary).
   {
     capability: 'amgmcp_cost_analysis',
-    parameters: {
-      subscription_id: SUB_PROD,
-      time_window: TIME_WINDOW,
-      granularity: 'Daily',
-      grouping: ['ServiceName'],
-    },
+    parameters: costAnalysisParameters(SUB_PROD, TIME_WINDOW),
     response: { content: COST_PROD, isError: false },
   },
   {
     capability: 'amgmcp_cost_analysis',
-    parameters: {
-      subscription_id: SUB_STAGING,
-      time_window: TIME_WINDOW,
-      granularity: 'Daily',
-      grouping: ['ServiceName'],
-    },
+    parameters: costAnalysisParameters(SUB_STAGING, TIME_WINDOW),
     response: { content: COST_STAGING, isError: false },
   },
   {
     capability: 'amgmcp_cost_analysis',
-    parameters: {
-      subscription_id: SUB_SANDBOX,
-      time_window: TIME_WINDOW,
-      granularity: 'Daily',
-      grouping: ['ServiceName'],
-    },
+    parameters: costAnalysisParameters(SUB_SANDBOX, TIME_WINDOW),
     response: { content: COST_SANDBOX, isError: false },
   },
 
-  // Resource-graph fan-out (subscription_ids list shared across calls).
+  // Resource-graph fan-out. The live capability has no subscription_ids
+  // argument, so effective scope is embedded in each KQL query.
   {
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: [...ALL_SUBS],
-      query: 'Resources | summarize count_=count() by type | order by count_ desc | take 15',
+      query: scopeResourceGraphQuery(
+        'Resources | summarize count_=count() by type | order by count_ desc | take 15',
+        ALL_SUBS,
+      ),
     },
     response: {
       content: { data: TOP_TYPES_ROWS, count: TOP_TYPES_ROWS.length },
@@ -394,9 +384,10 @@ const calls: FixtureCall[] = [
   {
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: [...ALL_SUBS],
-      query:
+      query: scopeResourceGraphQuery(
         'Resources | summarize count_=count() by type, location | order by count_ desc | take 15',
+        ALL_SUBS,
+      ),
     },
     response: {
       content: { data: TOP_TYPE_LOCATION_ROWS, count: TOP_TYPE_LOCATION_ROWS.length },
@@ -406,9 +397,10 @@ const calls: FixtureCall[] = [
   {
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: [...ALL_SUBS],
-      query:
+      query: scopeResourceGraphQuery(
         "Resources | extend owner = tostring(tags['owner']), environment = tostring(tags['environment']), cost_center = tostring(tags['cost-center']) | summarize total=count(), no_owner=countif(owner == ''), no_environment=countif(environment == ''), no_cost_center=countif(cost_center == '') by subscriptionId",
+        ALL_SUBS,
+      ),
     },
     response: {
       content: { data: TAG_COVERAGE_ROWS, count: TAG_COVERAGE_ROWS.length },
@@ -416,26 +408,39 @@ const calls: FixtureCall[] = [
     },
   },
 
+  // Clean-empty first waste lane, invoked separately by the orchestrator.
+  {
+    capability: 'amgmcp_query_resource_graph',
+    parameters: {
+      query: scopeResourceGraphQuery(
+        "Resources | where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration) | where isnull(properties.natGateway) | project id, name, subscriptionId, resourceGroup, location, skuName=tostring(sku.name), allocationMethod=tostring(properties.publicIPAllocationMethod), ipConfigurationId=tostring(properties.ipConfiguration.id), natGatewayId=tostring(properties.natGateway.id)",
+        ALL_SUBS,
+      ),
+    },
+    response: { content: { data: [], count: 0 }, isError: false },
+  },
+
   // Per-subscription activity log.
   {
     capability: 'amgmcp_query_activity_log',
-    parameters: { subscription_id: SUB_PROD, time_window: TIME_WINDOW },
+    parameters: activityLogParameters(SUB_PROD, TIME_WINDOW),
     response: { content: ACTIVITY_PROD, isError: false },
   },
   {
     capability: 'amgmcp_query_activity_log',
-    parameters: { subscription_id: SUB_STAGING, time_window: TIME_WINDOW },
+    parameters: activityLogParameters(SUB_STAGING, TIME_WINDOW),
     response: { content: ACTIVITY_STAGING, isError: false },
   },
   {
     capability: 'amgmcp_query_activity_log',
-    parameters: { subscription_id: SUB_SANDBOX, time_window: TIME_WINDOW },
+    parameters: activityLogParameters(SUB_SANDBOX, TIME_WINDOW),
     response: { content: ACTIVITY_SANDBOX, isError: false },
   },
 ];
 
 async function main(): Promise<void> {
   const responsesDir = join(FIXTURE_ROOT, 'responses');
+  await rm(responsesDir, { recursive: true, force: true });
   await mkdir(responsesDir, { recursive: true });
 
   await writeFile(join(FIXTURE_ROOT, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');

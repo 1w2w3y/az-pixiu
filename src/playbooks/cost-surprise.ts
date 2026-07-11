@@ -1,4 +1,6 @@
 import type { EvidencePlan, EvidenceRequest, Scope } from '../schemas/index.js';
+import { activityLogParameters, costAnalysisParameters } from '../mcp/amg-parameters.js';
+import { normalizeScopeValues, scopeResourceGraphQuery } from '../mcp/resource-graph.js';
 
 /**
  * Deterministic cost-surprise playbook (design §4.6).
@@ -6,7 +8,7 @@ import type { EvidencePlan, EvidenceRequest, Scope } from '../schemas/index.js';
  * Translates a validated Scope into a fixed EvidencePlan against the
  * Phase 1 capability set. Multi-subscription scopes fan out per
  * subscription for cost_analysis and activity_log (those tools take a
- * single subscription_id), but share resource_graph queries across the
+ * single subscription scope), but share resource_graph queries across the
  * whole subscription list.
  *
  * Used when the operator wants reproducibility (the same scope always
@@ -24,6 +26,8 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
     throw new Error('cost-surprise playbook requires baseline_window');
   }
   const baselineWindow = scope.baseline_window;
+  const intendedSubscriptions = normalizeScopeValues(scope.subscription_ids);
+  const intendedResourceTypes = normalizeScopeValues(scope.resource_type_filter ?? []);
 
   const requests: EvidenceRequest[] = [
     {
@@ -38,23 +42,13 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
   for (const subId of scope.subscription_ids) {
     requests.push({
       capability: 'amgmcp_cost_analysis',
-      parameters: {
-        subscription_id: subId,
-        time_window: scope.time_window,
-        granularity: 'Daily',
-        grouping: ['ServiceName'],
-      },
+      parameters: costAnalysisParameters(subId, scope.time_window),
       intent: 'cost_breakdown',
       expected_role: `analysis-window cost for ${subId}`,
     });
     requests.push({
       capability: 'amgmcp_cost_analysis',
-      parameters: {
-        subscription_id: subId,
-        time_window: baselineWindow,
-        granularity: 'Daily',
-        grouping: ['ServiceName'],
-      },
+      parameters: costAnalysisParameters(subId, baselineWindow),
       intent: 'cost_breakdown',
       expected_role: `baseline-window cost for ${subId}`,
     });
@@ -65,21 +59,30 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
       requests.push({
         capability: 'amgmcp_query_resource_graph',
         parameters: {
-          subscription_ids: scope.subscription_ids,
-          query: `Resources | where resourceGroup =~ '${rg}' | project id, name, type, location, sku, tags`,
+          query: scopeResourceGraphQuery(
+            'Resources | project id, name, type, location, sku, tags',
+            scope.subscription_ids,
+            { resourceGroupNames: [rg], resourceTypes: scope.resource_type_filter },
+          ),
         },
         intent: 'inventory',
+        intended_scope_subset: {
+          subscription_ids: intendedSubscriptions,
+          resource_group_names: [rg],
+          resource_ids: null,
+        },
         expected_role: `inventory of ${rg} across selected subscriptions`,
       });
       for (const subId of scope.subscription_ids) {
         requests.push({
           capability: 'amgmcp_query_activity_log',
-          parameters: {
-            subscription_id: subId,
-            time_window: scope.time_window,
-            resource_group_name: rg,
-          },
+          parameters: activityLogParameters(subId, scope.time_window, rg),
           intent: 'activity',
+          intended_scope_subset: {
+            subscription_ids: [subId],
+            resource_group_names: [rg],
+            resource_ids: null,
+          },
           expected_role: `management-plane changes in ${rg} for ${subId} during the analysis window`,
         });
       }
@@ -88,21 +91,30 @@ export function costSurprisePlaybook(scope: Scope): EvidencePlan {
     requests.push({
       capability: 'amgmcp_query_resource_graph',
       parameters: {
-        subscription_ids: scope.subscription_ids,
-        query:
+        query: scopeResourceGraphQuery(
           'Resources | summarize count_=count() by type | order by count_ desc | take 20',
+          scope.subscription_ids,
+          { resourceTypes: scope.resource_type_filter },
+        ),
       },
       intent: 'inventory',
+      intended_scope_subset: {
+        subscription_ids: intendedSubscriptions,
+        resource_group_names: null,
+        resource_ids: null,
+      },
       expected_role: 'top resource types across selected subscriptions',
     });
     for (const subId of scope.subscription_ids) {
       requests.push({
         capability: 'amgmcp_query_activity_log',
-        parameters: {
-          subscription_id: subId,
-          time_window: scope.time_window,
-        },
+        parameters: activityLogParameters(subId, scope.time_window),
         intent: 'activity',
+        intended_scope_subset: {
+          subscription_ids: [subId],
+          resource_group_names: null,
+          resource_ids: null,
+        },
         expected_role: `subscription-wide management-plane changes for ${subId} during the analysis window`,
       });
     }

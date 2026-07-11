@@ -54,7 +54,7 @@ describe('runAnalysis — fixture transport + mock model + playbook', () => {
           {
             fact_id: 'fact-1',
             statement: 'cost rose materially over the analysis window',
-            evidence_ids: ['ev-amgmcp_cost_analysis-67a86186'],
+            evidence_ids: ['ev-amgmcp_cost_analysis-6e0dad70'],
             scope_subset: {
               subscription_ids: [subId],
               resource_group_names: null,

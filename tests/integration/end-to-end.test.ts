@@ -18,6 +18,8 @@ import { initializeTracing, shutdownTracing } from '../../src/observability/setu
 import { withSpan, SpanNames, ATTR } from '../../src/observability/spans.js';
 import { scoreAll } from '../../src/evaluation/scoring.js';
 import { loadDataset, fixturePathFor } from '../../src/evaluation/dataset.js';
+import { activityLogParameters, costAnalysisParameters } from '../../src/mcp/amg-parameters.js';
+import { scopeResourceGraphQuery } from '../../src/mcp/resource-graph.js';
 import { loadPrompt } from '../../src/prompts/loader.js';
 import { modelConfigHash } from '../../src/model/client.js';
 
@@ -58,40 +60,27 @@ describe('Phase 1 end-to-end pipeline (against the seeded fixture, mocked LLM)',
         requests: [
           {
             capability: 'amgmcp_cost_analysis',
-            parameters: {
-              subscription_id: subId,
-              time_window: item.scope.time_window,
-              granularity: 'Daily',
-              grouping: ['ServiceName'],
-            },
+            parameters: costAnalysisParameters(subId, item.scope.time_window),
             intent: 'cost_breakdown',
           },
           {
             capability: 'amgmcp_cost_analysis',
-            parameters: {
-              subscription_id: subId,
-              time_window: item.scope.baseline_window,
-              granularity: 'Daily',
-              grouping: ['ServiceName'],
-            },
+            parameters: costAnalysisParameters(subId, item.scope.baseline_window!),
             intent: 'cost_breakdown',
           },
           {
             capability: 'amgmcp_query_resource_graph',
             parameters: {
-              subscription_ids: [subId],
-              query:
+              query: scopeResourceGraphQuery(
                 "Resources | where type =~ 'Microsoft.DBforPostgreSQL/flexibleServers' | project id, name, location, sku, tags",
+                [subId],
+              ),
             },
             intent: 'inventory',
           },
           {
             capability: 'amgmcp_query_activity_log',
-            parameters: {
-              subscription_id: subId,
-              time_window: item.scope.time_window,
-              resource_group_name: 'rg-db-prod',
-            },
+            parameters: activityLogParameters(subId, item.scope.time_window, 'rg-db-prod'),
             intent: 'activity',
           },
         ],

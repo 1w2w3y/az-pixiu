@@ -17,17 +17,27 @@ The capabilities fall into a small number of categories that map naturally onto 
 - Dashboards — Grafana dashboard search, inspection, and update.
 - Built-in checks — a multi-scenario operational health scanner that lives inside the MCP server.
 
+## Wire results and effective scope
+
+Every capability returns an MCP `ToolCallResult`, not its domain payload directly. A common successful wire shape is a `content` array containing one or more text blocks whose `text` field is JSON. Consumers must decode that envelope through the shared content decoder before interpreting arrays, counts, errors, or zero values. Tests that pass an already-decoded object are useful parser unit tests, but they do not replace at least one contract fixture with the real text-block shape.
+
+Tool schemas are also capability-specific. A client must not add an intuitive scope parameter and assume the server honored it. In the current live surface, `amgmcp_cost_analysis` accepts `subscriptionId/startTime/endTime`, `amgmcp_query_activity_log` accepts ARM `scope/startTime/endTime`, and `query_resource_graph` carries subscription restriction in KQL because its schema exposes no separate subscription-list parameter. ARG queries should project `subscriptionId`, and consumers validate every returned row against the intended scope. Reports disclose intended, visible, cost-covered, and effectively queried scope separately whenever they differ. Shared parameter builders and fixture digests use these exact wire names so offline green runs cannot remain self-consistent with a schema the live server rejects.
+
+A transport response therefore proves only that the tool returned. `ToolCallResult.isError` is checked before any domain parser, and an unflagged result still does not prove that the payload was completely decoded, that every row was parseable, that the effective scope matched the request, or that a zero means "none." Those properties are evidence-admission checks in Az-Pixiu. Decode failures, scope mismatches, and unparsed rows become Run Quality findings and prevent an authoritative no-match or complete-coverage claim.
+
 ## Cost
 
 `cost_analysis` returns spend broken down by service category, region, and resource type for a time window, scoped either to all accessible subscriptions or to a single subscription. It uses the Azure Cost Management API under the configured Azure Monitor data source.
 
 The single-subscription path is significantly more resilient to throttling than the fan-out path. Cost Management enforces a per-tenant QPU (query units) budget; a wide fan-out across many subscriptions can return 429s for every subscription rather than for some of them, even when each individual call would succeed. The agent should expect to serialize cost queries across subscriptions when the budget is uncertain.
 
-Historical full-month cost data is a strong candidate for local caching because it is expensive to re-read and changes slowly after the billing posting window closes. The planned [local billing cache](design/local-billing-cache.md) keeps this within the AMG-MCP boundary: cache files are populated from `cost_analysis` responses, stored only on the operator's disk, and used only for finalized months whose billing period has passed a conservative stabilization day.
+Historical full-month cost data is a strong candidate for local caching because it is expensive to re-read and changes slowly after the billing posting window closes. The partially shipped [local billing cache](design/local-billing-cache.md) keeps this within the AMG-MCP boundary: cache files are populated from `cost_analysis` responses, stored only on the operator's disk, and used only for usage-stable full months whose billing period has passed a conservative stabilization day.
+
+Cost Management can return a structurally successful all-zero window even when adjacent evidence makes that zero questionable, a successful envelope with no numeric aggregate, or a structured subscription set different from the one requested. Zero remains a valid value for a genuinely empty scope, so the agent does not replace it with a prior period or declare it false. It classifies the payload against returned scope, finite numeric dimensions, embedded errors, totals, and available comparable windows. `cost_zero_suspected`, `zero_unresolved`, and `cost_scope_mismatch` payloads are quarantined as partial evidence, excluded from reasoning, coverage, trend, and savings arithmetic, and never written to the local billing cache. The detailed state machine lives in [local billing cache](design/local-billing-cache.md) §"Cache admission gate".
 
 ## Inventory
 
-`query_resource_graph` accepts an Azure Resource Graph (KQL) query and returns the resources that match. This is the primary way for the agent to enumerate resources by type, location, configuration, tags, or any other property that ARG exposes.
+`query_resource_graph` accepts an Azure Resource Graph (KQL) query and returns the resources that match. This is the primary way for the agent to enumerate resources by type, location, configuration, tags, or any other property that ARG exposes. When the discovered schema has no separate subscription-list input, subscription scope must be expressed in the KQL itself and projected back into every row for effective-scope validation.
 
 `query_azure_subscriptions` lists the subscriptions reachable through the Grafana Azure Monitor data source. It is the natural starting point for any analysis that needs to know what scopes are visible before doing anything else.
 
@@ -76,7 +86,7 @@ These widen the agent's reach beyond Azure Monitor without requiring it to learn
 
 `pulse_check` is the most opinionated tool in the surface. It is an automated multi-scenario health scanner that runs inside the MCP server and returns a prioritized findings summary. The current scenario list covers PostgreSQL flexible servers (CPU, memory, storage, IOPS, bandwidth), Cosmos DB Mongo (RU, throttling, availability), AKS (node CPU, memory, disk, unschedulable pods, API server CPU), Virtual Machines (CPU, memory, data and OS disk IOPS and bandwidth), Azure SQL DB (CPU, memory, workers, sessions, storage, data I/O, log I/O, availability), App Service plans (CPU, memory), Redis (CPU, server load, memory), Logic Apps (failure rate), Storage account summaries, and Key Vault summaries.
 
-The existence of `pulse_check` has direct implications for the core agent. Several of Az-Pixiu's intended scenarios — particularly idle and underused resource review — overlap with what `pulse_check` already does. Whether the agent wraps it, composes around it, or duplicates its work is a product decision that the [AMG-MCP integration PRD](prd/amg-mcp-integration.md) records as an open question. The shape of the answer affects the agent's tool-orchestration design and the boundary between MCP-server logic and agent logic.
+The existence of `pulse_check` has direct implications for the core agent. Several of Az-Pixiu's intended scenarios — particularly idle and underused resource review — overlap with what `pulse_check` already does. For Phase 3, the boundary is conservative: `pulse_check` may generate or prioritize candidates, but its severity label and instantaneous peaks are not sufficient recommendation evidence. A selected service evidence pack confirms the hypothesis with raw metric definitions and time series, including aggregation, dimensions, observation window, distribution or p95-equivalent, maxima, and sample coverage. This composition keeps the server's useful screening logic without turning a threshold boundary, brief spike, or cluster-level average into unsupported rightsizing advice. The [AMG-MCP integration PRD](prd/amg-mcp-integration.md) retains the longer-term question of how much screening logic should live upstream.
 
 ## How these capabilities support the project's use cases
 
@@ -87,6 +97,8 @@ This mapping is a starting point, not an exhaustive plan. Each scenario in [use 
 - Preparing for a quarterly cost review. `cost_analysis` over the relevant comparison windows; `query_resource_graph` for ownership, tagging, and structural context; `query_activity_log` for major lifecycle events in the period.
 - Correlating cost with reliability and performance. `query_resource_metric` for the resources whose cost has shifted; `query_resource_log` for deeper telemetry where Log Analytics is configured; `query_resource_health` for availability transitions; `insights_get_failures` and `query_application_insights_trace` where Application Insights is in use.
 - Auditing tagging and ownership hygiene. `query_resource_graph` for tag coverage; `cost_analysis` to associate gaps with the spend they represent.
+
+For `cost_summary`, this mapping is planned as a bounded two-pass design rather than an open-ended loop. The first pass establishes visible and cost-covered scope plus service materiality. The second selects only allowlisted service evidence packs with declared call budgets. The planned priority is PostgreSQL rightsizing first, then Log Analytics ingestion attribution, AKS node-pool efficiency, Cosmos DB throughput and test-collection lifecycle, and ACR inactivity or over-replication. Each pack is defined in [cost-summary depth](design/cost-summary-depth.md) and remains constrained to the capabilities above; a missing child-resource surface becomes an explicit upstream gap rather than a direct Azure SDK workaround.
 
 ## What is not exposed
 

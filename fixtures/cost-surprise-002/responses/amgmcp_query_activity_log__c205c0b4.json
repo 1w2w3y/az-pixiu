@@ -1,0 +1,18 @@
+{
+  "capability": "amgmcp_query_activity_log",
+  "parameters": {
+    "scope": "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-locked-prod",
+    "startTime": "2026-05-01T00:00:00Z",
+    "endTime": "2026-05-08T00:00:00Z"
+  },
+  "parameters_digest": "c205c0b48eee5250cdb9ce85c113a70b336fc27c4190ae1b0c0532fa2db1cb09",
+  "response": {
+    "content": [
+      {
+        "type": "text",
+        "text": "An error occurred invoking amgmcp_query_activity_log: 403 access denied — the calling identity is missing Reader on /subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-locked-prod."
+      }
+    ],
+    "isError": false
+  }
+}

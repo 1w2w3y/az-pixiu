@@ -441,6 +441,24 @@ function wasteSection(lanes: readonly WasteLaneResult[]): string {
       );
       continue;
     }
+    const incomplete = lane.unparsed_row_count > 0 || lane.rejected_row_count > 0;
+    if (lane.candidates.length === 0 && incomplete) {
+      parts.push(
+        `<p class="note">Enumeration incomplete: this run cannot make an authoritative &quot;No matching resources&quot; claim. See Run Quality for the schema-mismatch finding.</p>`,
+        `<p><strong>Classification predicate:</strong> <code>${escapeHtml(lane.predicate_text)}</code></p>`,
+      );
+      if (lane.unparsed_row_count > 0) {
+        parts.push(
+          `<p class="note">${escapeHtml(String(lane.unparsed_row_count))} ${escapeHtml(expander.arg())} row(s) were unparseable or contract-invalid and excluded from the enumeration.</p>`,
+        );
+      }
+      if (lane.rejected_row_count > 0) {
+        parts.push(
+          `<p class="note">${escapeHtml(String(lane.rejected_row_count))} ${escapeHtml(expander.arg())} row(s) were rejected because subscription scope or the ARM resource ID was inconsistent.</p>`,
+        );
+      }
+      continue;
+    }
     if (lane.candidates.length === 0) {
       parts.push(
         `<p class="note">No matching resources in scope.</p>`,
@@ -454,13 +472,14 @@ function wasteSection(lanes: readonly WasteLaneResult[]): string {
     }
     parts.push('</ul>');
     const total = lane.lane_total;
+    const totalLabel = incomplete ? 'Partial lane lower bound' : 'Lane total';
     if (total.available_count > 0) {
       parts.push(
-        `<p><strong>Lane total (${escapeHtml(String(total.available_count))} priced candidate(s)):</strong> ~$${escapeHtml(total.low_usd.toFixed(2))}–$${escapeHtml(total.high_usd.toFixed(2))}/week, list-price estimate.</p>`,
+        `<p><strong>${escapeHtml(totalLabel)} (${escapeHtml(String(total.available_count))} priced candidate(s)):</strong> ~$${escapeHtml(total.low_usd.toFixed(2))}–$${escapeHtml(total.high_usd.toFixed(2))}/week, list-price estimate.</p>`,
       );
     } else {
       parts.push(
-        `<p><strong>Lane total:</strong> no priced candidates (every ${escapeHtml(expander.sku())} was unavailable from the rate card).</p>`,
+        `<p><strong>${escapeHtml(totalLabel)}:</strong> no priced candidates (every ${escapeHtml(expander.sku())} was unavailable from the rate card).</p>`,
       );
     }
     if (total.unavailable_count > 0) {
@@ -475,7 +494,12 @@ function wasteSection(lanes: readonly WasteLaneResult[]): string {
     );
     if (lane.unparsed_row_count > 0) {
       parts.push(
-        `<p class="note">${escapeHtml(String(lane.unparsed_row_count))} ${escapeHtml(expander.arg())} row(s) were unparseable by this lane and excluded from the enumeration.</p>`,
+        `<p class="note">${escapeHtml(String(lane.unparsed_row_count))} ${escapeHtml(expander.arg())} row(s) were unparseable or contract-invalid and excluded from the enumeration.</p>`,
+      );
+    }
+    if (lane.rejected_row_count > 0) {
+      parts.push(
+        `<p class="note">${escapeHtml(String(lane.rejected_row_count))} ${escapeHtml(expander.arg())} row(s) were rejected because subscription scope or the ARM resource ID was inconsistent.</p>`,
       );
     }
   }

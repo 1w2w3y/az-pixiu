@@ -24,6 +24,25 @@ describe('ScopeSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('trims and de-duplicates resource-group and resource-type filters', () => {
+    const result = ScopeSchema.parse({
+      ...validScope,
+      resource_group_names: ['  rg-db-prod  ', 'RG-DB-PROD', 'rg-app-prod'],
+      resource_type_filter: [' Microsoft.Network/publicIPAddresses ', 'microsoft.network/publicipaddresses'],
+    });
+    expect(result.resource_group_names).toEqual(['rg-db-prod', 'rg-app-prod']);
+    expect(result.resource_type_filter).toEqual(['Microsoft.Network/publicIPAddresses']);
+  });
+
+  it('rejects whitespace-only scope filters instead of widening scope', () => {
+    expect(
+      ScopeSchema.safeParse({ ...validScope, resource_group_names: ['   '] }).success,
+    ).toBe(false);
+    expect(
+      ScopeSchema.safeParse({ ...validScope, resource_type_filter: ['\t'] }).success,
+    ).toBe(false);
+  });
+
   it('rejects an empty subscription_ids list', () => {
     expect(ScopeSchema.safeParse({ ...validScope, subscription_ids: [] }).success).toBe(false);
   });

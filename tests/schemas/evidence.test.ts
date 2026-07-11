@@ -42,6 +42,19 @@ describe('EvidenceRequestSchema', () => {
     ).toBe(true);
   });
 
+  it('accepts intended scope provenance that is not part of wire parameters', () => {
+    expect(
+      EvidenceRequestSchema.safeParse({
+        ...validRequest,
+        intended_scope_subset: {
+          subscription_ids: ['11111111-1111-1111-1111-111111111111'],
+          resource_group_names: ['rg-finops'],
+          resource_ids: null,
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it('rejects an empty capability name', () => {
     expect(EvidenceRequestSchema.safeParse({ ...validRequest, capability: '' }).success).toBe(
       false,

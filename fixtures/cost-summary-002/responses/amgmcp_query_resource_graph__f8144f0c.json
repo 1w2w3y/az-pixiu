@@ -1,0 +1,90 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('44444444-4444-4444-4444-444444444444', '55555555-5555-5555-5555-555555555555', '66666666-6666-6666-6666-666666666666') | summarize count_=count() by type, location | order by count_ desc | take 15"
+  },
+  "parameters_digest": "f8144f0c5e2fadf5a1310d90b05906e2e0dd9dad078a7b46eb5628e52352c28c",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "type": "microsoft.insights/scheduledqueryrules",
+          "location": "westus2",
+          "count_": 146
+        },
+        {
+          "type": "microsoft.insights/metricalerts",
+          "location": "global",
+          "count_": 136
+        },
+        {
+          "type": "microsoft.insights/webtests",
+          "location": "westus2",
+          "count_": 84
+        },
+        {
+          "type": "microsoft.dashboard/dashboards",
+          "location": "westus2",
+          "count_": 57
+        },
+        {
+          "type": "microsoft.dashboard/dashboards",
+          "location": "westus3",
+          "count_": 38
+        },
+        {
+          "type": "microsoft.network/dnszones",
+          "location": "global",
+          "count_": 37
+        },
+        {
+          "type": "microsoft.network/publicipaddresses",
+          "location": "eastus2",
+          "count_": 32
+        },
+        {
+          "type": "microsoft.alertsmanagement/prometheusrulegroups",
+          "location": "southcentralus",
+          "count_": 26
+        },
+        {
+          "type": "microsoft.alertsmanagement/prometheusrulegroups",
+          "location": "westus2",
+          "count_": 26
+        },
+        {
+          "type": "microsoft.network/publicipaddresses",
+          "location": "westus3",
+          "count_": 24
+        },
+        {
+          "type": "microsoft.network/trafficmanagerprofiles",
+          "location": "global",
+          "count_": 23
+        },
+        {
+          "type": "microsoft.storage/storageaccounts",
+          "location": "eastus2",
+          "count_": 23
+        },
+        {
+          "type": "microsoft.managedidentity/userassignedidentities",
+          "location": "westus3",
+          "count_": 20
+        },
+        {
+          "type": "microsoft.network/publicipaddresses",
+          "location": "southcentralus",
+          "count_": 20
+        },
+        {
+          "type": "microsoft.managedidentity/userassignedidentities",
+          "location": "centralus",
+          "count_": 19
+        }
+      ],
+      "count": 15
+    },
+    "isError": false
+  }
+}

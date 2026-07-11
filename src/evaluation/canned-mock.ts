@@ -3,8 +3,8 @@ import type { GenerateStructuredArgs, ModelClient } from '../model/client.js';
 import { MockModelClient } from '../model/mock-client.js';
 
 /**
- * "Smart" mock model client for the eval CLI's --mock-model flag. The
- * runner replays many fixtures with different evidence ids, so a single
+ * "Smart" mock model client for the CLI's --mock-model flag. Analyze and
+ * eval replay fixtures with different evidence ids, so a single
  * constant canned response can't cite a valid evidence_id everywhere.
  * Instead, this mock parses the first evidence_id out of the reasoner's
  * user prompt and synthesizes a minimal-but-valid ReasoningOutput around
@@ -19,7 +19,7 @@ import { MockModelClient } from '../model/mock-client.js';
  *   - Confidence dimensions and level must agree after derivation (§7.5
  *     step 4); we emit 'medium' with mixed dimensions.
  *
- * The planner schema is deliberately unsupported — eval --mock-model
+ * The planner schema is deliberately unsupported — CLI --mock-model
  * pairs with --use-playbook so the planner LLM never fires.
  */
 

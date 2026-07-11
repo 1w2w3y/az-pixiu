@@ -18,9 +18,12 @@ describe('costSurprisePlaybook', () => {
     const plan = costSurprisePlaybook(baseScope);
     const costCalls = plan.requests.filter((r) => r.capability === 'amgmcp_cost_analysis');
     expect(costCalls).toHaveLength(2);
-    const windows = costCalls.map((r) => (r.parameters.time_window as { start: string }).start);
+    const windows = costCalls.map((r) => r.parameters.startTime);
     expect(windows).toContain('2026-05-01T00:00:00Z');
     expect(windows).toContain('2026-04-24T00:00:00Z');
+    for (const call of costCalls) {
+      expect(Object.keys(call.parameters).sort()).toEqual(['endTime', 'startTime', 'subscriptionId']);
+    }
   });
 
   it('always includes query_azure_subscriptions for scope confirmation', () => {
@@ -49,6 +52,15 @@ describe('costSurprisePlaybook', () => {
     const rgActivity = plan.requests.filter((r) => r.capability === 'amgmcp_query_activity_log');
     expect(rgGraph.length).toBe(2);
     expect(rgActivity.length).toBe(2);
+    for (const request of rgGraph) {
+      expect(Object.keys(request.parameters)).toEqual(['query']);
+      expect(String(request.parameters.query)).toContain('where subscriptionId in~');
+      expect(String(request.parameters.query)).toContain('where resourceGroup in~');
+    }
+    expect(rgActivity.map((request) => request.parameters.scope)).toEqual([
+      `/subscriptions/${subId}/resourceGroups/rg-a`,
+      `/subscriptions/${subId}/resourceGroups/rg-b`,
+    ]);
   });
 
   it('emits subscription-wide top-types + activity_log when no RGs are given', () => {
@@ -56,6 +68,8 @@ describe('costSurprisePlaybook', () => {
     const graphs = plan.requests.filter((r) => r.capability === 'amgmcp_query_resource_graph');
     expect(graphs).toHaveLength(1);
     expect(String((graphs[0]!.parameters as { query: string }).query)).toContain('summarize');
+    expect(Object.keys(graphs[0]!.parameters)).toEqual(['query']);
+    expect(String(graphs[0]!.parameters.query)).toContain('where subscriptionId in~');
   });
 
   it('throws when no subscription is in scope', () => {

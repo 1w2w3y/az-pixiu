@@ -5,6 +5,8 @@ import { EvidenceExecutor } from '../../src/evidence/executor.js';
 import { FixtureMCPTransport } from '../../src/mcp/fixture.js';
 import type { RawEvidence } from '../../src/evidence/executor.js';
 import type { EvidencePlan, TimeWindow } from '../../src/schemas/index.js';
+import { costAnalysisParameters } from '../../src/mcp/amg-parameters.js';
+import { scopeResourceGraphQuery } from '../../src/mcp/resource-graph.js';
 
 const defaultWindow: TimeWindow = {
   start: '2026-05-01T00:00:00Z',
@@ -91,6 +93,29 @@ describe('EvidenceNormalizer — happy path', () => {
       { defaultTimeWindow: defaultWindow },
     );
     expect(records[0]?.scope_subset.subscription_ids).toEqual(subs);
+  });
+
+  it('uses explicit intended scope when ARG scope is carried only inside KQL', () => {
+    const n = new EvidenceNormalizer();
+    const intended = {
+      subscription_ids: ['77777777-7777-7777-7777-777777777777'],
+      resource_group_names: ['rg-finops'],
+      resource_ids: null,
+    };
+    const { records } = n.normalize(
+      [
+        rawEvidence({
+          request: {
+            capability: 'amgmcp_query_resource_graph',
+            parameters: { query: 'Resources | where subscriptionId in~ (...)' },
+            intent: 'inventory',
+            intended_scope_subset: intended,
+          },
+        }),
+      ],
+      { defaultTimeWindow: defaultWindow },
+    );
+    expect(records[0]?.scope_subset).toEqual(intended);
   });
 
   it('derives cost_analysis scope_subset from response subscriptions[] when request params omit it', () => {
@@ -184,6 +209,52 @@ describe('EvidenceNormalizer — happy path', () => {
       { defaultTimeWindow: defaultWindow },
     );
     expect(records[0]?.time_window).toEqual(customWindow);
+  });
+
+  it('uses live AMG startTime/endTime parameters instead of the default window', () => {
+    const baselineWindow = {
+      start: '2026-04-24T00:00:00Z',
+      end: '2026-05-01T00:00:00Z',
+    };
+    const n = new EvidenceNormalizer();
+    const { records } = n.normalize(
+      [
+        rawEvidence({
+          request: {
+            capability: 'amgmcp_cost_analysis',
+            parameters: {
+              subscriptionId: '11111111-1111-1111-1111-111111111111',
+              startTime: baselineWindow.start,
+              endTime: baselineWindow.end,
+            },
+            intent: 'cost_breakdown',
+          },
+        }),
+      ],
+      { defaultTimeWindow: defaultWindow },
+    );
+    expect(records[0]?.time_window).toEqual(baselineWindow);
+  });
+
+  it('falls back to the canonical run window for live relative-time expressions', () => {
+    const n = new EvidenceNormalizer();
+    const { records } = n.normalize(
+      [
+        rawEvidence({
+          request: {
+            capability: 'amgmcp_cost_analysis',
+            parameters: {
+              subscriptionId: '11111111-1111-1111-1111-111111111111',
+              startTime: 'now-7d',
+              endTime: 'now',
+            },
+            intent: 'cost_breakdown',
+          },
+        }),
+      ],
+      { defaultTimeWindow: defaultWindow },
+    );
+    expect(records[0]?.time_window).toEqual(defaultWindow);
   });
 
   it('falls back to defaultTimeWindow when params omit a window', () => {
@@ -414,20 +485,19 @@ describe('EvidenceNormalizer — against seeded fixture end-to-end', () => {
       requests: [
         {
           capability: 'amgmcp_cost_analysis',
-          parameters: {
-            subscription_id: '11111111-1111-1111-1111-111111111111',
-            time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
-            granularity: 'Daily',
-            grouping: ['ServiceName'],
-          },
+          parameters: costAnalysisParameters(
+            '11111111-1111-1111-1111-111111111111',
+            defaultWindow,
+          ),
           intent: 'cost_breakdown',
         },
         {
           capability: 'amgmcp_query_resource_graph',
           parameters: {
-            subscription_ids: ['11111111-1111-1111-1111-111111111111'],
-            query:
+            query: scopeResourceGraphQuery(
               "Resources | where type =~ 'Microsoft.DBforPostgreSQL/flexibleServers' | project id, name, location, sku, tags",
+              ['11111111-1111-1111-1111-111111111111'],
+            ),
           },
           intent: 'inventory',
         },

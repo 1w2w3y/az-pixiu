@@ -11,6 +11,29 @@ describe('DatasetSchema', () => {
       DatasetSchema.safeParse({ schema_version: '2', items: [] }).success,
     ).toBe(false);
   });
+
+  it('requires a target lane for waste-candidate expectations', () => {
+    const parsed = DatasetSchema.safeParse({
+      schema_version: '1',
+      items: [
+        {
+          id: 'waste-contract',
+          fixture_id: 'fixture',
+          scope: {
+            subscription_ids: ['11111111-1111-1111-1111-111111111111'],
+            time_window: {
+              start: '2026-05-01T00:00:00Z',
+              end: '2026-05-08T00:00:00Z',
+            },
+            analysis_type: 'cost_summary',
+            effective_scope_summary: 'one subscription',
+          },
+          expectations: { expected_candidate_count: 0 },
+        },
+      ],
+    });
+    expect(parsed.success).toBe(false);
+  });
 });
 
 describe('loadDataset — eval/cost-surprise-001.json', () => {

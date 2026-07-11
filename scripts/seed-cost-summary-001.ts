@@ -11,9 +11,11 @@
  * Idempotent — overwrites the same files each time.
  */
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parameterDigest, shortDigest } from '../src/mcp/digest.js';
+import { scopeResourceGraphQuery } from '../src/mcp/resource-graph.js';
+import { activityLogParameters, costAnalysisParameters } from '../src/mcp/amg-parameters.js';
 
 const FIXTURE_ROOT = 'fixtures/cost-summary-001';
 
@@ -91,12 +93,7 @@ const calls: FixtureCall[] = [
   },
   {
     capability: 'amgmcp_cost_analysis',
-    parameters: {
-      subscription_id: SUBSCRIPTION_ID,
-      time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
-      granularity: 'Daily',
-      grouping: ['ServiceName'],
-    },
+    parameters: costAnalysisParameters(SUBSCRIPTION_ID, manifest.time_window),
     response: {
       content: {
         columns: [
@@ -124,9 +121,10 @@ const calls: FixtureCall[] = [
   {
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: [SUBSCRIPTION_ID],
-      query:
+      query: scopeResourceGraphQuery(
         'Resources | summarize count_=count() by type | order by count_ desc | take 15',
+        [SUBSCRIPTION_ID],
+      ),
     },
     response: {
       content: {
@@ -146,9 +144,10 @@ const calls: FixtureCall[] = [
   {
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: [SUBSCRIPTION_ID],
-      query:
+      query: scopeResourceGraphQuery(
         'Resources | summarize count_=count() by type, location | order by count_ desc | take 15',
+        [SUBSCRIPTION_ID],
+      ),
     },
     response: {
       content: {
@@ -169,9 +168,10 @@ const calls: FixtureCall[] = [
   {
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: [SUBSCRIPTION_ID],
-      query:
+      query: scopeResourceGraphQuery(
         "Resources | extend owner = tostring(tags['owner']), environment = tostring(tags['environment']), cost_center = tostring(tags['cost-center']) | summarize total=count(), no_owner=countif(owner == ''), no_environment=countif(environment == ''), no_cost_center=countif(cost_center == '') by subscriptionId",
+        [SUBSCRIPTION_ID],
+      ),
     },
     response: {
       content: {
@@ -189,15 +189,24 @@ const calls: FixtureCall[] = [
       isError: false,
     },
   },
+  // The orchestrator runs the first Phase 3 waste lane after the main
+  // evidence plan. Keep its clean-empty wire response in the same fixture.
+  {
+    capability: 'amgmcp_query_resource_graph',
+    parameters: {
+      query: scopeResourceGraphQuery(
+        "Resources | where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration) | where isnull(properties.natGateway) | project id, name, subscriptionId, resourceGroup, location, skuName=tostring(sku.name), allocationMethod=tostring(properties.publicIPAllocationMethod), ipConfigurationId=tostring(properties.ipConfiguration.id), natGatewayId=tostring(properties.natGateway.id)",
+        [SUBSCRIPTION_ID],
+      ),
+    },
+    response: { content: { data: [], count: 0 }, isError: false },
+  },
   // Management-plane activity for the analysis window. Empty-on-quiet
   // is the realistic shape for a sandbox-style sub; the reasoner
   // still gets the signal that no notable changes happened in-window.
   {
     capability: 'amgmcp_query_activity_log',
-    parameters: {
-      subscription_id: SUBSCRIPTION_ID,
-      time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
-    },
+    parameters: activityLogParameters(SUBSCRIPTION_ID, manifest.time_window),
     response: {
       content: {
         entries: [
@@ -226,6 +235,7 @@ const calls: FixtureCall[] = [
 
 async function main(): Promise<void> {
   const responsesDir = join(FIXTURE_ROOT, 'responses');
+  await rm(responsesDir, { recursive: true, force: true });
   await mkdir(responsesDir, { recursive: true });
 
   await writeFile(join(FIXTURE_ROOT, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');

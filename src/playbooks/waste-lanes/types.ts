@@ -58,6 +58,8 @@ export interface WasteLaneRunContext {
 export interface WasteLane {
   /** Stable machine-readable lane name (e.g. 'orphan_public_ip'). */
   name: string;
+  /** Exact ARM resource types this lane is permitted to admit. */
+  resource_types: readonly string[];
   /** Human-readable label for the report section. */
   title: string;
   /**
@@ -117,6 +119,12 @@ export interface WasteLaneResult {
    * rather than silently classified as "no candidate".
    */
   unparsed_row_count: number;
+  /**
+   * Parsed rows rejected because the returned subscription was outside
+   * the effective scope or disagreed with the subscription encoded in the
+   * ARM resource id. These rows never become evidence or impact estimates.
+   */
+  rejected_row_count: number;
   /**
    * True when the lane's ARG call exhausted retries or failed before
    * returning any data. The lane still appears in the report so the

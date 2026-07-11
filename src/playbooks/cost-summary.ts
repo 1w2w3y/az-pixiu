@@ -1,4 +1,6 @@
 import type { EvidencePlan, EvidenceRequest, Scope } from '../schemas/index.js';
+import { normalizeScopeValues, scopeResourceGraphQuery } from '../mcp/resource-graph.js';
+import { activityLogParameters, costAnalysisParameters } from '../mcp/amg-parameters.js';
 
 /**
  * Deterministic cost-summary playbook.
@@ -42,16 +44,17 @@ export function costSummaryPlaybook(scope: Scope): EvidencePlan {
       expected_role: 'confirm scope is reachable and identity has subscription read access',
     },
   ];
+  const inventoryResourceGroups = normalizeScopeValues(scope.resource_group_names ?? []);
+  const intendedInventoryScope = {
+    subscription_ids: normalizeScopeValues(scope.subscription_ids),
+    resource_group_names: inventoryResourceGroups.length > 0 ? inventoryResourceGroups : null,
+    resource_ids: null,
+  };
 
   for (const subId of scope.subscription_ids) {
     requests.push({
       capability: 'amgmcp_cost_analysis',
-      parameters: {
-        subscription_id: subId,
-        time_window: scope.time_window,
-        granularity: 'Daily',
-        grouping: ['ServiceName'],
-      },
+      parameters: costAnalysisParameters(subId, scope.time_window),
       intent: 'cost_breakdown',
       expected_role: `cost breakdown by service for ${subId}`,
     });
@@ -62,11 +65,17 @@ export function costSummaryPlaybook(scope: Scope): EvidencePlan {
   requests.push({
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: scope.subscription_ids,
-      query:
+      query: scopeResourceGraphQuery(
         'Resources | summarize count_=count() by type | order by count_ desc | take 15',
+        scope.subscription_ids,
+        {
+          resourceGroupNames: scope.resource_group_names,
+          resourceTypes: scope.resource_type_filter,
+        },
+      ),
     },
     intent: 'inventory',
+    intended_scope_subset: intendedInventoryScope,
     expected_role: 'top resource types across the selected subscriptions',
   });
 
@@ -78,11 +87,17 @@ export function costSummaryPlaybook(scope: Scope): EvidencePlan {
   requests.push({
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: scope.subscription_ids,
-      query:
+      query: scopeResourceGraphQuery(
         'Resources | summarize count_=count() by type, location | order by count_ desc | take 15',
+        scope.subscription_ids,
+        {
+          resourceGroupNames: scope.resource_group_names,
+          resourceTypes: scope.resource_type_filter,
+        },
+      ),
     },
     intent: 'inventory',
+    intended_scope_subset: intendedInventoryScope,
     expected_role: 'top resource type × location cells for regional cost attribution',
   });
 
@@ -93,11 +108,17 @@ export function costSummaryPlaybook(scope: Scope): EvidencePlan {
   requests.push({
     capability: 'amgmcp_query_resource_graph',
     parameters: {
-      subscription_ids: scope.subscription_ids,
-      query:
+      query: scopeResourceGraphQuery(
         "Resources | extend owner = tostring(tags['owner']), environment = tostring(tags['environment']), cost_center = tostring(tags['cost-center']) | summarize total=count(), no_owner=countif(owner == ''), no_environment=countif(environment == ''), no_cost_center=countif(cost_center == '') by subscriptionId",
+        scope.subscription_ids,
+        {
+          resourceGroupNames: scope.resource_group_names,
+          resourceTypes: scope.resource_type_filter,
+        },
+      ),
     },
     intent: 'inventory',
+    intended_scope_subset: intendedInventoryScope,
     expected_role: 'tag-coverage roll-up (owner / environment / cost-center) per subscription',
   });
 
@@ -108,11 +129,13 @@ export function costSummaryPlaybook(scope: Scope): EvidencePlan {
   for (const subId of scope.subscription_ids) {
     requests.push({
       capability: 'amgmcp_query_activity_log',
-      parameters: {
-        subscription_id: subId,
-        time_window: scope.time_window,
-      },
+      parameters: activityLogParameters(subId, scope.time_window),
       intent: 'activity',
+      intended_scope_subset: {
+        subscription_ids: [subId],
+        resource_group_names: null,
+        resource_ids: null,
+      },
       expected_role: `subscription-wide management-plane changes for ${subId} during the analysis window`,
     });
   }

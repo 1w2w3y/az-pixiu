@@ -10,6 +10,7 @@ import { EvidenceExecutor, type ExecutorEvent, type RawEvidence } from '../evide
 import type { RetryPolicy } from '../evidence/retry-policy.js';
 import type { ClassifiedFailure } from '../failure/taxonomy.js';
 import { parameterDigest, shortDigest } from '../mcp/digest.js';
+import { normalizeScopeValues } from '../mcp/resource-graph.js';
 import { estimateWeeklyImpactRange, rollUpLaneTotal } from '../pricing/impact.js';
 import type { PricingRateSource } from '../pricing/source.js';
 import type {
@@ -123,6 +124,13 @@ export class WasteDetectionExecutor {
     for (const lane of this.lanes) {
       const request = lane.buildRequest({ scope: options.scope, rateSource: this.rateSource });
       const plan: EvidencePlan = { requests: [request] };
+      const intendedSubscriptions = normalizeScopeValues(options.scope.subscription_ids);
+      const intendedResourceGroups = normalizeScopeValues(
+        options.scope.resource_group_names ?? [],
+      );
+      const intendedResourceTypes = normalizeScopeValues(
+        options.scope.resource_type_filter ?? [],
+      );
 
       // Use the existing EvidenceExecutor so the lane's ARG call gets
       // §Gap 7 retry + embedded-rate-limit detection + per-capability
@@ -138,7 +146,20 @@ export class WasteDetectionExecutor {
       });
       const { raw_evidence, failures, transport_summary } = await executor.execute(plan);
 
-      allTransport.push(...transport_summary);
+      // ARG scope is embedded in KQL because the live capability has no
+      // subscription_ids wire parameter. Preserve the intended scope in
+      // the transport summary out-of-band so coverage remains auditable.
+      allTransport.push(
+        ...transport_summary.map((entry) => ({
+          ...entry,
+          scope_subset: {
+            subscription_ids: intendedSubscriptions,
+            resource_group_names:
+              intendedResourceGroups.length > 0 ? intendedResourceGroups : null,
+            resource_ids: null,
+          },
+        })),
+      );
       allFailures.push(...failures);
 
       const raw: RawEvidence | undefined = raw_evidence[0];
@@ -155,12 +176,74 @@ export class WasteDetectionExecutor {
           lane_total: rollUpLaneTotal([]),
           rate_source_captured_at: this.rateSource.capturedAt(),
           unparsed_row_count: 0,
+          rejected_row_count: 0,
           failed: true,
         });
         continue;
       }
 
-      const { candidates, unparsed_row_count } = lane.parseRows(raw.result);
+      const parsed = lane.parseRows(raw.result);
+      const allowedSubscriptions = new Set(
+        intendedSubscriptions.map((id) => id.toLowerCase()),
+      );
+      const allowedResourceGroups =
+        intendedResourceGroups.length > 0
+          ? new Set(intendedResourceGroups.map((name) => name.toLowerCase()))
+          : null;
+      const laneResourceTypes = new Set(
+        normalizeScopeValues(lane.resource_types).map((type) => type.toLowerCase()),
+      );
+      const allowedResourceTypes =
+        intendedResourceTypes.length > 0
+          ? new Set(intendedResourceTypes.map((type) => type.toLowerCase()))
+          : null;
+      const candidates: WasteCandidate[] = [];
+      let rejected_row_count = 0;
+      for (const candidate of parsed.candidates) {
+        const rowSubscription = candidate.subscription_id.trim().toLowerCase();
+        const armSubscription = subscriptionIdFromArmResourceId(candidate.resource_id)?.toLowerCase();
+        const rowResourceGroup = candidate.resource_group.trim().toLowerCase();
+        const armResourceGroup = resourceGroupFromArmResourceId(candidate.resource_id)?.toLowerCase();
+        const armResourceType = resourceTypeFromArmResourceId(candidate.resource_id)?.toLowerCase();
+        const resourceGroupMismatch =
+          armResourceGroup === undefined ||
+          armResourceGroup !== rowResourceGroup ||
+          (allowedResourceGroups !== null && !allowedResourceGroups.has(rowResourceGroup));
+        const resourceTypeMismatch =
+          armResourceType === undefined ||
+          !laneResourceTypes.has(armResourceType) ||
+          (allowedResourceTypes !== null && !allowedResourceTypes.has(armResourceType));
+        if (
+          !allowedSubscriptions.has(rowSubscription) ||
+          armSubscription === undefined ||
+          armSubscription !== rowSubscription ||
+          resourceGroupMismatch ||
+          resourceTypeMismatch
+        ) {
+          rejected_row_count += 1;
+          continue;
+        }
+        candidates.push(candidate);
+      }
+      const unparsed_row_count = parsed.unparsed_row_count;
+      if (unparsed_row_count > 0 || rejected_row_count > 0) {
+        allFailures.push({
+          category: 'schema_mismatch',
+          capability: request.capability,
+          message:
+            `${lane.name} enumeration was incomplete: ${unparsed_row_count} unparseable/contract-invalid row(s) and ` +
+            `${rejected_row_count} row(s) rejected by effective-scope validation. A no-match conclusion is not supported.`,
+          actionable_hint:
+            'Verify the AMG-MCP ARG response envelope, projected subscriptionId, and ARM resource ids before relying on this lane.',
+          cause: {
+            lane: lane.name,
+            unparsed_row_count,
+            rejected_row_count,
+            intended_subscription_ids: options.scope.subscription_ids,
+            intended_resource_types: lane.resource_types,
+          },
+        });
+      }
 
       const enriched: WasteCandidateEvidence[] = candidates.map((candidate) => {
         const estimate = estimateWeeklyImpactRange({
@@ -175,6 +258,7 @@ export class WasteDetectionExecutor {
           estimate,
           scope: options.scope,
           unparsed_row_count,
+          rejected_row_count,
         });
         return { candidate, estimated_weekly_impact: estimate, evidence };
       });
@@ -190,6 +274,7 @@ export class WasteDetectionExecutor {
         lane_total: laneTotal,
         rate_source_captured_at: this.rateSource.capturedAt(),
         unparsed_row_count,
+        rejected_row_count,
         failed: false,
       });
       for (const c of enriched) allEvidence.push(c.evidence);
@@ -209,6 +294,7 @@ export class WasteDetectionExecutor {
     estimate: ReturnType<typeof estimateWeeklyImpactRange>;
     scope: Scope;
     unparsed_row_count: number;
+    rejected_row_count: number;
   }): EvidenceRecord {
     const { lane, candidate, estimate, scope } = args;
     const impactSummary =
@@ -238,6 +324,11 @@ export class WasteDetectionExecutor {
     if (args.unparsed_row_count > 0) {
       caveats.push(
         `${args.unparsed_row_count} ARG row(s) for this lane were unparseable and excluded from candidates.`,
+      );
+    }
+    if (args.rejected_row_count > 0) {
+      caveats.push(
+        `${args.rejected_row_count} ARG row(s) were outside effective scope or inconsistent with their ARM resource id and were excluded from candidates.`,
       );
     }
     return EvidenceRecordSchema.parse({
@@ -278,4 +369,26 @@ export class WasteDetectionExecutor {
       caveats,
     });
   }
+}
+
+function subscriptionIdFromArmResourceId(resourceId: string): string | undefined {
+  return /^\/subscriptions\/([^/]+)(?:\/|$)/i.exec(resourceId)?.[1];
+}
+
+function resourceGroupFromArmResourceId(resourceId: string): string | undefined {
+  return /^\/subscriptions\/[^/]+\/resourceGroups\/([^/]+)(?:\/|$)/i.exec(resourceId)?.[1];
+}
+
+function resourceTypeFromArmResourceId(resourceId: string): string | undefined {
+  const segments = resourceId.split('/').filter((segment) => segment.length > 0);
+  const providerIndex = segments.findIndex(
+    (segment) => segment.toLowerCase() === 'providers',
+  );
+  if (providerIndex < 0 || providerIndex + 2 >= segments.length) return undefined;
+  const namespace = segments[providerIndex + 1]!;
+  const typeSegments: string[] = [];
+  for (let index = providerIndex + 2; index < segments.length; index += 2) {
+    typeSegments.push(segments[index]!);
+  }
+  return typeSegments.length > 0 ? `${namespace}/${typeSegments.join('/')}` : undefined;
 }

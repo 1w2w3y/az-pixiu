@@ -280,10 +280,9 @@ describe('MCPClient + seeded fixture integration', () => {
     });
     await client.discover();
     const result = await client.invoke('amgmcp_cost_analysis', {
-      subscription_id: '11111111-1111-1111-1111-111111111111',
-      time_window: { start: '2026-05-01T00:00:00Z', end: '2026-05-08T00:00:00Z' },
-      granularity: 'Daily',
-      grouping: ['ServiceName'],
+      subscriptionId: '11111111-1111-1111-1111-111111111111',
+      startTime: '2026-05-01T00:00:00Z',
+      endTime: '2026-05-08T00:00:00Z',
     });
     expect(result.isError).toBe(false);
     const content = result.content as { total: { cost: number } };

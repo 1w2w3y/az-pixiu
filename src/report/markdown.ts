@@ -376,6 +376,27 @@ function wasteCandidatesSection(lanes: readonly WasteLaneResult[]): string {
       lines.push('');
       continue;
     }
+    const incomplete = lane.unparsed_row_count > 0 || lane.rejected_row_count > 0;
+    if (lane.candidates.length === 0 && incomplete) {
+      lines.push(
+        `_Enumeration incomplete: this run cannot make an authoritative "No matching resources" claim. See Run Quality for the schema-mismatch finding._`,
+      );
+      lines.push('');
+      lines.push(`**Classification predicate:** \`${lane.predicate_text}\``);
+      lines.push('');
+      if (lane.unparsed_row_count > 0) {
+        lines.push(
+          `_${lane.unparsed_row_count} ${expander.arg()} row(s) were unparseable or contract-invalid and excluded from the enumeration._`,
+        );
+      }
+      if (lane.rejected_row_count > 0) {
+        lines.push(
+          `_${lane.rejected_row_count} ${expander.arg()} row(s) were rejected because subscription scope or the ARM resource ID was inconsistent._`,
+        );
+      }
+      lines.push('');
+      continue;
+    }
     if (lane.candidates.length === 0) {
       lines.push(`_No matching resources in scope._`);
       lines.push('');
@@ -388,10 +409,11 @@ function wasteCandidatesSection(lanes: readonly WasteLaneResult[]): string {
     }
     lines.push('');
     const total = lane.lane_total;
+    const totalLabel = incomplete ? 'Partial lane lower bound' : 'Lane total';
     const totalLine =
       total.available_count > 0
-        ? `**Lane total (${total.available_count} priced candidate(s)):** ~$${total.low_usd.toFixed(2)}–$${total.high_usd.toFixed(2)}/week, list-price estimate.`
-        : `**Lane total:** no priced candidates (every ${expander.sku()} was unavailable from the rate card).`;
+        ? `**${totalLabel} (${total.available_count} priced candidate(s)):** ~$${total.low_usd.toFixed(2)}–$${total.high_usd.toFixed(2)}/week, list-price estimate.`
+        : `**${totalLabel}:** no priced candidates (every ${expander.sku()} was unavailable from the rate card).`;
     lines.push(totalLine);
     if (total.unavailable_count > 0) {
       const skus = total.unavailable_skus.map((s) => s.sku).join(', ');
@@ -406,7 +428,12 @@ function wasteCandidatesSection(lanes: readonly WasteLaneResult[]): string {
     );
     if (lane.unparsed_row_count > 0) {
       lines.push(
-        `_${lane.unparsed_row_count} ${expander.arg()} row(s) were unparseable by this lane and excluded from the enumeration._`,
+        `_${lane.unparsed_row_count} ${expander.arg()} row(s) were unparseable or contract-invalid and excluded from the enumeration._`,
+      );
+    }
+    if (lane.rejected_row_count > 0) {
+      lines.push(
+        `_${lane.rejected_row_count} ${expander.arg()} row(s) were rejected because subscription scope or the ARM resource ID was inconsistent._`,
       );
     }
     lines.push('');

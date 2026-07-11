@@ -1,0 +1,27 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('33333333-3333-3333-3333-333333333333') | summarize count_=count() by type | order by count_ desc | take 15"
+  },
+  "parameters_digest": "b559b6aded11cfe0412e671fd86f9a49ee69cfdd616057bf6fb2bd7bef855f22",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "type": "Microsoft.Web/sites",
+          "count_": 12
+        },
+        {
+          "type": "Microsoft.Storage/storageAccounts",
+          "count_": 6
+        },
+        {
+          "type": "Microsoft.OperationalInsights/workspaces",
+          "count_": 2
+        }
+      ],
+      "count": 3
+    },
+    "isError": false
+  }
+}

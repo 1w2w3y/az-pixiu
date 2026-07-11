@@ -8,13 +8,13 @@
  * provider does not sit literally between them: the orchestrator calls
  * `serveFromCache(plan)` before `executor.execute(...)` to lift
  * cache-eligible cost requests out of the live plan, and `writeThrough(...)`
- * after, to persist freshly-retrieved finalized months. This mirrors how
+ * after, to persist freshly retrieved usage-stable months. This mirrors how
  * WasteDetectionExecutor wraps the same executor and merges its records /
  * transport entries back into the main flow.
  *
  * Caching is intentionally narrow in this first slice: only `cost_summary`
  * runs, only a single-subscription cost request whose window is exactly one
- * finalized full calendar month (per the maturity policy and injected
+ * usage-stable full calendar month (per the maturity policy and injected
  * clock). Everything else — multi-sub calls, partial windows, cost_surprise
  * baselines, non-cost requests — passes straight through to live retrieval.
  *
@@ -41,6 +41,12 @@ import {
 } from '../schemas/index.js';
 import { scopeSubsetFromParameters } from '../schemas/transport.js';
 import { COST_WIRE_CAPABILITIES } from './cost-capabilities.js';
+import {
+  assessCostZeroEvidence,
+  findZeroAssessment,
+  type ZeroCostAssessmentEntry,
+  type ZeroCostAssessmentResult,
+} from './cost-zero-assessment.js';
 import {
   BILLING_CACHE_SOURCE_CAPABILITY,
   CACHE_SCHEMA_VERSION,
@@ -93,13 +99,13 @@ export class CostEvidenceProvider {
   private readonly policy: MaturityPolicy;
   private readonly now: () => number;
   /**
-   * The single finalized calendar month this run is eligible to cache, or
+   * The single usage-stable calendar month this run is eligible to cache, or
    * null when the run's analysis window is not exactly one usage-stable
    * full month. Keyed off the SCOPE window (which the operator controls)
    * rather than each request's parameters, so eligibility is independent
-   * of the cost-call param shape — the playbook sends a `time_window`
-   * object + `granularity`, while the live planner sends `startTime` /
-   * `endTime` and no granularity (the AMG-MCP wire schema).
+   * of historical cost-call param shapes. Current deterministic playbooks
+   * and the live planner both send the AMG-MCP wire schema (`subscriptionId`,
+   * `startTime`, `endTime`); legacy fixtures may still carry `time_window`.
    */
   private readonly eligibleMonth: string | null;
 
@@ -112,7 +118,7 @@ export class CostEvidenceProvider {
     this.now = options.now ?? Date.now;
     this.eligibleMonth =
       this.scope.analysis_type === 'cost_summary' && this.scope.time_window
-        ? this.windowToFinalizedMonth(this.scope.time_window.start, this.scope.time_window.end)
+        ? this.windowToUsageStableMonth(this.scope.time_window.start, this.scope.time_window.end)
         : null;
   }
 
@@ -135,6 +141,13 @@ export class CostEvidenceProvider {
         remaining.push(request);
         continue;
       }
+      if (!isCacheRecordAdmissible(record)) {
+        // Re-run the current evidence-contract checks against retained raw
+        // evidence. Legacy zero cells, scope-mismatched structured payloads,
+        // and malformed totals all degrade to a live refresh.
+        remaining.push(request);
+        continue;
+      }
       const served = this.serveRecord(record, hitCount + 1);
       servedRecords.push(...served.records);
       servedTransport.push(served.transport);
@@ -149,13 +162,16 @@ export class CostEvidenceProvider {
     };
   }
 
-  /** Persist freshly-retrieved finalized-month cost evidence so the next run hits. */
-  async writeThrough(rawEvidence: readonly RawEvidence[]): Promise<number> {
+  /** Persist freshly retrieved usage-stable-month cost evidence so the next run hits. */
+  async writeThrough(
+    rawEvidence: readonly RawEvidence[],
+    zeroAssessment: ZeroCostAssessmentResult = assessCostZeroEvidence(rawEvidence),
+  ): Promise<number> {
     let written = 0;
     for (const raw of rawEvidence) {
       const cell = this.costCellFor(raw.request);
       if (!cell) continue;
-      const record = this.buildCacheRecord(raw, cell);
+      const record = this.buildCacheRecord(raw, cell, findZeroAssessment(zeroAssessment, raw));
       if (!record) continue;
       try {
         await this.store.set(record);
@@ -171,12 +187,13 @@ export class CostEvidenceProvider {
   /**
    * Return the cache cell a request maps to, or null when it is not a
    * cache-eligible cost request. Eligibility: the run's scope is a single
-   * finalized full month (computed once into {@link eligibleMonth}), the
+   * usage-stable full month (computed once into {@link eligibleMonth}), the
    * request is a cost capability, and it targets exactly one subscription.
    * The cell's parameters digest covers the call's discriminating
-   * parameters (grouping, datasource, filter — everything except the
-   * subscription and window, which are already promoted to the key), so it
-   * is stable across the playbook and live-planner param shapes.
+   * semantic parameters retained for legacy/future calls (grouping and
+   * filter — everything except subscription, window, and incidental
+   * datasource identity, which are handled elsewhere), so it remains stable
+   * across historical and current wire shapes.
    */
   private costCellFor(request: EvidenceRequest): CostCell | null {
     if (!this.eligibleMonth) return null;
@@ -197,7 +214,7 @@ export class CostEvidenceProvider {
   }
 
   /** Returns the YYYY-MM only when [start,end) is exactly a usage-stable full month. */
-  private windowToFinalizedMonth(start: string, end: string): string | null {
+  private windowToUsageStableMonth(start: string, end: string): string | null {
     const startMs = Date.parse(start);
     if (Number.isNaN(startMs)) return null;
     const d = new Date(startMs);
@@ -268,19 +285,34 @@ export class CostEvidenceProvider {
     return { records: rewritten, transport };
   }
 
-  private buildCacheRecord(raw: RawEvidence, cell: CostCell): BillingCacheRecord | null {
+  private buildCacheRecord(
+    raw: RawEvidence,
+    cell: CostCell,
+    zeroAssessment: ZeroCostAssessmentEntry | undefined,
+  ): BillingCacheRecord | null {
     // Decode the MCP content envelope the same way EvidenceNormalizer does:
     // the live AMG-MCP response is `{content:[{type:'text',text:'<json>'}]}`,
     // while fixture responses carry the decoded object directly. An upstream
     // wrapped error or an unparseable body yields no summary, so the cell is
     // not written (we never cache an error as authoritative billing data).
     const result = raw.result as ToolCallResult;
+    if (result.isError === true) return null;
     const text = extractText(result);
     if (isWrappedError(text)) return null;
     const parsed = tryParseJson(text);
     const decoded = parsed ?? (text.length > 0 ? text : result.content);
     const summary = summarizeCostPayload(decoded);
     if (!summary) return null; // Don't cache a payload we can't summarize honestly.
+    if (zeroAssessment && zeroAssessment.assessment !== 'valid_zero') {
+      // Missing totals, `zero_unresolved`, and `cost_zero_suspected` remain
+      // live provenance only; none may become durable cache evidence.
+      return null;
+    }
+    if (summary.totals.month_total === 0 && zeroAssessment?.assessment !== 'valid_zero') {
+      // A zero total that escaped assessment is also rejected fail-closed,
+      // even when a contradictory non-zero dimension made it non-all-zero.
+      return null;
+    }
 
     const maturity = evaluateMaturity({
       month: cell.month,
@@ -319,6 +351,9 @@ export class CostEvidenceProvider {
       totals: summary.totals,
       dimensions: summary.dimensions,
       coverage: summary.coverage,
+      ...(zeroAssessment?.assessment === 'valid_zero'
+        ? { zero_cost_assessment: 'valid_zero' as const }
+        : {}),
       raw_evidence: {
         capability: raw.request.capability,
         parameters: raw.request.parameters,
@@ -331,10 +366,10 @@ export class CostEvidenceProvider {
 }
 
 /**
- * Digest the cost query's SEMANTIC shape — the grouping, granularity, and
- * filter that determine *what* cost data is returned — normalized across the
- * playbook (snake_case + `grouping` / `granularity`) and live-planner
- * (camelCase; the wire schema allows none of those) param shapes.
+ * Digest the cost query's SEMANTIC shape — legacy/future grouping,
+ * granularity, and filter fields that determine *what* cost data is returned.
+ * Current deterministic playbooks use the live camelCase schema, which
+ * exposes none of those optional semantic fields.
  *
  * Deliberately an allowlist, not "everything except subscription + window":
  * an LLM planner echoes incidental wire params (e.g. `azureMonitorDatasourceUid`)
@@ -361,6 +396,89 @@ interface CostSummary {
   totals: BillingCacheRecord['totals'];
   dimensions: BillingCacheRecord['dimensions'];
   coverage: BillingCacheRecord['coverage'];
+}
+
+function isAllZeroSummary(summary: CostSummary): boolean {
+  if (summary.totals.month_total !== 0) return false;
+  if (summary.totals.daily.some((row) => row.cost !== 0)) return false;
+  return Object.values(summary.dimensions).every(
+    (dimension) =>
+      dimension.monthly.every((row) => row.cost === 0) &&
+      dimension.daily.every((row) => row.cost === 0),
+  );
+}
+
+function isAllZeroCacheRecord(record: BillingCacheRecord): boolean {
+  return isAllZeroSummary({
+    totals: record.totals,
+    dimensions: record.dimensions,
+    coverage: record.coverage,
+  });
+}
+
+function isCacheRecordAdmissible(record: BillingCacheRecord): boolean {
+  const replay = record.raw_evidence;
+  if (!replay) return false;
+  const requestScope = scopeSubsetFromParameters(replay.parameters)?.subscription_ids ?? [];
+  if (
+    requestScope.length !== 1 ||
+    requestScope[0]!.trim().toLowerCase() !== record.subscription_id.trim().toLowerCase()
+  ) {
+    return false;
+  }
+
+  const result = replay.result as ToolCallResult;
+  const text = extractText(result);
+  if (isWrappedError(text) || result.isError === true) return false;
+  const parsed = tryParseJson(text);
+  const decoded = parsed ?? (text.length > 0 ? text : result.content);
+  const summary = summarizeCostPayload(decoded);
+  if (!summary || summary.totals.month_total !== record.totals.month_total) return false;
+
+  const raw: RawEvidence = {
+    request: {
+      capability: replay.capability,
+      parameters: replay.parameters,
+      intent: replay.intent as QueryIntent,
+    },
+    parameters_digest: parameterDigest(replay.parameters),
+    capability_version: replay.capability_version,
+    result,
+    retrieved_at: record.maturity.retrieved_at,
+  };
+  const assessmentInput: RawEvidence[] = [raw];
+  if (record.totals.month_total === 0 && record.zero_cost_assessment === 'valid_zero') {
+    const inventoryParameters: Record<string, unknown> = {};
+    assessmentInput.push({
+      request: {
+        capability: 'amgmcp_query_azure_subscriptions',
+        parameters: inventoryParameters,
+        intent: 'inventory',
+      },
+      parameters_digest: parameterDigest(inventoryParameters),
+      capability_version: 'cache-admission-proof-v1',
+      result: {
+        content: {
+          subscriptions: [
+            { subscriptionId: record.subscription_id, resourceCount: 0 },
+          ],
+        },
+      },
+      retrieved_at: record.maturity.retrieved_at,
+    });
+  }
+  const assessment = assessCostZeroEvidence(assessmentInput);
+  const entry = findZeroAssessment(assessment, raw);
+
+  if (record.totals.month_total === 0) {
+    return (
+      record.zero_cost_assessment === 'valid_zero' &&
+      isAllZeroCacheRecord(record) &&
+      isAllZeroSummary(summary) &&
+      entry?.assessment === 'valid_zero'
+    );
+  }
+  return entry === undefined;
 }
 
 /**
@@ -458,6 +576,7 @@ function summarizeTabular(c: Record<string, unknown>): CostSummary | null {
 
 function summarizeLive(subscriptions: unknown[]): CostSummary | null {
   let monthTotal = 0;
+  let sawNumericTotal = false;
   let currency = 'USD';
   const serviceMap = new Map<string, number>();
   const regionMap = new Map<string, number>();
@@ -470,7 +589,10 @@ function summarizeLive(subscriptions: unknown[]): CostSummary | null {
   for (const sub of subscriptions) {
     if (typeof sub !== 'object' || sub === null) continue;
     const s = sub as Record<string, unknown>;
-    if (typeof s.totalCost === 'number') monthTotal += s.totalCost;
+    if (typeof s.totalCost === 'number') {
+      monthTotal += s.totalCost;
+      sawNumericTotal = true;
+    }
     if (typeof s.currency === 'string') currency = s.currency;
     mergeDimension(serviceMap, s.byService);
     if (Array.isArray(s.byRegion)) {
@@ -482,6 +604,8 @@ function summarizeLive(subscriptions: unknown[]): CostSummary | null {
       mergeDimension(typeMap, s.byResourceType);
     }
   }
+
+  if (!sawNumericTotal) return null;
 
   const serviceMonthly = toMonthly(serviceMap);
   const serviceSum = serviceMonthly.reduce((a, b) => a + b.cost, 0);

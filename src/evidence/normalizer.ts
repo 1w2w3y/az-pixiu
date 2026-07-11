@@ -1,6 +1,7 @@
 import {
   EvidenceRecordSchema,
   DataQualityFindingSchema,
+  TimeWindowSchema,
   type EvidenceRecord,
   type DataQualityFinding,
   type TimeWindow,
@@ -46,7 +47,8 @@ export class EvidenceNormalizer {
 
     for (const raw of rawList) {
       const evidence_id = `ev-${raw.request.capability}-${shortDigest(raw.parameters_digest)}`;
-      const scope_subset = extractScopeSubset(raw.request.parameters);
+      const scope_subset =
+        raw.request.intended_scope_subset ?? extractScopeSubset(raw.request.parameters);
       const time_window = extractTimeWindow(raw.request.parameters) ?? context.defaultTimeWindow;
       const caveats: string[] = [];
 
@@ -235,11 +237,16 @@ function scopeFromCostPayload(initial: ScopeSubset, payload: unknown): ScopeSubs
 
 function extractTimeWindow(params: Record<string, unknown>): TimeWindow | undefined {
   const tw = params.time_window;
-  if (typeof tw !== 'object' || tw === null) return undefined;
-  const obj = tw as { start?: unknown; end?: unknown };
-  if (typeof obj.start !== 'string' || typeof obj.end !== 'string') return undefined;
-  if (new Date(obj.end).getTime() <= new Date(obj.start).getTime()) return undefined;
-  return { start: obj.start, end: obj.end };
+  const obj = typeof tw === 'object' && tw !== null ? (tw as { start?: unknown; end?: unknown }) : null;
+  const start = obj?.start ?? params.startTime;
+  const end = obj?.end ?? params.endTime;
+  if (typeof start !== 'string' || typeof end !== 'string') return undefined;
+  // AMG also accepts relative expressions such as `now-7d` / `now`.
+  // EvidenceRecord intentionally requires canonical RFC3339 provenance,
+  // so an expression that cannot be represented without evaluating it at
+  // retrieval time falls back to the run's already-resolved default window.
+  const parsed = TimeWindowSchema.safeParse({ start, end });
+  return parsed.success ? parsed.data : undefined;
 }
 
 interface TaggingStats {
@@ -281,19 +288,23 @@ function summarize(capability: string, content: unknown): unknown {
       // rollup that produces the same summary shape.
       if (rows.length === 0 && total.cost === undefined && Array.isArray(c.subscriptions)) {
         let liveTotal = 0;
+        let sawNumericTotal = false;
         let liveCurrency: string | undefined;
         let liveServiceCount = 0;
         for (const sub of c.subscriptions) {
           if (typeof sub !== 'object' || sub === null) continue;
           const s = sub as Record<string, unknown>;
-          if (typeof s.totalCost === 'number') liveTotal += s.totalCost;
+          if (typeof s.totalCost === 'number') {
+            liveTotal += s.totalCost;
+            sawNumericTotal = true;
+          }
           if (!liveCurrency && typeof s.currency === 'string') liveCurrency = s.currency;
           if (Array.isArray(s.byService)) liveServiceCount += s.byService.length;
         }
         return {
           capability,
           row_count: liveServiceCount,
-          total_cost: liveTotal,
+          total_cost: sawNumericTotal ? liveTotal : undefined,
           currency: liveCurrency,
         };
       }

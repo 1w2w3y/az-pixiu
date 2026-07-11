@@ -32,6 +32,15 @@ export const DataQualityCategorySchema = z.enum([
   // Phase 3 work.
   'freshness_partial_window',
   'freshness_uniform_drop',
+  // Phase 3 evidence-contract gate. A cost response can be structurally
+  // successful and still be unsafe to use as an authoritative zero.
+  // `cost_zero_suspected` has contradictory dimensional/comparison evidence;
+  // `zero_unresolved` lacks enough structure or corroboration to distinguish
+  // a genuine empty scope from stale billing; `cost_scope_mismatch` means a
+  // structured response returned a different subscription set than requested.
+  'cost_zero_suspected',
+  'zero_unresolved',
+  'cost_scope_mismatch',
   // Phase 3 — billing-access pre-flight probe. Emitted when a
   // subscription survived ARG resource-count ranking but was excluded
   // from auto-discovery because the cheap probe call against

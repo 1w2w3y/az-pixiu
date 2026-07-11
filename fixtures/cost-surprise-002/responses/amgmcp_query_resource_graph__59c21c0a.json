@@ -1,0 +1,28 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('22222222-2222-2222-2222-222222222222') | where resourceGroup in~ ('rg-locked-prod') | project id, name, type, location, sku, tags"
+  },
+  "parameters_digest": "59c21c0a3d12d3e72fed37512cffe3ad7436d433973db383049ec91ba3038839",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "id": "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-locked-prod/providers/Microsoft.Compute/virtualMachines/vm-prod-1",
+          "name": "vm-prod-1",
+          "type": "Microsoft.Compute/virtualMachines",
+          "location": "westus2",
+          "sku": {
+            "name": "Standard_D8s_v5"
+          },
+          "tags": {
+            "owner": "platform-team",
+            "env": "prod"
+          }
+        }
+      ],
+      "count": 1
+    },
+    "isError": false
+  }
+}

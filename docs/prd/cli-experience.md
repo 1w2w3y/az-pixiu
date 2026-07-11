@@ -10,7 +10,7 @@ The experience should feel familiar to engineers who use Azure, Grafana, local d
 
 ## Current Implementation Status
 
-The CLI currently exposes `pixiu analyze cost-surprise`, `pixiu analyze cost-summary`, `pixiu eval <dataset.json>`, and `pixiu diagnose`. Analyze supports explicit subscriptions, auto-discovery by top resource count, subscription-name filtering, time windows, resource groups, resource type filters, fixture replay, playbook mode, mock model mode, output directory selection, observability modes (`noop`, `memory`, `langfuse`, `ms-otel`), credential modes, and billing-access probes with cache. Eval supports fixture-root and output-dir overrides, offline mock runs, Langfuse publishing, dataset/experiment naming, and model sweeps. It does not currently include `review`, `calibrate`, interactive follow-up, or package-managed installation workflows.
+The CLI currently exposes `pixiu analyze cost-surprise`, `pixiu analyze cost-summary`, `pixiu eval <dataset.json>`, and `pixiu diagnose`. Analyze supports explicit subscriptions, auto-discovery by top resource count, subscription-name filtering, time windows, resource groups, resource type filters, fixture replay, playbook mode, mock reasoning mode (paired with `--use-playbook`, because the planner is not mocked), output directory selection, observability modes (`noop`, `memory`, `langfuse`, `ms-otel`), credential modes, and billing-access probes with cache. Eval supports fixture-root and output-dir overrides, offline mock runs under the same playbook requirement, Langfuse publishing, dataset/experiment naming, and model sweeps. It does not currently include `review`, `calibrate`, interactive follow-up, or package-managed installation workflows.
 
 ## Problem Statement
 
@@ -83,7 +83,7 @@ A maintainer changes a prompt or analysis behavior and runs evaluations from the
 - FR-14: The CLI must avoid logging secrets, credentials, or unnecessary raw Azure telemetry to terminal output.
 - FR-15: The CLI should make it easy to find the generated report, trace identifier, and diagnostic summary after a run.
 - FR-16: For analysis types that auto-discover subscriptions, the CLI must support selecting subscriptions by case-insensitive name pattern, in addition to explicit subscription identifiers and the default top-N-by-resource-count auto-discovery. The pattern must be matched against subscription display names as returned by AMG-MCP. The CLI must reject patterns combined with explicit subscription identifiers and must surface the matched subscriptions in the effective scope summary before analysis.
-- FR-17: The CLI should expose local billing-cache workflows, including warming finalized monthly billing data, reporting cache coverage by subscription and month, forcing a refresh of a finalized month, pruning old cache files, and opting analysis runs into or out of cached billing evidence.
+- FR-17: The CLI should expose local billing-cache workflows, including warming usage-stable full-month billing data, reporting cache coverage by subscription and month, forcing a refresh of a cached month, pruning old cache files, and opting analysis runs into or out of cached billing evidence.
 
 ## Non-Functional Requirements
 

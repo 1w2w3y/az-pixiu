@@ -104,6 +104,12 @@ export const BillingCacheRecordSchema = z.object({
     warnings: z.array(z.string()),
   }),
   /**
+   * Present only for an all-zero cell that passed the explicit zero-cost
+   * assessment. Legacy zero cells without this marker are treated as cache
+   * misses so a previously persisted ambiguous zero cannot remain durable.
+   */
+  zero_cost_assessment: z.literal('valid_zero').optional(),
+  /**
    * The raw cost evidence that produced this cell, retained so the
    * cost-evidence provider can replay it through EvidenceNormalizer on a
    * cache hit (design "the CostEvidenceProvider seam" — cache at the

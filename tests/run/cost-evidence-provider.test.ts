@@ -10,7 +10,8 @@ import type { EvidencePlan, EvidenceRequest, Scope } from '../../src/schemas/ind
 
 const ENDPOINT = 'https://example.grafana.azure.com';
 const SUB = '11111111-1111-1111-1111-111111111111';
-// "Today" for the maturity gate: 2026-06-22. April 2026 is finalized
+const OTHER_SUB = '22222222-2222-2222-2222-222222222222';
+// "Today" for the maturity gate: 2026-06-22. April 2026 is usage-stable
 // (well past 2026-05-06); June 2026 is not.
 const NOW = () => Date.parse('2026-06-22T00:00:00Z');
 
@@ -63,6 +64,82 @@ function rawFor(window: { start: string; end: string }, sub = SUB): RawEvidence 
   };
 }
 
+function liveZeroRaw(window: { start: string; end: string }): RawEvidence {
+  const request = costRequest(window);
+  return {
+    request,
+    parameters_digest: parameterDigest(request.parameters),
+    capability_version: '1.0.0',
+    result: {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            periodStart: window.start,
+            periodEnd: window.end,
+            subscriptions: [
+              { subscriptionId: SUB, totalCost: 0, currency: 'USD', byService: [] },
+            ],
+          }),
+        },
+      ],
+      isError: false,
+    },
+    retrieved_at: '2026-06-22T08:00:00.000Z',
+  };
+}
+
+function liveCostRaw(
+  window: { start: string; end: string },
+  subscriptions: unknown[],
+): RawEvidence {
+  const request = costRequest(window);
+  return {
+    request,
+    parameters_digest: parameterDigest(request.parameters),
+    capability_version: '1.0.0',
+    result: {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            periodStart: window.start,
+            periodEnd: window.end,
+            subscriptions,
+          }),
+        },
+      ],
+      isError: false,
+    },
+    retrieved_at: '2026-06-22T08:00:00.000Z',
+  };
+}
+
+function emptySubscriptionInventoryRaw(): RawEvidence {
+  const request: EvidenceRequest = {
+    capability: 'amgmcp_query_azure_subscriptions',
+    parameters: {},
+    intent: 'inventory',
+  };
+  return {
+    request,
+    parameters_digest: parameterDigest(request.parameters),
+    capability_version: '1.0.0',
+    result: {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            subscriptions: [{ subscriptionId: SUB, displayName: 'empty', resourceCount: 0 }],
+          }),
+        },
+      ],
+      isError: false,
+    },
+    retrieved_at: '2026-06-22T08:00:00.000Z',
+  };
+}
+
 const APRIL = { start: '2026-04-01T00:00:00Z', end: '2026-05-01T00:00:00Z' };
 const APRIL_7DAY = { start: '2026-04-01T00:00:00Z', end: '2026-04-08T00:00:00Z' };
 const JUNE = { start: '2026-06-01T00:00:00Z', end: '2026-07-01T00:00:00Z' };
@@ -106,7 +183,7 @@ describe('CostEvidenceProvider', () => {
     });
   });
 
-  it('write-through then serves a finalized month from cache with zero live cost calls', async () => {
+  it('write-through then serves a usage-stable month from cache with zero live cost calls', async () => {
     await withProvider(APRIL, async (provider, store) => {
       // 1. Warm via write-through (simulating a prior live retrieval).
       expect(await provider.writeThrough([rawFor(APRIL)])).toBe(1);
@@ -153,8 +230,187 @@ describe('CostEvidenceProvider', () => {
 
   it('does not cache a not-yet-mature month', async () => {
     await withProvider(JUNE, async (provider) => {
-      // June 2026 is not finalized as of 2026-06-22.
+      // June 2026 is not usage-stable as of 2026-06-22.
       expect(await provider.writeThrough([rawFor(JUNE)])).toBe(0);
+    });
+  });
+
+  it('does not cache an all-zero month when the zero is unresolved', async () => {
+    await withProvider(APRIL, async (provider, store) => {
+      expect(await provider.writeThrough([liveZeroRaw(APRIL)])).toBe(0);
+      expect(await store.list()).toHaveLength(0);
+    });
+  });
+
+  it('does not cache or serve a zero total that conflicts with a non-zero dimension', async () => {
+    await withProvider(APRIL, async (provider, store) => {
+      const suspicious = liveCostRaw(APRIL, [
+        {
+          subscriptionId: SUB,
+          totalCost: 0,
+          currency: 'USD',
+          byService: [{ name: 'Storage', cost: 12.5 }],
+        },
+      ]);
+      expect(
+        await provider.writeThrough([suspicious, emptySubscriptionInventoryRaw()]),
+      ).toBe(0);
+      expect(await store.list()).toHaveLength(0);
+
+      const served = await provider.serveFromCache({ requests: [costRequest(APRIL)] });
+      expect(served.hitCount).toBe(0);
+      expect(served.remainingPlan.requests).toEqual([costRequest(APRIL)]);
+    });
+  });
+
+  it('does not cache a cost payload whose subscriptions omit numeric totals', async () => {
+    await withProvider(APRIL, async (provider, store) => {
+      expect(await provider.writeThrough([liveCostRaw(APRIL, [])])).toBe(0);
+      expect(await store.list()).toHaveLength(0);
+    });
+  });
+
+  it('never writes a ToolCallResult marked isError even when its payload looks non-zero', async () => {
+    await withProvider(APRIL, async (provider, store) => {
+      const raw = liveCostRaw(APRIL, [
+        { subscriptionId: SUB, totalCost: 100, currency: 'USD', byService: [] },
+      ]);
+      raw.result = { ...raw.result, isError: true };
+      expect(await provider.writeThrough([raw])).toBe(0);
+      expect(await store.list()).toHaveLength(0);
+    });
+  });
+
+  it.each([
+    [
+      'wrong subscription',
+      [{ subscriptionId: OTHER_SUB, totalCost: 100, currency: 'USD', byService: [] }],
+    ],
+    [
+      'extra subscription',
+      [
+        { subscriptionId: SUB, totalCost: 40, currency: 'USD', byService: [] },
+        { subscriptionId: OTHER_SUB, totalCost: 60, currency: 'USD', byService: [] },
+      ],
+    ],
+  ] as const)('does not cache a non-zero structured payload with %s', async (_case, subscriptions) => {
+    await withProvider(APRIL, async (provider, store) => {
+      expect(await provider.writeThrough([liveCostRaw(APRIL, [...subscriptions])])).toBe(0);
+      expect(await store.list()).toHaveLength(0);
+    });
+  });
+
+  it('treats a legacy non-zero cache cell with returned-scope drift as a miss', async () => {
+    await withProvider(APRIL, async (provider, store) => {
+      const correct = liveCostRaw(APRIL, [
+        { subscriptionId: SUB, totalCost: 100, currency: 'USD', byService: [] },
+      ]);
+      expect(await provider.writeThrough([correct])).toBe(1);
+      const ref = (await store.list())[0]!;
+      const record = (await store.getRecord({
+        subscriptionId: ref.subscriptionId,
+        month: ref.month,
+        costView: ref.costView,
+        currencyMode: ref.currencyMode,
+        parametersDigest: ref.parametersDigest,
+      }))!;
+      const drifted = liveCostRaw(APRIL, [
+        { subscriptionId: SUB, totalCost: 40, currency: 'USD', byService: [] },
+        { subscriptionId: OTHER_SUB, totalCost: 60, currency: 'USD', byService: [] },
+      ]);
+      await store.set({
+        ...record,
+        raw_evidence: {
+          ...record.raw_evidence!,
+          result: drifted.result,
+        },
+      });
+
+      const served = await provider.serveFromCache({ requests: [costRequest(APRIL)] });
+      expect(served.hitCount).toBe(0);
+      expect(served.remainingPlan.requests).toEqual([costRequest(APRIL)]);
+    });
+  });
+
+  it('caches and serves a scope-proven valid zero with an explicit assessment marker', async () => {
+    await withProvider(APRIL, async (provider, store) => {
+      expect(
+        await provider.writeThrough([liveZeroRaw(APRIL), emptySubscriptionInventoryRaw()]),
+      ).toBe(1);
+      const refs = await store.list();
+      expect(refs).toHaveLength(1);
+      const ref = refs[0]!;
+      const record = await store.getRecord({
+        subscriptionId: ref.subscriptionId,
+        month: ref.month,
+        costView: ref.costView,
+        currencyMode: ref.currencyMode,
+        parametersDigest: ref.parametersDigest,
+      });
+      expect(record?.zero_cost_assessment).toBe('valid_zero');
+
+      const served = await provider.serveFromCache({ requests: [costRequest(APRIL)] });
+      expect(served.hitCount).toBe(1);
+      expect((served.servedRecords[0]?.payload_summary as { total_cost?: number }).total_cost).toBe(0);
+    });
+  });
+
+  it('treats a legacy all-zero cache cell without a valid-zero marker as a miss', async () => {
+    await withProvider(APRIL, async (provider, store) => {
+      await provider.writeThrough([liveZeroRaw(APRIL), emptySubscriptionInventoryRaw()]);
+      const ref = (await store.list())[0]!;
+      const record = (await store.getRecord({
+        subscriptionId: ref.subscriptionId,
+        month: ref.month,
+        costView: ref.costView,
+        currencyMode: ref.currencyMode,
+        parametersDigest: ref.parametersDigest,
+      }))!;
+      const { zero_cost_assessment: _marker, ...legacyRecord } = record;
+      await store.set(legacyRecord);
+
+      const served = await provider.serveFromCache({ requests: [costRequest(APRIL)] });
+      expect(served.hitCount).toBe(0);
+      expect(served.remainingPlan.requests).toEqual([costRequest(APRIL)]);
+    });
+  });
+
+  it.each([
+    ['ToolCallResult.isError', 'is_error'],
+    ['a malformed non-zero dimension', 'malformed_dimension'],
+  ] as const)('revalidates retained raw evidence and misses a marked zero cell with %s', async (_case, mutation) => {
+    await withProvider(APRIL, async (provider, store) => {
+      await provider.writeThrough([liveZeroRaw(APRIL), emptySubscriptionInventoryRaw()]);
+      const ref = (await store.list())[0]!;
+      const record = (await store.getRecord({
+        subscriptionId: ref.subscriptionId,
+        month: ref.month,
+        costView: ref.costView,
+        currencyMode: ref.currencyMode,
+        parametersDigest: ref.parametersDigest,
+      }))!;
+      const poisonedResult =
+        mutation === 'is_error'
+          ? { ...record.raw_evidence!.result, isError: true }
+          : liveCostRaw(APRIL, [
+              {
+                subscriptionId: SUB,
+                totalCost: 0,
+                currency: 'USD',
+                byService: [{ name: 'Storage', cost: '12.5' }],
+              },
+            ]).result;
+      await store.set({
+        ...record,
+        raw_evidence: {
+          ...record.raw_evidence!,
+          result: poisonedResult,
+        },
+      });
+
+      const served = await provider.serveFromCache({ requests: [costRequest(APRIL)] });
+      expect(served.hitCount).toBe(0);
+      expect(served.remainingPlan.requests).toEqual([costRequest(APRIL)]);
     });
   });
 

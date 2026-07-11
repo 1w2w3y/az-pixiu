@@ -44,7 +44,7 @@ describe('DataQualityFindingSchema', () => {
     ).toBe(false);
   });
 
-  it('accepts all 12 design-specified categories', () => {
+  it('accepts all design-specified retrieval and analytical categories', () => {
     for (const category of [
       'auth',
       'authz_gap',
@@ -58,6 +58,12 @@ describe('DataQualityFindingSchema', () => {
       'partial_coverage',
       'tagging_gap',
       'missing_telemetry',
+      'freshness_partial_window',
+      'freshness_uniform_drop',
+      'cost_zero_suspected',
+      'zero_unresolved',
+      'cost_scope_mismatch',
+      'billing_probe_excluded',
     ]) {
       expect(DataQualityFindingSchema.safeParse({ ...validFinding, category }).success).toBe(true);
     }

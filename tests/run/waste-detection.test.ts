@@ -5,7 +5,8 @@ import { orphanPublicIpLane } from '../../src/playbooks/waste-lanes/orphan-publi
 import { FixtureMCPTransport } from '../../src/mcp/fixture.js';
 import { MCPClient } from '../../src/mcp/client.js';
 import { JsonFileRateSource } from '../../src/pricing/json-file-rate-source.js';
-import type { Scope } from '../../src/schemas/index.js';
+import type { CapabilityCatalog, Scope, ToolCallResult } from '../../src/schemas/index.js';
+import type { MCPTransport } from '../../src/mcp/transport.js';
 
 const wasteScope: Scope = {
   subscription_ids: [
@@ -37,6 +38,9 @@ describe('WasteDetectionExecutor — orphan-public-ip lane against the seeded fi
     expect(lane.lane).toBe('orphan_public_ip');
     expect(lane.failed).toBe(false);
     expect(lane.candidates).toHaveLength(5);
+    expect(lane.unparsed_row_count).toBe(0);
+    expect(lane.rejected_row_count).toBe(0);
+    expect(result.failures).toHaveLength(0);
 
     // Every candidate becomes its own EvidenceRecord; the executor
     // is the only source of waste_candidate evidence, so the count
@@ -118,5 +122,249 @@ describe('WasteDetectionExecutor — orphan-public-ip lane against the seeded fi
     const entry = result.transport_summary[0]!;
     expect(entry.capability).toBe('amgmcp_query_resource_graph');
     expect(entry.final_outcome).toBe('success');
+    expect(entry.scope_subset?.subscription_ids).toEqual(wasteScope.subscription_ids);
+  });
+
+  it('propagates ToolCallResult.isError through the executor as a failed lane', async () => {
+    const transport = new SingleArgTransport({
+      isError: true,
+      content: [{ type: 'text', text: JSON.stringify({ data: [], count: 0 }) }],
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const rateSource = await JsonFileRateSource.load({ path: 'pricing/azure-rate-card.json' });
+    const executor = new WasteDetectionExecutor({
+      client,
+      catalog,
+      rateSource,
+      lanes: [orphanPublicIpLane],
+      retryPolicy: { maxAttempts: 1, baseDelayMs: 0, maxDelayMs: 0, totalBudgetMs: 1_000, paceAfterRateLimitMs: 0 },
+    });
+
+    const result = await executor.execute({ scope: wasteScope });
+
+    expect(result.lanes).toEqual([
+      expect.objectContaining({
+        lane: 'orphan_public_ip',
+        failed: true,
+        candidates: [],
+      }),
+    ]);
+    expect(result.evidence).toHaveLength(0);
+    expect(result.failures).toHaveLength(1);
+    expect(result.transport_summary).toHaveLength(1);
+    expect(result.transport_summary[0]?.final_outcome).not.toBe('success');
+  });
+
+  it('rejects out-of-scope and ARM-mismatched rows, emits schema_mismatch, and keeps valid evidence', async () => {
+    const inScope = wasteScope.subscription_ids[0]!;
+    const otherInScope = wasteScope.subscription_ids[1]!;
+    const outOfScope = '99999999-9999-9999-9999-999999999999';
+    const payload = {
+      data: [
+        {
+          id: `/subscriptions/${inScope}/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-valid`,
+          name: 'pip-valid',
+          subscriptionId: inScope,
+          resourceGroup: 'rg',
+          location: 'eastus',
+          skuName: 'Standard',
+          allocationMethod: 'Static',
+          ipConfigurationId: '',
+          natGatewayId: '',
+        },
+        {
+          id: `/subscriptions/${outOfScope}/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-leak`,
+          name: 'pip-leak',
+          subscriptionId: outOfScope,
+          resourceGroup: 'rg',
+          location: 'eastus',
+          skuName: 'Standard',
+          allocationMethod: 'Static',
+          ipConfigurationId: '',
+          natGatewayId: '',
+        },
+        {
+          id: `/subscriptions/${otherInScope}/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-mismatch`,
+          name: 'pip-mismatch',
+          subscriptionId: inScope,
+          resourceGroup: 'rg',
+          location: 'eastus',
+          skuName: 'Standard',
+          allocationMethod: 'Static',
+          ipConfigurationId: '',
+          natGatewayId: '',
+        },
+        {
+          id: `/subscriptions/${inScope}/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/not-a-pip`,
+          name: 'not-a-pip',
+          subscriptionId: inScope,
+          resourceGroup: 'rg',
+          location: 'eastus',
+          skuName: 'Standard',
+          allocationMethod: 'Static',
+          ipConfigurationId: '',
+          natGatewayId: '',
+        },
+        'not-an-object-row',
+      ],
+      count: 5,
+    };
+    const transport = new SingleArgTransport({
+      content: [{ type: 'text', text: JSON.stringify(payload) }],
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const rateSource = await JsonFileRateSource.load({ path: 'pricing/azure-rate-card.json' });
+    const executor = new WasteDetectionExecutor({
+      client,
+      catalog,
+      rateSource,
+      lanes: [orphanPublicIpLane],
+    });
+
+    const result = await executor.execute({ scope: wasteScope });
+    const lane = result.lanes[0]!;
+    expect(lane.candidates.map((c) => c.candidate.name)).toEqual(['pip-valid']);
+    expect(lane.unparsed_row_count).toBe(1);
+    expect(lane.rejected_row_count).toBe(3);
+    expect(result.evidence).toHaveLength(1);
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        category: 'schema_mismatch',
+        capability: 'amgmcp_query_resource_graph',
+      }),
+    ]);
+    expect(transport.lastParameters).not.toHaveProperty('subscription_ids');
+    expect(String(transport.lastParameters?.query)).toContain('where subscriptionId in~');
+    expect(result.transport_summary[0]?.scope_subset?.subscription_ids).toEqual(
+      wasteScope.subscription_ids,
+    );
+  });
+
+  it('treats an empty resource-group list as no filter instead of rejecting every row', async () => {
+    const sub = wasteScope.subscription_ids[0]!;
+    const transport = new SingleArgTransport({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            data: [
+              {
+                id: `/subscriptions/${sub}/resourceGroups/rg-any/providers/Microsoft.Network/publicIPAddresses/pip-valid`,
+                name: 'pip-valid',
+                subscriptionId: sub,
+                resourceGroup: 'rg-any',
+                location: 'eastus',
+                skuName: 'Standard',
+                allocationMethod: 'Static',
+                ipConfigurationId: '',
+                natGatewayId: '',
+              },
+            ],
+            count: 1,
+          }),
+        },
+      ],
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const rateSource = await JsonFileRateSource.load({ path: 'pricing/azure-rate-card.json' });
+    const executor = new WasteDetectionExecutor({
+      client,
+      catalog,
+      rateSource,
+      lanes: [orphanPublicIpLane],
+    });
+
+    const result = await executor.execute({
+      scope: { ...wasteScope, resource_group_names: [] },
+    });
+    expect(result.lanes[0]?.candidates.map((candidate) => candidate.candidate.name)).toEqual([
+      'pip-valid',
+    ]);
+    expect(result.lanes[0]?.rejected_row_count).toBe(0);
+    expect(result.transport_summary[0]?.scope_subset?.resource_group_names).toBeNull();
+  });
+
+  it('normalizes whitespace and enforces the effective resource-type filter on returned ARM ids', async () => {
+    const sub = wasteScope.subscription_ids[0]!;
+    const transport = new SingleArgTransport({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            data: [
+              {
+                id: `/subscriptions/${sub}/resourceGroups/rg-any/providers/Microsoft.Network/publicIPAddresses/pip-filtered`,
+                name: 'pip-filtered',
+                subscriptionId: ` ${sub} `,
+                resourceGroup: 'rg-any',
+                location: 'eastus',
+                skuName: 'Standard',
+                allocationMethod: 'Static',
+                ipConfigurationId: '',
+                natGatewayId: '',
+              },
+            ],
+            count: 1,
+          }),
+        },
+      ],
+    });
+    const client = new MCPClient({ transport });
+    const catalog = await client.discover();
+    const rateSource = await JsonFileRateSource.load({ path: 'pricing/azure-rate-card.json' });
+    const executor = new WasteDetectionExecutor({
+      client,
+      catalog,
+      rateSource,
+      lanes: [orphanPublicIpLane],
+    });
+
+    const result = await executor.execute({
+      scope: {
+        ...wasteScope,
+        resource_group_names: ['  rg-any  '],
+        resource_type_filter: ['  Microsoft.Compute/virtualMachines  '],
+      },
+    });
+    expect(result.lanes[0]?.candidates).toHaveLength(0);
+    expect(result.lanes[0]?.rejected_row_count).toBe(1);
+    expect(String(transport.lastParameters?.query)).toContain(
+      "where resourceGroup in~ ('rg-any')",
+    );
+    expect(String(transport.lastParameters?.query)).toContain(
+      "where type in~ ('Microsoft.Compute/virtualMachines')",
+    );
+    expect(result.transport_summary[0]?.scope_subset?.resource_group_names).toEqual(['rg-any']);
   });
 });
+
+class SingleArgTransport implements MCPTransport {
+  lastParameters: Record<string, unknown> | undefined;
+
+  constructor(private readonly result: ToolCallResult) {}
+
+  async listCapabilities(): Promise<CapabilityCatalog> {
+    return {
+      capabilities: [
+        {
+          name: 'amgmcp_query_resource_graph',
+          version: '1.0.0',
+          description: 'ARG test transport',
+        },
+      ],
+    };
+  }
+
+  async invoke(
+    _capability: string,
+    parameters: Record<string, unknown>,
+  ): Promise<ToolCallResult> {
+    this.lastParameters = parameters;
+    return this.result;
+  }
+
+  async close(): Promise<void> {}
+}

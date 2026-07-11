@@ -15,6 +15,12 @@ export const EvidenceRequestSchema = z
     capability: z.string().min(1),
     parameters: z.record(z.string(), z.unknown()),
     intent: QueryIntentSchema,
+    /**
+     * Internal provenance for capabilities whose supported wire schema does
+     * not carry scope separately (for example ARG, where scope lives in KQL).
+     * The executor never forwards this field to MCP.
+     */
+    intended_scope_subset: ScopeSubsetSchema.optional(),
     // .nullable().optional() — OpenAI strict-mode structured outputs reject
     // .optional() fields that aren't also .nullable(); see the
     // zod-to-json-schema check at object.ts:50–60 in the OpenAI SDK.

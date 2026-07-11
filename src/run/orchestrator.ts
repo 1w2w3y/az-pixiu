@@ -44,6 +44,11 @@ import { intakeScope, type ScopeIntakeInput } from './scope-intake.js';
 import { computeScopeSignature } from './scope-signature.js';
 import { COST_EVIDENCE_CAPABILITIES, COST_WIRE_CAPABILITIES } from './cost-capabilities.js';
 import { CostEvidenceProvider } from './cost-evidence-provider.js';
+import {
+  QUARANTINED_COST_SOURCE_CAPABILITY,
+  assessCostZeroEvidence,
+  markQuarantinedCostEvidence,
+} from './cost-zero-assessment.js';
 import type {
   CostView,
   CurrencyMode,
@@ -54,6 +59,7 @@ import { buildPriorRunContextEvidence } from './prior-run-evidence.js';
 import { checkFreshness } from './freshness.js';
 import { WasteDetectionExecutor } from './waste-detection.js';
 import { getEnabledWasteLanes } from '../playbooks/waste-lanes/registry.js';
+import type { WasteLaneResult } from '../playbooks/waste-lanes/types.js';
 import { JsonFileRateSource } from '../pricing/json-file-rate-source.js';
 import type { PricingRateSource } from '../pricing/source.js';
 import { NoopRunHistoryStore, type RunHistoryStore } from '../history/store.js';
@@ -152,9 +158,9 @@ export interface RunOptions {
   /**
    * Local billing-cache read-through / write-through (docs/design/
    * local-billing-cache.md). When set on a `cost_summary` run, the
-   * orchestrator serves cache-eligible finalized-month cost requests from
+   * orchestrator serves cache-eligible usage-stable-month cost requests from
    * the local cache (skipping the live AMG-MCP call) and writes freshly
-   * retrieved finalized months back. Omitted ⇒ the cache is not consulted
+   * retrieved usage-stable months back. Omitted ⇒ the cache is not consulted
    * and the cost path is byte-identical to its pre-cache shape. The CLI
    * sets this only behind `--billing-cache` / `billing_cache.enabled`.
    */
@@ -252,12 +258,14 @@ export interface RunResult {
   metadata: RunMetadata;
   reasoning: ReasoningOutput;
   /**
-   * Normalized EvidenceRecords as they were handed to the reasoner. Useful
-   * to downstream consumers (eval runner) that need to inspect which
-   * capabilities actually produced evidence without round-tripping through
-   * run.json.
+   * Normalized EvidenceRecords surfaced by the run. Quarantined cost records
+   * remain here for provenance but are withheld from the reasoner.
    */
   evidence: EvidenceRecord[];
+  /** Deterministic lane results used by dataset recall/scope expectations. */
+  waste_lanes: WasteLaneResult[];
+  /** Wire and synthetic capabilities attempted/served during this run. */
+  invoked_capabilities: string[];
   /**
    * DataQualityCategory values surfaced to the pipeline before the
    * reasoner sees them (normalizer findings + failure-taxonomy findings).
@@ -770,7 +778,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   process.stdout.write(`  ${plan.requests.length} evidence request(s) planned\n`);
 
   // Billing-cache read-through (design "the CostEvidenceProvider seam"):
-  // lift cache-eligible finalized-month cost requests out of the live plan
+  // lift cache-eligible usage-stable-month cost requests out of the live plan
   // and serve them from the local cache; the executor runs only the rest.
   const billingProvider =
     ctx.billingCache && ctx.scope.analysis_type === 'cost_summary'
@@ -862,12 +870,18 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
       '\n',
   );
 
-  // Write-through: persist freshly-retrieved finalized-month cost evidence
+  // A successful Cost Management call can still carry an unsafe all-zero
+  // payload. Assess it before cache write-through so unresolved or
+  // contradictory zeros cannot become durable, then retain the assessment
+  // for normalization/reporting below.
+  const costZeroAssessment = assessCostZeroEvidence(raw_evidence);
+
+  // Write-through: persist freshly retrieved usage-stable-month cost evidence
   // so the next run against this scope hits the cache.
   if (billingProvider) {
-    const wrote = await billingProvider.writeThrough(raw_evidence);
+    const wrote = await billingProvider.writeThrough(raw_evidence, costZeroAssessment);
     if (wrote > 0) {
-      process.stdout.write(`  billing-cache: ${wrote} finalized month(s) written to cache\n`);
+      process.stdout.write(`  billing-cache: ${wrote} usage-stable month(s) written to cache\n`);
     }
   }
 
@@ -880,7 +894,10 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   // Cache-served cost records (source_capability = az_pixiu_billing_cache)
   // join the live records before the reasoner, coverage, and classify see
   // them. They are excluded from freshness by capability, not here.
-  const records = [...normalized.records, ...(cacheServed?.servedRecords ?? [])];
+  const records = markQuarantinedCostEvidence(
+    [...normalized.records, ...(cacheServed?.servedRecords ?? [])],
+    costZeroAssessment,
+  );
 
   // Merge failure-classified DQs alongside normalizer DQs
   const failureDqs = failures.map((f, i) => failureToDq(f, i));
@@ -896,6 +913,11 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   const wasteResult = await runWasteDetection(ctx, catalog);
   const wasteEvidence = wasteResult?.evidence ?? [];
   const wasteFailures = wasteResult?.failures ?? [];
+  const evidenceContractIncomplete =
+    costZeroAssessment.data_quality.length > 0 ||
+    (wasteResult?.lanes.some(
+      (lane) => lane.failed || lane.unparsed_row_count > 0 || lane.rejected_row_count > 0,
+    ) ?? false);
   const wasteFailureDqs = wasteFailures.map((f, i) => failureToDq(f, failureDqs.length + i));
   const mergedTransport = [
     ...transport_summary,
@@ -916,7 +938,14 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     ...(ctx.discoveryResult?.data_quality ?? []),
     ...(ctx.preflightDataQuality ?? []),
   ];
-  const allDq = [...normalizerDq, ...failureDqs, ...wasteFailureDqs, ...freshnessDqs, ...probeDqs];
+  const allDq = [
+    ...normalizerDq,
+    ...failureDqs,
+    ...wasteFailureDqs,
+    ...costZeroAssessment.data_quality,
+    ...freshnessDqs,
+    ...probeDqs,
+  ];
   process.stdout.write(
     `  normalized ${records.length} evidence record(s); ${allDq.length} data-quality finding(s) so far\n`,
   );
@@ -948,6 +977,9 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   // before continuity context so it can ground continuity markers
   // (Phase 3 PR 4) against the in-window lane output.
   const recordsWithPrior = [...records, ...wasteEvidence, ...priorRunEvidence];
+  const reasoningEvidence = recordsWithPrior.filter(
+    (record) => record.source_capability !== QUARANTINED_COST_SOURCE_CAPABILITY,
+  );
   if (priorRunEvidence.length > 0) {
     process.stdout.write(
       `  found ${priorRuns.length} prior run(s) against this scope — injecting prior_run_context\n`,
@@ -958,7 +990,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
   process.stdout.write(`→ reasoning over evidence...\n`);
   const reasoner = new Reasoner({ model: ctx.model, systemPrompt: reasonerPrompt.content });
   const { output: reasoning, issues } = await withSpan(SpanNames.Reasoning, async (span) => {
-    const r = await reasoner.reason({ scope: ctx.scope, evidence: recordsWithPrior, data_quality: allDq });
+    const r = await reasoner.reason({ scope: ctx.scope, evidence: reasoningEvidence, data_quality: allDq });
     span.setAttribute(ATTR.reasoningFactsProduced, r.output.facts.length);
     span.setAttribute(ATTR.reasoningHypothesesProduced, r.output.hypotheses.length);
     span.setAttribute(ATTR.reasoningRecommendationsProduced, r.output.recommendations.length);
@@ -970,7 +1002,7 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     `  reasoning produced ${reasoning.facts.length} fact(s), ${reasoning.hypotheses.length} hypothesis/es, ${reasoning.recommendations.length} recommendation(s)\n`,
   );
 
-  const score = scoreAll(reasoning, { evidence: recordsWithPrior });
+  const score = scoreAll(reasoning, { evidence: reasoningEvidence });
 
   // Cost-retrieval outcome + reasoner-drop accounting (DESIGN-NOTE.md
   // §Bug A). Both are derivable from already-computed values — the
@@ -984,13 +1016,19 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     scopeSubscriptionIds: ctx.scope.subscription_ids,
     transportSummary: mergedTransport,
     evidence: records,
+    quarantinedCostEvidenceCount: costZeroAssessment.data_quality.length,
   });
-  const runStatus = deriveRunStatus(costRetrievalOutcome, reasoningDrops);
+  const runStatus = deriveRunStatus(
+    costRetrievalOutcome,
+    reasoningDrops,
+    evidenceContractIncomplete,
+  );
   const runOutcomeSummary = describeRunOutcome(
     runStatus,
     costRetrievalOutcome,
     reasoningDrops,
     mergedTransport,
+    evidenceContractIncomplete,
   );
 
   const endedAt = new Date().toISOString();
@@ -1093,6 +1131,8 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     // record stays out (it is synthetic continuity context, not
     // retrieved evidence) to match the pre-Phase-3 shape.
     evidence: [...records, ...wasteEvidence],
+    waste_lanes: wasteResult?.lanes ?? [],
+    invoked_capabilities: mergedTransport.map((entry) => entry.capability),
     input_dq_categories: allDq.map((d) => d.category),
     score,
     failures_classified: failures.length + wasteFailures.length,
@@ -1310,6 +1350,7 @@ function classifyCostRetrievalOutcome(input: {
   scopeSubscriptionIds: readonly string[];
   transportSummary: readonly import('../schemas/transport.js').TransportSummaryEntry[];
   evidence: readonly EvidenceRecord[];
+  quarantinedCostEvidenceCount?: number;
 }): CostRetrievalOutcome {
   const isCostAnalysis =
     input.analysisType === 'cost_summary' ||
@@ -1335,7 +1376,9 @@ function classifyCostRetrievalOutcome(input: {
       if (expectedSet.has(id)) coveredSet.add(id);
     }
   }
-  if (coveredSet.size === 0) return 'failed';
+  if (coveredSet.size === 0) {
+    return (input.quarantinedCostEvidenceCount ?? 0) > 0 ? 'partial' : 'failed';
+  }
   if (coveredSet.size < expectedSet.size) return 'partial';
   return 'success';
 }
@@ -1367,8 +1410,8 @@ function summarizeReasoningDrops(
 }
 
 /**
- * Derive {@link RunMetadata.status} from the cost-retrieval outcome and
- * reasoner-drop accounting. Honours the existing enum:
+ * Derive {@link RunMetadata.status} from cost retrieval, evidence-contract
+ * completeness, and reasoner-drop accounting. Honours the existing enum:
  *
  *   failed_analysis  ← cost retrieval failed across the entire scope
  *   partial          ← any in-scope sub missed cost evidence or the
@@ -1381,9 +1424,11 @@ function summarizeReasoningDrops(
 function deriveRunStatus(
   costOutcome: CostRetrievalOutcome,
   drops: ReasoningDropBreakdown,
+  evidenceContractIncomplete: boolean,
 ): RunMetadata['status'] {
   if (costOutcome === 'failed') return 'failed_analysis';
   if (costOutcome === 'partial') return 'partial';
+  if (evidenceContractIncomplete) return 'partial';
   if (drops.total > 0) return 'partial';
   return 'success';
 }
@@ -1399,6 +1444,7 @@ function describeRunOutcome(
   costOutcome: CostRetrievalOutcome,
   drops: ReasoningDropBreakdown,
   transportSummary: readonly import('../schemas/transport.js').TransportSummaryEntry[],
+  evidenceContractIncomplete: boolean,
 ): RunOutcomeSummary {
   const label =
     status === 'failed_analysis' ? 'FAILED'
@@ -1423,6 +1469,9 @@ function describeRunOutcome(
     );
   } else if (costOutcome === 'partial') {
     reasons.push('cost-evidence retrieval was incomplete for at least one subscription in scope');
+  }
+  if (evidenceContractIncomplete && costOutcome === 'success') {
+    reasons.push('one or more evidence-contract checks were incomplete; see Run Quality');
   }
   if (drops.total > 0) {
     reasons.push(

@@ -10,17 +10,29 @@ import {
 // component (§4.2). user_context is captured here but kept separate from
 // retrieved evidence by the planner/reasoner boundary (§7.3).
 
+export const ScopeFilterValuesSchema = z
+  .array(z.string().trim().min(1))
+  .transform((values) => {
+    const seen = new Set<string>();
+    return values.filter((value) => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  });
+
 export const ScopeSchema = z
   .object({
     subscription_ids: z.array(AzureSubscriptionIdSchema).min(1),
-    resource_group_names: z.array(z.string().min(1)).optional(),
+    resource_group_names: ScopeFilterValuesSchema.optional(),
     time_window: TimeWindowSchema,
     // baseline_window is required for cost_surprise but not for
     // cost_summary (single-window cost dump, no anomaly comparison).
     // The refinement below keeps the requirement keyed off analysis_type.
     baseline_window: TimeWindowSchema.optional(),
     analysis_type: AnalysisTypeSchema,
-    resource_type_filter: z.array(z.string().min(1)).optional(),
+    resource_type_filter: ScopeFilterValuesSchema.optional(),
     user_context: z.string().optional(),
     effective_scope_summary: z.string().min(1),
     // Human-readable name per subscription id, when known up front

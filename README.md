@@ -12,7 +12,7 @@ The project is named after the **Pixiu (貔貅)**, a creature in Chinese mytholo
 
 - Discovers Azure subscriptions and resources via AMG-MCP.
 - Pulls cost, configuration, and telemetry signals over the same boundary.
-- Identifies cost-relevant patterns and, for `cost-summary` today, the first waste lane: orphan public IPs with calibrated weekly list-price estimates. Additional waste lanes are on the roadmap.
+- Identifies cost-relevant patterns and, for `cost-summary` today, the first structural review lane: public IPs with neither an IP configuration nor a NAT Gateway association, with calibrated weekly list-price exposure. The match is a review candidate, not proof that the address should be deleted.
 - Writes a human-readable Markdown report where every claim cites the underlying tool call.
 - Records the full reasoning trace — planner steps, tool calls, model output, scores — to [Langfuse](https://langfuse.com) for review and evaluation.
 
@@ -102,10 +102,11 @@ Recently shipped:
 
 - **Phase 2.5 — cross-run continuity foundations.** `RunHistoryStore` over the existing `runs/` artefacts, deterministic `recommendation_signature`, `prior_run_context` evidence, and a first-class "Run Quality" report section.
 - **Phase 2 — Langfuse eval publishing.** Eval runs can publish rubric and expectation scores, upsert local dataset items, group traces into Langfuse Dataset Runs / Experiments, and sweep multiple models.
-- **Phase 3 — first waste lane.** The `cost-summary` analyzer now detects **orphan public IPs** with calibrated weekly impact estimates from an in-repo rate card. This is the only enabled waste lane today.
+- **Phase 3 — first waste lane plus evidence-contract gate.** The `cost-summary` analyzer enumerates unassociated public-IP review candidates with calibrated weekly impact estimates from an in-repo rate card. Both deterministic analyzers send the discovered live wire shapes for Cost Analysis and Activity Log, keep ARG scope inside supported KQL, and preserve intended scope outside the wire payload. The waste lane decodes real MCP text envelopes, rejects returned rows outside effective scope, and refuses a clean no-match claim when parsing is incomplete. This is the only enabled waste lane today.
+- **Cost evidence quarantine.** Cost responses distinguish `valid_zero`, `cost_zero_suspected`, `zero_unresolved`, and `cost_scope_mismatch`. Contradictory zeros, malformed/missing numeric totals, unrecognized successful payloads, and structured responses whose returned subscription set differs from the request remain visible as partial provenance but are excluded from reasoning, coverage, arithmetic, and local billing-cache admission.
 - **Transport resilience.** The agent recognizes wire-level and payload-embedded 429s from AMG-MCP cost analysis, retries with capped backoff plus jitter, separates pacing from retry budget, records `transport_summary`, and makes retries visible in Run Quality and trace events.
 
-Next up: the rest of the Phase 3 waste-lane group (unattached disks, deallocated VMs, stopped AKS, "restored-*" PostgreSQL servers, empty ACRs), naming-pattern clustering, continuity markers that consume `prior_run_context`, uniform-drop freshness detection, and the remaining Phase 2 Langfuse surfaces (prompt loading from Langfuse, Langfuse-sourced datasets, judge scores, human review, redaction). See the [roadmap](docs/roadmap.md) and the [cost-summary depth design](docs/design/cost-summary-depth.md) for the full plan.
+Next up: a bounded cost-guided second pass, beginning with PostgreSQL rightsizing and followed by Log Analytics ingestion, AKS node-pool efficiency, Cosmos DB throughput/lifecycle, and ACR inactivity/replication evidence packs. Additional waste lanes, naming-pattern clustering, continuity markers, uniform-drop freshness detection, and the remaining Phase 2 Langfuse surfaces remain planned. See the [roadmap](docs/roadmap.md) and the [cost-summary depth design](docs/design/cost-summary-depth.md) for the full plan.
 
 ## Audience
 
@@ -140,7 +141,7 @@ Az-Pixiu is written for two readers. The first is an engineer or operator who wa
 - [Phase 1 design](docs/design/phase-1.md) — minimum viable agent: components, data shapes, reasoning loop, trace vocabulary.
 - [Phase 2 design](docs/design/phase-2.md) — Langfuse depth: scores, datasets, prompt management, experiments, LLM-as-judge, human review, calibration.
 - [Cost-summary depth](docs/design/cost-summary-depth.md) — Phase 2.5 + Phase 3 analyzer extensions: waste lanes, naming-pattern clustering, calibrated impact, freshness checks, continuity markers.
-- [Local billing cache](docs/design/local-billing-cache.md) — planned local cache for finalized monthly billing evidence to reduce repeated AMG-MCP Cost Management calls.
+- [Local billing cache](docs/design/local-billing-cache.md) — partially shipped local cache for usage-stable full-month billing evidence, including conservative zero/missing-total admission rules.
 
 ## License
 
