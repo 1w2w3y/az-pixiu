@@ -1,0 +1,29 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('77777777-7777-7777-7777-777777777777', '88888888-8888-8888-8888-888888888888') | extend owner = tostring(tags['owner']), environment = tostring(tags['environment']), cost_center = tostring(tags['cost-center']) | summarize total=count(), no_owner=countif(owner == ''), no_environment=countif(environment == ''), no_cost_center=countif(cost_center == '') by subscriptionId"
+  },
+  "parameters_digest": "9f97691d1eb634065ea72017258e9a2c742bdd6cf34713dce451f11a76d32e00",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "subscriptionId": "77777777-7777-7777-7777-777777777777",
+          "total": 6,
+          "no_owner": 4,
+          "no_environment": 2,
+          "no_cost_center": 5
+        },
+        {
+          "subscriptionId": "88888888-8888-8888-8888-888888888888",
+          "total": 2,
+          "no_owner": 1,
+          "no_environment": 1,
+          "no_cost_center": 2
+        }
+      ],
+      "count": 2
+    },
+    "isError": false
+  }
+}

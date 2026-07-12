@@ -110,9 +110,12 @@ export const QueryIntentSchema = z.enum([
   'prior_run_context',
   // Waste-detection lanes (Phase 3 — design/cost-summary-depth.md §Gap 1).
   // The WasteDetectionExecutor emits one EvidenceRecord per candidate
-  // resource that matches a lane's ARG predicate, with the predicate
-  // text cited on the record so the reasoner can defend its
-  // classification. Lane outputs originate from AMG-MCP's resource-graph
+  // resource that matches a lane's ARG predicate plus one aggregate
+  // summary record for each complete non-empty lane. Partial enumeration
+  // fails closed and emits candidate records only. Both record kinds cite the
+  // predicate; payload `record_kind` distinguishes `candidate` from
+  // `lane_summary`, so consumers must not equate this intent with one
+  // candidate per record. Lane outputs originate from AMG-MCP's resource-graph
   // capability but are surfaced under a synthetic source_capability
   // (`az_pixiu_waste_lane`) so they are obviously distinguishable from
   // generic `inventory` records in the trace and the report.

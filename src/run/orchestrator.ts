@@ -499,6 +499,24 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
             setActiveTraceIO({ output: outputSummary });
             updateActiveObservation({ output: outputSummary });
             await publishAnalyzeScores(options.langfusePublisher, otelTraceId, r);
+            rootSpan.setAttribute(
+              ATTR.promptPlannerVersion,
+              r.metadata.prompt_versions.planner,
+            );
+            rootSpan.setAttribute(
+              ATTR.promptReasonerVersion,
+              r.metadata.prompt_versions.reasoner,
+            );
+            if (r.metadata.prompt_content_hashes) {
+              rootSpan.setAttribute(
+                ATTR.promptPlannerContentSha256,
+                r.metadata.prompt_content_hashes.planner,
+              );
+              rootSpan.setAttribute(
+                ATTR.promptReasonerContentSha256,
+                r.metadata.prompt_content_hashes.reasoner,
+              );
+            }
             rootSpan.setAttribute(ATTR.status, r.metadata.status);
             return r;
           },
@@ -1037,6 +1055,10 @@ async function doRun(ctx: RunCtx): Promise<RunResult> {
     run_id: runIdAsBranded(ctx.runId),
     trace_id: ctx.traceId,
     prompt_versions: { planner: plannerPrompt.version, reasoner: reasonerPrompt.version },
+    prompt_content_hashes: {
+      planner: plannerPrompt.content_sha256,
+      reasoner: reasonerPrompt.content_sha256,
+    },
     model_provider: ctx.modelProvider,
     model_name: modelInfo.modelName,
     model_config_hash: modelConfigHash({

@@ -24,6 +24,8 @@ An engineering manager prepares for a cross-team cost review and wants a structu
 
 Az-Pixiu should be able to produce a coherent report grounded in actual data, suitable as a starting point for a human-written narrative.
 
+The review must keep three different quantities separate: cost observed in the billing evidence, list-price exposure estimated from a rate card, and savings that could actually be realized after discounts, meter attribution, resource age, and operational constraints are checked. A high-cost service is not by itself evidence that its resources are underused, and a list-price exposure range is not a savings commitment.
+
 The scope of a cost review is often defined by naming convention rather than by enumerating subscription identifiers — for example, every subscription belonging to a business unit, every production-tier subscription, or every subscription owned by a particular team. Az-Pixiu should support selecting the in-scope subscriptions by a case-insensitive name pattern wherever subscriptions are auto-discovered, so the operator does not have to look up identifiers before running the analysis. The matched subscriptions must be echoed back as part of the effective scope before analysis begins.
 
 ## Running a recurring cleanup review
@@ -31,6 +33,8 @@ The scope of a cost review is often defined by naming convention rather than by 
 A platform team treats Azure waste as a backlog rather than a one-time scan. Once a week, the same scope is reviewed for orphaned IPs, unattached disks, stopped or failed clusters, "restored-*" database servers left behind by experiments, and unused container registries. Some items are cleaned up between runs; others persist. The team wants to know which candidates have not moved in N weeks (so they can escalate ownership), which clusters of similarly-named resources have recurred from a prior incident (so the root cause can be addressed instead of the symptom), and whether this week's totals look real or are likely a billing-API freshness artifact.
 
 Az-Pixiu should be able to recognize the recurring shape of this work. A single run should produce a waste-candidates section grounded in evidence and calibrated weekly impact estimates. Across runs against the same scope, the agent should mark candidates as unchanged for N weeks, flag recurring naming patterns from prior runs, and identify recommendations that are carrying forward versus newly discovered. The continuity of the workflow is itself a signal: a backlog that does not change is qualitatively different from one that is being worked.
+
+When structural candidate exposure and observed billed cost disagree, the report should preserve both values, explain that the rate-card figure is a review ceiling rather than realized savings, and make reconciliation part of the human validation path.
 
 This use case is distinct from the quarterly cost review above: the quarterly review summarizes spend and lifecycle for a stakeholder narrative; the recurring cleanup review tracks an operational backlog that the platform team owns and works against between runs. The two share the same `cost-summary` analyzer surface but produce different report content.
 

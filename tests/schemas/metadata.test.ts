@@ -24,6 +24,30 @@ describe('RunMetadataSchema', () => {
     expect(RunMetadataSchema.safeParse(validMetadata).success).toBe(true);
   });
 
+  it('accepts full prompt content hashes while keeping them optional for historical runs', () => {
+    const digestA = `sha256:${'a'.repeat(64)}`;
+    const digestB = `sha256:${'b'.repeat(64)}`;
+    expect(
+      RunMetadataSchema.safeParse({
+        ...validMetadata,
+        prompt_content_hashes: { planner: digestA, reasoner: digestB },
+      }).success,
+    ).toBe(true);
+    expect(RunMetadataSchema.safeParse(validMetadata).success).toBe(true);
+  });
+
+  it('rejects malformed or truncated prompt content hashes', () => {
+    expect(
+      RunMetadataSchema.safeParse({
+        ...validMetadata,
+        prompt_content_hashes: {
+          planner: `sha256:${'a'.repeat(63)}`,
+          reasoner: `sha256:${'b'.repeat(64)}`,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts optional fields (ended_at, experiment_variant, fixture_id)', () => {
     expect(
       RunMetadataSchema.safeParse({

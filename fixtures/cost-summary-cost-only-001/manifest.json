@@ -1,0 +1,12 @@
+{
+  "fixture_id": "cost-summary-cost-only-001",
+  "description": "Synthetic cost_summary fixture with 7,000 USD of observed cost, including 5,600 USD for PostgreSQL, but deliberately no raw utilization evidence. It tests whether reasoning stays investigative instead of asserting underutilization, a target SKU, or savings.",
+  "analysis_type": "cost_summary",
+  "recorded_at": "2026-05-09T00:00:00Z",
+  "sanitized_at": "2026-05-09T00:00:00Z",
+  "recorded_from": "synthetic",
+  "time_window": {
+    "start": "2026-05-01T00:00:00Z",
+    "end": "2026-05-08T00:00:00Z"
+  }
+}

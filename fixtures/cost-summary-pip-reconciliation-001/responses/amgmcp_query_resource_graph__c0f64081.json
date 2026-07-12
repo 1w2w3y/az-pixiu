@@ -1,0 +1,30 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('77777777-7777-7777-7777-777777777777', '88888888-8888-8888-8888-888888888888') | summarize count_=count() by type, location | order by count_ desc | take 15"
+  },
+  "parameters_digest": "c0f64081dd4a5591172a4d9fd8fbb9dc6d62b3e7a1498178f831443afaa80442",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "type": "Microsoft.Network/publicIPAddresses",
+          "location": "eastus",
+          "count_": 4
+        },
+        {
+          "type": "Microsoft.Network/publicIPAddresses",
+          "location": "westus2",
+          "count_": 2
+        },
+        {
+          "type": "Microsoft.Network/virtualNetworks",
+          "location": "eastus",
+          "count_": 2
+        }
+      ],
+      "count": 3
+    },
+    "isError": false
+  }
+}

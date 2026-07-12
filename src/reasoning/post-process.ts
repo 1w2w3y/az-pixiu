@@ -214,7 +214,12 @@ function findFabricatedNumbers(fact: Fact, evidence: EvidenceRecord[]): string[]
   if (numbersInStatement.length === 0) return [];
 
   const cited = evidence.filter((e) => fact.evidence_ids.includes(e.evidence_id));
-  const numericContext = cited.flatMap((e) => extractNumbers(e.payload_ref.kind === 'inline' ? e.payload_ref.data : null));
+  const numericContext = cited.flatMap((e) => [
+    ...extractNumbers(e.scope_subset),
+    ...extractNumbers(e.time_window),
+    ...extractNumbers(e.payload_ref.kind === 'inline' ? e.payload_ref.data : null),
+    ...extractNumbers(e.payload_summary),
+  ]);
   const numericSet = new Set(numericContext.map((n) => round(n)));
 
   const fabricated: string[] = [];

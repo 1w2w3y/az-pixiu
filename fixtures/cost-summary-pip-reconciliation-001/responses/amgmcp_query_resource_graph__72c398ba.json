@@ -1,0 +1,23 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('77777777-7777-7777-7777-777777777777', '88888888-8888-8888-8888-888888888888') | summarize count_=count() by type | order by count_ desc | take 15"
+  },
+  "parameters_digest": "72c398ba5acdc2580e7499af8d23c7b79cfe91bd5817e0f8317a5b5f22d3443d",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "type": "Microsoft.Network/publicIPAddresses",
+          "count_": 6
+        },
+        {
+          "type": "Microsoft.Network/virtualNetworks",
+          "count_": 2
+        }
+      ],
+      "count": 2
+    },
+    "isError": false
+  }
+}

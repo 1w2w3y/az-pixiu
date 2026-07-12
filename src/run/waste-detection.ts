@@ -31,11 +31,13 @@ import type {
  * The Azure boundary stays exactly where the rest of the agent puts it
  * ({@link MCPTransport}): no Azure SDK call, no second client.
  *
- * Per-candidate {@link EvidenceRecord}s are emitted with
+ * Per-candidate and per-lane summary {@link EvidenceRecord}s are emitted with
  * `query_intent: 'waste_candidate'` and
  * `source_capability: 'az_pixiu_waste_lane'` so they are obviously
  * distinguishable from generic `inventory` records in the trace and
- * report. The wire call ('amgmcp_query_resource_graph') is still
+ * report. Their payload `record_kind` distinguishes a review candidate
+ * from the aggregate lane totals the reasoner may cite. The wire call
+ * ('amgmcp_query_resource_graph') is still
  * recorded in the transport summary so the operator can audit which
  * capability was hit on the lane's behalf.
  *
@@ -74,8 +76,9 @@ export interface WasteDetectionResult {
   /** Per-lane summaries, in registry order. */
   lanes: WasteLaneResult[];
   /**
-   * One {@link EvidenceRecord} per candidate across every lane. These
-   * are appended to the main evidence list before the reasoner runs.
+   * One summary record for each complete non-empty lane followed by one
+   * {@link EvidenceRecord} per candidate. These are appended to the main
+   * evidence list before the reasoner runs.
    */
   evidence: EvidenceRecord[];
   /**
@@ -277,6 +280,28 @@ export class WasteDetectionExecutor {
         rejected_row_count,
         failed: false,
       });
+      // Aggregate totals are authoritative only for a complete enumeration.
+      // A partially parsed/rejected lane keeps its independently auditable
+      // candidate records but fails closed on emitting a citable total.
+      if (
+        enriched.length > 0 &&
+        unparsed_row_count === 0 &&
+        rejected_row_count === 0
+      ) {
+        allEvidence.push(
+          this.buildLaneSummaryEvidence({
+            lane,
+            candidates: enriched,
+            laneTotal,
+            scope: options.scope,
+            intendedSubscriptions,
+            intendedResourceGroups,
+            intendedResourceTypes,
+            unparsed_row_count,
+            rejected_row_count,
+          }),
+        );
+      }
       for (const c of enriched) allEvidence.push(c.evidence);
     }
 
@@ -286,6 +311,113 @@ export class WasteDetectionExecutor {
       transport_summary: allTransport,
       failures: allFailures,
     };
+  }
+
+  private buildLaneSummaryEvidence(args: {
+    lane: WasteLane;
+    candidates: readonly WasteCandidateEvidence[];
+    laneTotal: ReturnType<typeof rollUpLaneTotal>;
+    scope: Scope;
+    intendedSubscriptions: string[];
+    intendedResourceGroups: string[];
+    intendedResourceTypes: string[];
+    unparsed_row_count: number;
+    rejected_row_count: number;
+  }): EvidenceRecord {
+    const {
+      lane,
+      candidates,
+      laneTotal,
+      scope,
+      intendedSubscriptions,
+      intendedResourceGroups,
+      intendedResourceTypes,
+      unparsed_row_count,
+      rejected_row_count,
+    } = args;
+    const laneResourceTypes = normalizeScopeValues(lane.resource_types);
+    const sourceUrls = [
+      ...new Set(
+        candidates.flatMap((candidate) =>
+          candidate.estimated_weekly_impact.kind === 'available'
+            ? [candidate.estimated_weekly_impact.source_url]
+            : [],
+        ),
+      ),
+    ].sort();
+    const intendedScope = {
+      subscription_ids: intendedSubscriptions,
+      resource_group_names:
+        intendedResourceGroups.length > 0 ? intendedResourceGroups : null,
+      resource_type_filter:
+        intendedResourceTypes.length > 0 ? intendedResourceTypes : null,
+      lane_resource_types: laneResourceTypes,
+    };
+    const evidence_id =
+      `ev-${WASTE_LANE_SOURCE_CAPABILITY}-${lane.name}-summary-` +
+      shortDigest(
+        parameterDigest({
+          lane: lane.name,
+          intended_scope: intendedScope,
+          time_window: scope.time_window,
+        }),
+      );
+    const caveats: string[] = [
+      `Synthetic aggregate evidence: deterministic summary of ${candidates.length} ${lane.name} candidate record(s); this record is not an additional candidate.`,
+      'Lane totals are list-price impact estimates, not observed billed cost or verified savings.',
+    ];
+    if (unparsed_row_count > 0) {
+      caveats.push(
+        `${unparsed_row_count} ARG row(s) for this lane were unparseable and excluded from the summary.`,
+      );
+    }
+    if (rejected_row_count > 0) {
+      caveats.push(
+        `${rejected_row_count} ARG row(s) were outside effective scope or inconsistent with their ARM resource id and were excluded from the summary.`,
+      );
+    }
+
+    const payload = {
+      record_kind: 'lane_summary' as const,
+      waste_lane: lane.name,
+      classification_predicate: lane.predicate_text,
+      candidate_count: candidates.length,
+      candidate_evidence_ids: candidates.map((candidate) => candidate.evidence.evidence_id).sort(),
+      lane_total: laneTotal,
+      pricing_provenance: {
+        source_urls: sourceUrls,
+        rate_source_captured_at: this.rateSource.capturedAt(),
+      },
+      parse_counts: {
+        unparsed_row_count,
+        rejected_row_count,
+      },
+      intended_scope: intendedScope,
+    };
+
+    return EvidenceRecordSchema.parse({
+      evidence_id,
+      source_capability: WASTE_LANE_SOURCE_CAPABILITY,
+      capability_version: WASTE_LANE_CAPABILITY_VERSION,
+      query_intent: 'waste_candidate',
+      scope_subset: {
+        subscription_ids: intendedSubscriptions,
+        resource_group_names:
+          intendedResourceGroups.length > 0 ? intendedResourceGroups : null,
+        resource_ids: null,
+      },
+      time_window: scope.time_window,
+      payload_ref: { kind: 'inline', data: payload },
+      payload_summary: {
+        record_kind: payload.record_kind,
+        waste_lane: lane.name,
+        candidate_count: candidates.length,
+        lane_total: laneTotal,
+        pricing_provenance: payload.pricing_provenance,
+        parse_counts: payload.parse_counts,
+      },
+      caveats,
+    });
   }
 
   private buildCandidateEvidence(args: {
@@ -345,6 +477,7 @@ export class WasteDetectionExecutor {
       payload_ref: {
         kind: 'inline',
         data: {
+          record_kind: 'candidate',
           waste_lane: lane.name,
           classification_predicate: lane.predicate_text,
           candidate_count: 1,
@@ -361,6 +494,7 @@ export class WasteDetectionExecutor {
         },
       },
       payload_summary: {
+        record_kind: 'candidate',
         waste_lane: lane.name,
         resource_id: candidate.resource_id,
         sku: candidate.sku,

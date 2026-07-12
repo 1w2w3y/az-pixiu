@@ -1,0 +1,57 @@
+{
+  "capability": "amgmcp_cost_analysis",
+  "parameters": {
+    "subscriptionId": "99999999-9999-9999-9999-999999999999",
+    "startTime": "2026-05-01T00:00:00Z",
+    "endTime": "2026-05-08T00:00:00Z"
+  },
+  "parameters_digest": "567287acbdc5ab1bcdefe837b18da0a25311389dc9f889e61573d3096f46ecc9",
+  "response": {
+    "content": {
+      "periodStart": "2026-05-01",
+      "periodEnd": "2026-05-08",
+      "subscriptions": [
+        {
+          "subscriptionId": "99999999-9999-9999-9999-999999999999",
+          "totalCost": 7000,
+          "currency": "USD",
+          "byService": [
+            {
+              "name": "Azure Database for PostgreSQL",
+              "cost": 5600
+            },
+            {
+              "name": "Virtual Machines",
+              "cost": 900
+            },
+            {
+              "name": "Log Analytics",
+              "cost": 500
+            }
+          ],
+          "byRegion": [
+            {
+              "name": "us west 2",
+              "cost": 7000
+            }
+          ],
+          "byResourceType": [
+            {
+              "name": "microsoft.dbforpostgresql/flexibleservers",
+              "cost": 5600
+            },
+            {
+              "name": "microsoft.compute/virtualmachinescalesets",
+              "cost": 900
+            },
+            {
+              "name": "microsoft.operationalinsights/workspaces",
+              "cost": 500
+            }
+          ]
+        }
+      ]
+    },
+    "isError": false
+  }
+}

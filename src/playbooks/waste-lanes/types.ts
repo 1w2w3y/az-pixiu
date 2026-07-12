@@ -21,8 +21,10 @@ import type { PricingRateSource } from '../../pricing/source.js';
  * convention rather than by orchestrator changes. The
  * {@link WasteDetectionExecutor} fans the lanes out, attaches estimated
  * impact via {@link estimateWeeklyImpactRange}, and emits one
- * {@link EvidenceRecord} per candidate so the reasoner can cite each
- * candidate independently when forming recommendations.
+ * {@link EvidenceRecord} per candidate plus, for complete non-empty
+ * enumerations, a non-candidate lane-summary record so the reasoner can
+ * cite both individual classifications and exact aggregate totals when
+ * forming recommendations.
  */
 
 export interface WasteCandidate {

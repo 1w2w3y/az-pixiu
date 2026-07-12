@@ -113,21 +113,29 @@ export function scoreWasteClassificationGrounding(
   output: ReasoningOutput,
   evidence: readonly EvidenceRecord[],
 ): ScoringResult {
-  const wasteRecords = evidence.filter((e) => e.query_intent === 'waste_candidate');
-  if (wasteRecords.length === 0) {
+  const candidateRecords = evidence.flatMap((record) => {
+    if (record.query_intent !== 'waste_candidate' || record.payload_ref.kind !== 'inline') {
+      return [];
+    }
+    const payload = asRecord(record.payload_ref.data);
+    if (!payload) return [];
+    // A lane_summary shares the intent/source so the reasoner can cite its
+    // aggregate values, but it is never itself a review candidate.
+    if (payload.record_kind === 'lane_summary') return [];
+    const resourceId = asRecord(payload.candidate)?.resource_id;
+    return typeof resourceId === 'string' && resourceId.length > 0
+      ? [{ record, resourceId }]
+      : [];
+  });
+  if (candidateRecords.length === 0) {
     // No waste candidates in scope — rubric is vacuously satisfied. The
     // eval framework still emits the score so a v2 run against a non-
     // waste fixture stays comparable.
     return { rubric: 'waste_classification_grounding', passed: true };
   }
   const evidenceIdByResource = new Map<string, string>();
-  for (const rec of wasteRecords) {
-    const payload =
-      rec.payload_ref.kind === 'inline' ? (rec.payload_ref.data as { candidate?: { resource_id?: unknown } }) : undefined;
-    const resourceId = payload?.candidate?.resource_id;
-    if (typeof resourceId === 'string' && resourceId.length > 0) {
-      evidenceIdByResource.set(resourceId, rec.evidence_id);
-    }
+  for (const { record, resourceId } of candidateRecords) {
+    evidenceIdByResource.set(resourceId, record.evidence_id);
   }
   const failures: string[] = [];
   for (const fact of output.facts) {
@@ -146,16 +154,25 @@ export function scoreWasteClassificationGrounding(
     : { rubric: 'waste_classification_grounding', passed: false, details: failures.join('; ') };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 /**
  * Phase 3 — design/cost-summary-depth.md §Gap 3 / §"Evaluation surface".
  *
  * Estimated weekly impact must be rendered as a *range* with a cited
  * rate source — never a single dollar figure. The check is local to
  * recommendation text (statement + actions + validation steps + caveats):
- * a dollar amount that is not part of a numeric range (`$X–$Y` or
- * `$X-$Y`) flags as a calibration violation, and any text carrying
- * dollar amounts must also reference a provenance keyword (list-price,
- * rate card, estimate, captured) so reviewers can find the rate source.
+ * an *estimated impact* dollar amount that is not part of a numeric range
+ * (`$X–$Y` or `$X-$Y`) flags as a calibration violation, and any text
+ * carrying estimated dollars must also reference a provenance keyword
+ * (list-price, rate card, estimate, captured) so reviewers can find the
+ * rate source. Point amounts explicitly labelled as observed/billed Cost
+ * Analysis values are not estimates and are therefore left to the
+ * reconciliation expectation rather than rejected here.
  *
  * Vacuously satisfied when no recommendation mentions a dollar amount.
  */
@@ -171,7 +188,8 @@ export function scoreEstimatedImpactCalibrated(output: ReasoningOutput): Scoring
     ];
     let dollarSeen = false;
     for (const text of texts) {
-      const point = detectPointDollar(text);
+      const estimateText = stripObservedCostAmounts(text);
+      const point = detectPointDollar(estimateText);
       if (point) {
         failures.push(
           `recommendation ${rec.recommendation_id} renders point dollar "${point}" instead of a range`,
@@ -179,7 +197,7 @@ export function scoreEstimatedImpactCalibrated(output: ReasoningOutput): Scoring
         dollarSeen = true;
         break;
       }
-      if (hasDollarAmount(text)) dollarSeen = true;
+      if (hasDollarAmount(estimateText)) dollarSeen = true;
     }
     if (dollarSeen) {
       const joined = texts.join(' ').toLowerCase();
@@ -195,23 +213,83 @@ export function scoreEstimatedImpactCalibrated(output: ReasoningOutput): Scoring
     : { rubric: 'estimated_impact_calibrated', passed: false, details: failures.join('; ') };
 }
 
-// Range pattern uses en-dash, em-dash, or hyphen between two dollar
-// amounts, optionally with the second amount missing its own '$'. The
-// pattern intentionally covers `$5–$7`, `$5-$7`, `$5—$7`, and
-// `$5–7` so the report writer can render either form.
-const DOLLAR_RANGE_RE = /~?\$\d+(?:\.\d+)?\s*[–—\-]\s*\$?\d+(?:\.\d+)?/g;
-const DOLLAR_AMOUNT_RE = /\$\d+(?:\.\d+)?/;
+// A calibrated range may use a dash or "to", may repeat the '$', and may
+// render the currency as a trailing USD label. Thousands separators are
+// accepted so portfolio-scale estimates do not become point-value false
+// positives merely because of formatting.
+const MONEY_NUMBER_SOURCE = String.raw`\d+(?:,\d{3})*(?:\.\d+)?`;
+const MONEY_RANGE_RE = new RegExp(
+  String.raw`(?:~?\$\s*${MONEY_NUMBER_SOURCE}\s*(?:[–—-]|\bto\b)\s*\$?\s*${MONEY_NUMBER_SOURCE}|~?\bUSD\s*${MONEY_NUMBER_SOURCE}\s*(?:[–—-]|\bto\b)\s*(?:USD\s*)?${MONEY_NUMBER_SOURCE}|~?\b${MONEY_NUMBER_SOURCE}\s*USD\s*(?:[–—-]|\bto\b)\s*${MONEY_NUMBER_SOURCE}\s*USD\b|~?\b${MONEY_NUMBER_SOURCE}\s*(?:[–—-]|\bto\b)\s*${MONEY_NUMBER_SOURCE}\s*USD\b)`,
+  'gi',
+);
+const MONEY_AMOUNT_RE = new RegExp(
+  String.raw`(?:\$\s*${MONEY_NUMBER_SOURCE}|\bUSD\s*${MONEY_NUMBER_SOURCE}|\b${MONEY_NUMBER_SOURCE}\s*USD\b)`,
+  'i',
+);
+const MONEY_AMOUNT_GLOBAL_RE = new RegExp(MONEY_AMOUNT_RE.source, 'gi');
 const CALIBRATION_PROVENANCE_RE = /(list-?price|rate\s*card|estimate|captured)/;
+const OBSERVED_COST_CONTEXT_RE = /\b(?:observed|billed|billing|cost\s+analysis)\b/i;
+const ESTIMATED_COST_CONTEXT_SOURCE = String.raw`estimate(?:d|s|ing|ion)?|project(?:ed|ing|ion|ions)|expect(?:ed|s|ing|ation|ations)?|forecast(?:ed|s|ing)?|list-?price|rate\s*card|exposure|savings?|save|recoverable|yield(?:s|ed|ing)?|avoid(?:able|ed|ance|ing)?|benefit|impact|potential|opportunit(?:y|ies)`;
+const ESTIMATED_COST_CONTEXT_RE = new RegExp(
+  String.raw`\b(?:${ESTIMATED_COST_CONTEXT_SOURCE})\b`,
+  'i',
+);
+const OBSERVED_COST_SPAN_RE = new RegExp(
+  String.raw`\b(?:observed|billed|billing|cost\s+analysis|(?:analy[sz]ed|selected|same)[- ]window\s+(?:shows?|reported|recorded|billed))\b(?:(?![;!?]|\.(?=\s|$)|\b(?:while|whereas|but|${ESTIMATED_COST_CONTEXT_SOURCE})\b)[\s\S]){0,240}`,
+  'gi',
+);
 
 function detectPointDollar(text: string): string | undefined {
-  // Strip every range first; any remaining dollar amount is a point.
-  const stripped = text.replace(DOLLAR_RANGE_RE, '');
-  const m = stripped.match(DOLLAR_AMOUNT_RE);
+  // Strip every range first; any remaining monetary amount is a point.
+  const stripped = text.replace(MONEY_RANGE_RE, '');
+  const m = stripped.match(MONEY_AMOUNT_RE);
   return m ? m[0] : undefined;
 }
 
 function hasDollarAmount(text: string): boolean {
-  return DOLLAR_AMOUNT_RE.test(text);
+  return MONEY_AMOUNT_RE.test(text);
+}
+
+function stripObservedCostAmounts(text: string): string {
+  const withoutPrefixedObserved = text.replace(
+    new RegExp(OBSERVED_COST_SPAN_RE.source, OBSERVED_COST_SPAN_RE.flags),
+    (span) => span.replace(MONEY_AMOUNT_GLOBAL_RE, ''),
+  );
+  return withoutPrefixedObserved.replace(
+    MONEY_AMOUNT_GLOBAL_RE,
+    (amount, offset: number) =>
+      hasPostfixedObservedContext(withoutPrefixedObserved, offset) ? '' : amount,
+  );
+}
+
+function hasPostfixedObservedContext(text: string, amountOffset: number): boolean {
+  const sentenceStart = findSentenceStart(text, amountOffset);
+  const sentenceEnd = findSentenceEnd(text, amountOffset);
+  const sentence = text.slice(sentenceStart, sentenceEnd);
+  const relativeOffset = amountOffset - sentenceStart;
+  const before = sentence.slice(0, relativeOffset);
+  const after = sentence.slice(relativeOffset);
+  if (OBSERVED_COST_CONTEXT_RE.test(before) || ESTIMATED_COST_CONTEXT_RE.test(before)) return false;
+  const nextObserved = firstMatchIndex(after, OBSERVED_COST_CONTEXT_RE);
+  const nextEstimated = firstMatchIndex(after, ESTIMATED_COST_CONTEXT_RE);
+  return nextObserved >= 0 && (nextEstimated < 0 || nextObserved < nextEstimated);
+}
+
+function findSentenceStart(text: string, offset: number): number {
+  let start = 0;
+  for (const match of text.slice(0, offset).matchAll(/[.!;](?=\s|$)/g)) {
+    start = (match.index ?? 0) + 1;
+  }
+  return start;
+}
+
+function findSentenceEnd(text: string, offset: number): number {
+  const match = /[.!;](?=\s|$)/.exec(text.slice(offset));
+  return match?.index === undefined ? text.length : offset + match.index;
+}
+
+function firstMatchIndex(text: string, pattern: RegExp): number {
+  return new RegExp(pattern.source, pattern.flags).exec(text)?.index ?? -1;
 }
 
 export function scoreReadOnlyAdherence(output: ReasoningOutput): ScoringResult {

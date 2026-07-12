@@ -1,0 +1,45 @@
+{
+  "capability": "amgmcp_cost_analysis",
+  "parameters": {
+    "subscriptionId": "88888888-8888-8888-8888-888888888888",
+    "startTime": "2026-05-01T00:00:00Z",
+    "endTime": "2026-05-08T00:00:00Z"
+  },
+  "parameters_digest": "e88bf014cc3de97ff3da8d58b8d86f78aa9cb1ed4040f739106e2b5d94a866b2",
+  "response": {
+    "content": {
+      "periodStart": "2026-05-01",
+      "periodEnd": "2026-05-08",
+      "subscriptions": [
+        {
+          "subscriptionId": "88888888-8888-8888-8888-888888888888",
+          "totalCost": 4.2,
+          "currency": "USD",
+          "byService": [
+            {
+              "name": "Virtual Network",
+              "cost": 4.2
+            }
+          ],
+          "byRegion": [
+            {
+              "name": "us west 2",
+              "cost": 4.2
+            }
+          ],
+          "byResourceType": [
+            {
+              "name": "microsoft.network/publicipaddresses",
+              "cost": 0.1
+            },
+            {
+              "name": "microsoft.network/virtualnetworks",
+              "cost": 4.1
+            }
+          ]
+        }
+      ]
+    },
+    "isError": false
+  }
+}

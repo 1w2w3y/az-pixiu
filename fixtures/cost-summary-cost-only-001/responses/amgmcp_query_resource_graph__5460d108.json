@@ -1,0 +1,27 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('99999999-9999-9999-9999-999999999999') | summarize count_=count() by type | order by count_ desc | take 15"
+  },
+  "parameters_digest": "5460d10899566c19645f192f6689de2716eddd1be38741778cd2f0676eb6c341",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "type": "microsoft.compute/virtualmachinescalesets",
+          "count_": 12
+        },
+        {
+          "type": "microsoft.dbforpostgresql/flexibleservers",
+          "count_": 4
+        },
+        {
+          "type": "microsoft.operationalinsights/workspaces",
+          "count_": 2
+        }
+      ],
+      "count": 3
+    },
+    "isError": false
+  }
+}

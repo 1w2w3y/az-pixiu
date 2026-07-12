@@ -14,7 +14,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "cost-summary": "tsx src/cli.ts analyze cost-summary --subscription-name-filter GrafanaDevRP,GrafanaTest,LiftrToolsDev --max-subscriptions 20",
-    "eval:compare": "tsx src/cli.ts eval eval/phase-1.json --use-playbook --credential azure-cli --observability langfuse --experiment-name 13-model-compare --models gpt-4o,gpt-4.1,gpt-5-mini,gpt-5.4,gpt-chat-latest,DeepSeek-V4-Flash,DeepSeek-V4-Pro,grok-4.3,Kimi-K2.6,Kimi-K2.7-Code,gpt-5.6-luna,gpt-5.6-sol,gpt-5.6-terra"
+    "eval:compare": "tsx src/cli.ts eval eval/phase-1.json --use-playbook --credential azure-cli --observability langfuse --experiment-name 13-model-compare --models gpt-4o,gpt-4.1,gpt-5-mini,gpt-5.4,gpt-chat-latest,DeepSeek-V4-Flash,DeepSeek-V4-Pro,grok-4.3,Kimi-K2.6,Kimi-K2.7-Code,gpt-5.6-luna,gpt-5.6-sol,gpt-5.6-terra",
+    "eval:compare:cost-reasoning": "tsx src/cli.ts eval eval/phase-3-cost-reasoning.json --use-playbook --credential azure-cli --observability langfuse --experiment-name cost-reasoning-13-model-compare --models gpt-4o,gpt-4.1,gpt-5-mini,gpt-5.4,gpt-chat-latest,DeepSeek-V4-Flash,DeepSeek-V4-Pro,grok-4.3,Kimi-K2.6,Kimi-K2.7-Code,gpt-5.6-luna,gpt-5.6-sol,gpt-5.6-terra"
   },
   "dependencies": {
     "@arizeai/openinference-instrumentation-mcp": "^0.2.16",

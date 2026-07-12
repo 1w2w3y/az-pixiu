@@ -1,0 +1,27 @@
+{
+  "capability": "amgmcp_query_activity_log",
+  "parameters": {
+    "scope": "/subscriptions/99999999-9999-9999-9999-999999999999",
+    "startTime": "2026-05-01T00:00:00Z",
+    "endTime": "2026-05-08T00:00:00Z"
+  },
+  "parameters_digest": "4403462bcba113e322532cb8fef373e5d32c5dd8f5752505b691ed92059b37ba",
+  "response": {
+    "content": {
+      "entries": [
+        {
+          "operation": "Microsoft.DBforPostgreSQL/flexibleServers/write",
+          "resource_id": "/subscriptions/99999999-9999-9999-9999-999999999999/resourceGroups/rg-data-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/pg-prod-primary",
+          "timestamp": "2026-05-03T08:31:42Z",
+          "caller": "platform-deploy@example.com",
+          "properties": {
+            "from_sku": "Standard_D8ds_v5",
+            "to_sku": "Standard_D16ds_v5"
+          },
+          "status": "Succeeded"
+        }
+      ]
+    },
+    "isError": false
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('77777777-7777-7777-7777-777777777777', '88888888-8888-8888-8888-888888888888') | where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration) | where isnull(properties.natGateway) | project id, name, subscriptionId, resourceGroup, location, skuName=tostring(sku.name), allocationMethod=tostring(properties.publicIPAllocationMethod), ipConfigurationId=tostring(properties.ipConfiguration.id), natGatewayId=tostring(properties.natGateway.id)"
+  },
+  "parameters_digest": "517b671523ed5d2b82efa932c29e667e234e8f1e19215c6a28b8d6aeefd0552e",
+  "response": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"data\":[{\"id\":\"/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-inbound-001\",\"name\":\"pip-test-vhx-inbound-001\",\"subscriptionId\":\"77777777-7777-7777-7777-777777777777\",\"resourceGroup\":\"rg-shared-test\",\"location\":\"eastus\",\"skuName\":\"Standard\",\"allocationMethod\":\"Static\",\"ipConfigurationId\":\"\",\"natGatewayId\":\"\"},{\"id\":\"/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-inbound-002\",\"name\":\"pip-test-vhx-inbound-002\",\"subscriptionId\":\"77777777-7777-7777-7777-777777777777\",\"resourceGroup\":\"rg-shared-test\",\"location\":\"eastus\",\"skuName\":\"Standard\",\"allocationMethod\":\"Static\",\"ipConfigurationId\":\"\",\"natGatewayId\":\"\"},{\"id\":\"/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-outbound-001\",\"name\":\"pip-test-vhx-outbound-001\",\"subscriptionId\":\"77777777-7777-7777-7777-777777777777\",\"resourceGroup\":\"rg-shared-test\",\"location\":\"eastus\",\"skuName\":\"Standard\",\"allocationMethod\":\"Static\",\"ipConfigurationId\":\"\",\"natGatewayId\":\"\"},{\"id\":\"/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-legacy-prototype/providers/Microsoft.Network/publicIPAddresses/pip-legacy-basic-001\",\"name\":\"pip-legacy-basic-001\",\"subscriptionId\":\"77777777-7777-7777-7777-777777777777\",\"resourceGroup\":\"rg-legacy-prototype\",\"location\":\"westus2\",\"skuName\":\"Basic\",\"allocationMethod\":\"Dynamic\",\"ipConfigurationId\":\"\",\"natGatewayId\":\"\"},{\"id\":\"/subscriptions/88888888-8888-8888-8888-888888888888/resourceGroups/rg-sandbox-app/providers/Microsoft.Network/publicIPAddresses/pip-sandbox-bastion-stale\",\"name\":\"pip-sandbox-bastion-stale\",\"subscriptionId\":\"88888888-8888-8888-8888-888888888888\",\"resourceGroup\":\"rg-sandbox-app\",\"location\":\"westus2\",\"skuName\":\"Standard\",\"allocationMethod\":\"Static\",\"ipConfigurationId\":\"\",\"natGatewayId\":\"\"}],\"count\":5}"
+      }
+    ],
+    "isError": false
+  }
+}

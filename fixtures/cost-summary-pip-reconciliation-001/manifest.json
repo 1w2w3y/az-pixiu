@@ -1,0 +1,12 @@
+{
+  "fixture_id": "cost-summary-pip-reconciliation-001",
+  "description": "Synthetic cost_summary fixture with five unassociated public-IP review candidates. Four Standard/Static candidates have a 3.04-3.68 USD weekly list-price exposure while same-window billed public-IP resource-type cost is only 0.42 USD; one Basic/Dynamic candidate remains rate-unavailable.",
+  "analysis_type": "cost_summary",
+  "recorded_at": "2026-05-09T00:00:00Z",
+  "sanitized_at": "2026-05-09T00:00:00Z",
+  "recorded_from": "synthetic",
+  "time_window": {
+    "start": "2026-05-01T00:00:00Z",
+    "end": "2026-05-08T00:00:00Z"
+  }
+}

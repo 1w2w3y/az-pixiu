@@ -30,7 +30,7 @@ import type { ModelClient } from './model/client.js';
 import type { Config } from './schemas/index.js';
 import type { TokenCredential } from '@azure/identity';
 import { LangfusePublisher } from './evaluation/langfuse-publisher.js';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { runEvaluationByPath, type EvalItemResult } from './evaluation/runner.js';
 import type { DatasetItem } from './evaluation/dataset.js';
 import { buildCannedMockModelClient } from './evaluation/canned-mock.js';
@@ -103,6 +103,7 @@ eval flags:
   --mock-model                     skip Foundry; use a hard-coded mock reasoning response
   --output-dir <path>              where to write per-item runs (default: runs/eval/)
   --fixtures-root <path>           directory containing fixtures (default: fixtures/)
+  --prompts-dir <path>             working directory containing prompts/ (default: current directory)
   --observability <mode>           noop | memory | langfuse | ms-otel  (default: noop for eval runs)
   --credential <mode>              azure-cli | default | mock  (default: mock — eval does not call Azure)
   --models <id1,id2,...>           sweep the dataset against multiple models, one Langfuse Experiment per model.
@@ -201,6 +202,7 @@ async function main(): Promise<number> {
       'mock-model': { type: 'boolean' },
       'output-dir': { type: 'string' },
       'fixtures-root': { type: 'string' },
+      'prompts-dir': { type: 'string' },
       observability: { type: 'string' },
       models: { type: 'string' },
       'experiment-name': { type: 'string' },
@@ -585,6 +587,8 @@ async function runEvalCommand(
   const credentialMode = parseCredential(values.credential ?? 'mock');
   const observabilityMode = parseObservability(values.observability ?? 'noop');
   const fixturesRoot = stringOrUndefined(values['fixtures-root']) ?? 'fixtures';
+  const promptsCwd = stringOrUndefined(values['prompts-dir']);
+  const promptsDir = resolve(promptsCwd ?? process.cwd(), 'prompts');
   const outputDir = stringOrUndefined(values['output-dir']) ?? 'runs/eval';
   const configPath = stringOrUndefined(values.config);
   const modelsArg = stringOrUndefined(values.models);
@@ -670,6 +674,7 @@ async function runEvalCommand(
 
       process.stdout.write(`\n=== pixiu eval on ${datasetPath} ===\n`);
       process.stdout.write(`  fixtures: ${fixturesRoot}\n`);
+      process.stdout.write(`  prompts: ${promptsDir}\n`);
       process.stdout.write(`  model: ${activeModelLabel}\n`);
       process.stdout.write(`  planner: ${usePlaybook ? 'playbook' : 'planner LLM'}\n`);
       process.stdout.write(`  observability: ${observabilityMode}\n`);
@@ -694,6 +699,7 @@ async function runEvalCommand(
             }
           : {}),
         fixturesRoot,
+        ...(promptsCwd ? { promptsCwd } : {}),
         onProgress: (line) => process.stdout.write(line + '\n'),
         ...(langfusePublisher
           ? {

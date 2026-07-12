@@ -1,0 +1,17 @@
+{
+  "capability": "amgmcp_query_azure_subscriptions",
+  "parameters": {},
+  "parameters_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "response": {
+    "content": {
+      "subscriptions": [
+        {
+          "subscriptionId": "99999999-9999-9999-9999-999999999999",
+          "displayName": "corp-data-prod",
+          "state": "Enabled"
+        }
+      ]
+    },
+    "isError": false
+  }
+}

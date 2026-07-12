@@ -61,6 +61,18 @@ LANGFUSE_PUBLIC_KEY=… LANGFUSE_SECRET_KEY=… LANGFUSE_BASE_URL=… \
         --models gpt-5.4,gpt-4o,gpt-chat-latest \
         --observability langfuse
 
+# focused model comparison for the two Phase 3 cost-judgment cases
+npm run eval:compare:cost-reasoning
+
+# compare a candidate local prompt tree. Start from the complete tree because
+# every eval loads planner.v1 and cost-summary loads reasoner.v2.
+mkdir -p prompt-candidate
+cp -R prompts prompt-candidate/prompts
+# edit prompt-candidate/prompts/reasoner.v2.md, then run:
+npx pixiu eval eval/phase-3-cost-reasoning.json --use-playbook \
+    --models gpt-5.4,gpt-4o --prompts-dir ./prompt-candidate \
+    --observability langfuse --experiment-name cost-reasoning-prompt-candidate
+
 # environment sanity check (credentials, endpoint reachability, MCP capabilities)
 npx pixiu diagnose
 ```
@@ -93,16 +105,18 @@ To use a Grafana service account token instead, prefer referencing an environmen
 The token may also be supplied directly as `amg.auth.token` for local-only configs. The token value is used as the AMG-MCP HTTP `Authorization: Bearer ...` credential and is not printed by the CLI.
 
 `npx pixiu --help` lists the full flag set. Each run writes `report.md`, `report.html`, and `run.json` to a timestamped subdirectory under `runs/`.
+Prompt versions and full content SHA-256 digests are recorded in `run.json`, trace attributes, and eval Dataset Run Item metadata. The resolved local prompt path is printed for reproducibility but is not exported to Langfuse.
 
 ## Project status
 
-**Phase 2 — Langfuse depth — in progress; Phase 2.5 shipped; Phase 3 started.** Phase 1 (minimum viable agent) is complete: end-to-end runs against live AMG-MCP and Azure AI Foundry, evidence-cited reports, per-run `run.json`, Langfuse traces when configured, a seeded eval dataset (`eval/phase-1.json`), and six active automated rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence, plus `estimated_impact_calibrated` and `waste_classification_grounding`).
+**Phase 2 — Langfuse depth — in progress; Phase 2.5 shipped; Phase 3 started.** Phase 1 (minimum viable agent) is complete: end-to-end runs against live AMG-MCP and Azure AI Foundry, evidence-cited reports, per-run `run.json`, Langfuse traces when configured, seeded fixture-backed eval datasets, and six active automated rubrics (structural correctness, citation completeness, confidence consistency, read-only adherence, plus `estimated_impact_calibrated` and `waste_classification_grounding`).
 
 Recently shipped:
 
 - **Phase 2.5 — cross-run continuity foundations.** `RunHistoryStore` over the existing `runs/` artefacts, deterministic `recommendation_signature`, `prior_run_context` evidence, and a first-class "Run Quality" report section.
 - **Phase 2 — Langfuse eval publishing.** Eval runs can publish rubric and expectation scores, upsert local dataset items, group traces into Langfuse Dataset Runs / Experiments, and sweep multiple models.
-- **Phase 3 — first waste lane plus evidence-contract gate.** The `cost-summary` analyzer enumerates unassociated public-IP review candidates with calibrated weekly impact estimates from an in-repo rate card. Both deterministic analyzers send the discovered live wire shapes for Cost Analysis and Activity Log, keep ARG scope inside supported KQL, and preserve intended scope outside the wire payload. The waste lane decodes real MCP text envelopes, rejects returned rows outside effective scope, and refuses a clean no-match claim when parsing is incomplete. This is the only enabled waste lane today.
+- **Phase 2/3 — cost-judgment experiments.** `eval/phase-3-cost-reasoning.json` tests high spend without utilization evidence and list-price exposure above observed billing. Both semantic expectations publish independently to Langfuse, require exact reconciled quantities rather than boilerplate, and `--prompts-dir` makes the same cases reusable for content-addressed local baseline-versus-candidate prompt experiments.
+- **Phase 3 — first waste lane plus evidence-contract gate.** The `cost-summary` analyzer enumerates unassociated public-IP review candidates with calibrated weekly impact estimates from an in-repo rate card. Complete non-empty lanes emit a citable aggregate summary in addition to per-candidate evidence; partial enumeration withholds the summary. Both deterministic analyzers send the discovered live wire shapes for Cost Analysis and Activity Log, keep ARG scope inside supported KQL, and preserve intended scope outside the wire payload. The waste lane decodes real MCP text envelopes, rejects returned rows outside effective scope, and refuses a clean no-match claim when parsing is incomplete. This is the only enabled waste lane today.
 - **Cost evidence quarantine.** Cost responses distinguish `valid_zero`, `cost_zero_suspected`, `zero_unresolved`, and `cost_scope_mismatch`. Contradictory zeros, malformed/missing numeric totals, unrecognized successful payloads, and structured responses whose returned subscription set differs from the request remain visible as partial provenance but are excluded from reasoning, coverage, arithmetic, and local billing-cache admission.
 - **Transport resilience.** The agent recognizes wire-level and payload-embedded 429s from AMG-MCP cost analysis, retries with capped backoff plus jitter, separates pacing from retry budget, records `transport_summary`, and makes retries visible in Run Quality and trace events.
 

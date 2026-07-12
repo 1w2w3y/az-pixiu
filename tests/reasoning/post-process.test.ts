@@ -150,6 +150,73 @@ describe('postProcessReasoning — fabricated numbers', () => {
     const { output } = postProcessReasoning(ok, { evidence: baseEvidence });
     expect(output.facts).toHaveLength(1);
   });
+
+  it('accepts subscription and date numbers present in cited scope and time-window fields', () => {
+    const ok: ReasoningOutput = {
+      ...wellFormed,
+      facts: [
+        {
+          ...wellFormed.facts[0]!,
+          statement: `subscription ${subId} was covered from 2026-05-01 to 2026-05-08`,
+          evidence_ids: ['ev-cost_analysis-aaaaaaaa'],
+        },
+      ],
+    };
+
+    const { output, issues } = postProcessReasoning(ok, { evidence: baseEvidence });
+    expect(output.facts).toHaveLength(1);
+    expect(issues.some((i) => i.kind === 'fabricated_number')).toBe(false);
+  });
+
+  it('accepts zero and count values present only in the cited payload summary', () => {
+    const evidence: EvidenceRecord[] = [
+      {
+        ...baseEvidence[0]!,
+        payload_summary: { error_count: 0, row_count: 12 },
+      },
+    ];
+    const ok: ReasoningOutput = {
+      ...wellFormed,
+      facts: [
+        {
+          ...wellFormed.facts[0]!,
+          statement: 'the payload summary reports 0 errors across 12 rows',
+          evidence_ids: ['ev-cost_analysis-aaaaaaaa'],
+        },
+      ],
+    };
+
+    const { output, issues } = postProcessReasoning(ok, { evidence });
+    expect(output.facts).toHaveLength(1);
+    expect(issues.some((i) => i.kind === 'fabricated_number')).toBe(false);
+  });
+
+  it('rejects numbers that appear only in evidence identifiers or caveats', () => {
+    const evidenceId = 'ev-cost_analysis-99999999';
+    const evidence: EvidenceRecord[] = [
+      {
+        ...baseEvidence[0]!,
+        evidence_id: evidenceId,
+        caveats: ['diagnostic caveat 8888 was recorded'],
+      },
+    ];
+    const broken: ReasoningOutput = {
+      ...wellFormed,
+      facts: [
+        {
+          ...wellFormed.facts[0]!,
+          statement: 'identifier marker 99999999 and caveat marker 8888 are not trusted numeric evidence',
+          evidence_ids: [evidenceId],
+        },
+      ],
+    };
+
+    const { output, issues } = postProcessReasoning(broken, { evidence });
+    const fabricated = issues.find((i) => i.kind === 'fabricated_number');
+    expect(output.facts).toHaveLength(0);
+    expect(fabricated?.detail).toContain('99999999');
+    expect(fabricated?.detail).toContain('8888');
+  });
 });
 
 describe('postProcessReasoning — read-only lint', () => {

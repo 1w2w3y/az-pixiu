@@ -3,7 +3,11 @@ import { join, isAbsolute, resolve } from 'node:path';
 import { FixtureMCPTransport } from '../mcp/fixture.js';
 import { MCPClient } from '../mcp/client.js';
 import { runAnalysis, type RunResult } from '../run/orchestrator.js';
-import type { Config } from '../schemas/index.js';
+import type {
+  Config,
+  PromptContentHashes,
+  PromptVersions,
+} from '../schemas/index.js';
 import type { ModelClient } from '../model/client.js';
 import type { CredentialIdentity } from '../run/credential-factory.js';
 import type { ObservabilityMode } from '../observability/setup.js';
@@ -98,6 +102,10 @@ export interface EvalItemResult {
   report_path: string;
   /** OTel trace id of the agent run, when observability assigned one. Used by the Langfuse publisher. */
   otel_trace_id?: string;
+  /** Stable prompt labels recorded by the analyzed run. Absent only when the item failed before loading prompts. */
+  prompt_versions?: PromptVersions;
+  /** Content-addressed prompt provenance. Absent for historical/error-only results. */
+  prompt_content_hashes?: PromptContentHashes;
   /** scoreAll across the four Phase 1 rubrics. */
   score: AggregateScore;
   /** Dataset-level expectations (`min_recommendations`, etc.). Empty results if the item had no expectations block. */
@@ -115,6 +123,8 @@ export interface EvalItemResult {
 
 export interface EvalRunnerResult {
   dataset_path?: string;
+  /** Absolute prompt directory used by every item in this invocation. */
+  prompts_dir: string;
   items: EvalItemResult[];
   passed_all: boolean;
   pass_count: number;
@@ -184,6 +194,7 @@ export async function runEvaluation(options: EvalRunnerOptions): Promise<EvalRun
 
   const pass_count = items.filter((i) => i.passed_all).length;
   return {
+    prompts_dir: selectedPromptsDir(options),
     items,
     passed_all: items.every((i) => i.passed_all),
     pass_count,
@@ -246,6 +257,10 @@ async function runOne(
       run_dir: result.run_dir,
       report_path: result.report_path,
       ...(result.otel_trace_id ? { otel_trace_id: result.otel_trace_id } : {}),
+      prompt_versions: result.metadata.prompt_versions,
+      ...(result.metadata.prompt_content_hashes
+        ? { prompt_content_hashes: result.metadata.prompt_content_hashes }
+        : {}),
       score,
       expectations,
       passed_all: score.passed_all && expectations.passed_all,
@@ -348,12 +363,36 @@ async function publishItemToLangfuse(
   });
 
   await publisher.pushScores(scores);
+  // A prompt root is useful to the local operator but is neither stable
+  // across machines nor appropriate to export. Publish only version labels
+  // and content hashes so experiments stay attributable without leaking a
+  // workstation path.
+  const stableRunMetadata = { ...(options.langfuseRunMetadata ?? {}) };
+  delete stableRunMetadata.prompts_dir;
   await publisher.createRunItem({
     runName,
     datasetItemId: item.id,
     traceId,
-    ...(options.langfuseRunMetadata ? { metadata: options.langfuseRunMetadata } : {}),
+    metadata: {
+      ...stableRunMetadata,
+      ...(result.prompt_versions
+        ? {
+            prompt_planner_version: result.prompt_versions.planner,
+            prompt_reasoner_version: result.prompt_versions.reasoner,
+          }
+        : {}),
+      ...(result.prompt_content_hashes
+        ? {
+            prompt_planner_content_sha256: result.prompt_content_hashes.planner,
+            prompt_reasoner_content_sha256: result.prompt_content_hashes.reasoner,
+          }
+        : {}),
+    },
   });
+}
+
+function selectedPromptsDir(options: EvalRunnerOptions): string {
+  return resolve(options.promptsCwd ?? process.cwd(), 'prompts');
 }
 
 /**

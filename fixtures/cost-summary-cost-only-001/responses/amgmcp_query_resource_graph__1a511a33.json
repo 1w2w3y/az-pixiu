@@ -1,0 +1,30 @@
+{
+  "capability": "amgmcp_query_resource_graph",
+  "parameters": {
+    "query": "Resources | where subscriptionId in~ ('99999999-9999-9999-9999-999999999999') | summarize count_=count() by type, location | order by count_ desc | take 15"
+  },
+  "parameters_digest": "1a511a3321729f7e952bbcdbbc5db1f6a7e95802e2692e69823d200c75287bcc",
+  "response": {
+    "content": {
+      "data": [
+        {
+          "type": "microsoft.compute/virtualmachinescalesets",
+          "location": "westus2",
+          "count_": 12
+        },
+        {
+          "type": "microsoft.dbforpostgresql/flexibleservers",
+          "location": "westus2",
+          "count_": 4
+        },
+        {
+          "type": "microsoft.operationalinsights/workspaces",
+          "location": "westus2",
+          "count_": 2
+        }
+      ],
+      "count": 3
+    },
+    "isError": false
+  }
+}

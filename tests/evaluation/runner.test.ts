@@ -149,6 +149,89 @@ describe('runEvaluation — Phase 3 waste-orphan-ip vertical slice', () => {
   });
 });
 
+describe('runEvaluation — Phase 3 cost-reasoning judgment cases', () => {
+  it('runs both cases with the canned model and passes their semantic expectations', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'azp-eval-cost-reasoning-'));
+    try {
+      const dataset = await loadDataset('eval/phase-3-cost-reasoning.json');
+      const result = await runEvaluation({
+        dataset,
+        config,
+        makeModel: () => buildCannedMockModelClient(),
+        modelProvider: 'mock',
+        credentialIdentity,
+        usePlaybook: true,
+        runsDir: tmp,
+        observabilityMode: 'noop',
+      });
+
+      expect(result.items).toHaveLength(2);
+      expect(result.passed_all).toBe(true);
+      expect(result.pass_count).toBe(2);
+
+      const costOnly = result.items.find(
+        (item) => item.item_id === 'cost-summary-cost-only-001',
+      );
+      expect(costOnly?.error).toBeUndefined();
+      expect(costOnly?.score.passed_all).toBe(true);
+      expect(costOnly?.expectations.passed_all).toBe(true);
+      expect(
+        costOnly?.expectations.results.find(
+          (entry) => entry.expectation === 'require_utilization_evidence_for_optimization_claims',
+        )?.passed,
+      ).toBe(true);
+
+      const costOnlyArtifact = JSON.parse(
+        await readFile(join(costOnly!.run_dir, 'run.json'), 'utf8'),
+      ) as {
+        reasoning: {
+          recommendations: Array<{ impact: string; statement: string }>;
+          data_quality: Array<{ category: string }>;
+        };
+      };
+      expect(costOnlyArtifact.reasoning.data_quality.map((finding) => finding.category)).toContain(
+        'missing_telemetry',
+      );
+      expect(costOnlyArtifact.reasoning.recommendations[0]?.impact).toBe('unknown');
+      expect(costOnlyArtifact.reasoning.recommendations[0]?.statement).toContain(
+        'before any capacity or rightsizing decision',
+      );
+
+      const reconciliation = result.items.find(
+        (item) => item.item_id === 'cost-summary-pip-reconciliation-001',
+      );
+      expect(reconciliation?.error).toBeUndefined();
+      expect(reconciliation?.score.passed_all).toBe(true);
+      expect(reconciliation?.expectations.passed_all).toBe(true);
+      expect(
+        reconciliation?.expectations.results.find(
+          (entry) => entry.expectation === 'require_waste_cost_reconciliation',
+        )?.passed,
+      ).toBe(true);
+
+      const reconciliationArtifact = JSON.parse(
+        await readFile(join(reconciliation!.run_dir, 'run.json'), 'utf8'),
+      ) as {
+        reasoning: {
+          recommendations: Array<{
+            statement: string;
+            supported_by_fact_ids: string[];
+          }>;
+        };
+      };
+      const recommendation = reconciliationArtifact.reasoning.recommendations[0]!;
+      expect(recommendation.statement).toMatch(/observed billed/i);
+      expect(recommendation.statement).toMatch(/list-price exposure/i);
+      expect(recommendation.statement).toMatch(/savings remain unknown/i);
+      expect(recommendation.supported_by_fact_ids).toEqual(
+        expect.arrayContaining(['fact-mock-pip-billed-cost', 'fact-mock-pip-lane']),
+      );
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('runEvaluationByPath — convenience wrapper', () => {
   it('loads the dataset from disk and returns the same shape with dataset_path filled in', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'azp-eval-by-path-'));

@@ -24,6 +24,15 @@ export const PromptVersionsSchema = z
   })
   .strict();
 
+const PromptContentSha256Schema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+
+export const PromptContentHashesSchema = z
+  .object({
+    planner: PromptContentSha256Schema,
+    reasoner: PromptContentSha256Schema,
+  })
+  .strict();
+
 export const CredentialSourceSchema = z
   .object({
     implementation: z.string().min(1),
@@ -59,6 +68,9 @@ export const RunMetadataSchema = z
     run_id: RunIdSchema,
     trace_id: z.string().min(1),
     prompt_versions: PromptVersionsSchema,
+    // Optional so historical run.json artefacts remain readable. New runs
+    // always emit both hashes from the exact prompt content sent to the model.
+    prompt_content_hashes: PromptContentHashesSchema.optional(),
     model_provider: z.string().min(1),
     model_name: z.string().min(1),
     model_config_hash: z.string().min(1),
@@ -84,6 +96,7 @@ export const RunMetadataSchema = z
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 export type ModelDeploymentSku = z.infer<typeof ModelDeploymentSkuSchema>;
 export type PromptVersions = z.infer<typeof PromptVersionsSchema>;
+export type PromptContentHashes = z.infer<typeof PromptContentHashesSchema>;
 export type CredentialSource = z.infer<typeof CredentialSourceSchema>;
 export type DiscoveryFunnel = z.infer<typeof DiscoveryFunnelSchema>;
 export type RunMetadata = z.infer<typeof RunMetadataSchema>;

@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { resolve, isAbsolute } from 'node:path';
 
 /**
@@ -11,6 +12,8 @@ import { resolve, isAbsolute } from 'node:path';
 export interface LoadedPrompt {
   /** Filename without extension, used as prompt_versions entry. */
   version: string;
+  /** Full SHA-256 digest of the exact UTF-8 prompt content sent to the model. */
+  content_sha256: string;
   /** Raw markdown content. */
   content: string;
   /** Absolute path the prompt was read from. */
@@ -29,5 +32,6 @@ export async function loadPrompt(options: LoadPromptOptions): Promise<LoadedProm
     : resolve(cwd, 'prompts', options.filename);
   const content = await readFile(path, 'utf8');
   const version = options.filename.replace(/\.md$/, '');
-  return { version, content, path };
+  const content_sha256 = `sha256:${createHash('sha256').update(content, 'utf8').digest('hex')}`;
+  return { version, content_sha256, content, path };
 }

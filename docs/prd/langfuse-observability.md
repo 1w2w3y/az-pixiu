@@ -18,7 +18,7 @@ The project needs Langfuse to be load-bearing: traces should explain individual 
 
 ## Current Implementation Status
 
-Langfuse tracing is wired for analyze and eval runs when configured. Analyze runs can publish automated rubric scores to the trace. Eval runs can publish rubric and expectation scores, upsert local dataset items into Langfuse, attach traces to Dataset Run Items, group them under a Dataset Run / Experiment, and run model sweeps. Prompt loading is still file-backed (`prompts/planner.v1.md`, `prompts/reasoner.v1.md`, `prompts/reasoner.v2.md`), and local JSON remains the CLI dataset source. Langfuse-backed prompt loading, Langfuse-as-source datasets, LLM-as-judge, human-review tooling, calibration reports, and configurable redaction remain planned.
+Langfuse tracing is wired for analyze and eval runs when configured. Analyze runs can publish automated rubric scores to the trace. Eval runs can publish rubric and expectation scores, upsert local dataset items into Langfuse, attach traces to Dataset Run Items, group them under a Dataset Run / Experiment, and run model sweeps. Prompt loading is still file-backed (`prompts/planner.v1.md`, `prompts/reasoner.v1.md`, `prompts/reasoner.v2.md`), but every new run records the exact prompt content SHA-256 alongside the filename-derived version. Eval Dataset Run Items receive the stable versions and hashes, not an absolute local prompt path, and `--prompts-dir` supports content-attributable local prompt comparisons while managed prompts remain pending. Local JSON remains the CLI dataset source. Langfuse-backed prompt loading, Langfuse-as-source datasets, LLM-as-judge, human-review tooling, calibration reports, and configurable redaction remain planned.
 
 ## Goals
 

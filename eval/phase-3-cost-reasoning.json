@@ -1,0 +1,84 @@
+{
+  "schema_version": "1",
+  "items": [
+    {
+      "id": "cost-summary-cost-only-001",
+      "fixture_id": "cost-summary-cost-only-001",
+      "description": "A PostgreSQL-heavy cost summary with 7,000 USD total observed cost and 5,600 USD attributed to PostgreSQL, plus a recent SKU write but no raw utilization evidence. The model may recommend a bounded investigation, but assertive underutilization, target-SKU, or savings claims are unsupported.",
+      "scope": {
+        "subscription_ids": [
+          "99999999-9999-9999-9999-999999999999"
+        ],
+        "time_window": {
+          "start": "2026-05-01T00:00:00Z",
+          "end": "2026-05-08T00:00:00Z"
+        },
+        "analysis_type": "cost_summary",
+        "effective_scope_summary": "subscription corp-data-prod (99999999-.../99), 2026-05-01 to 2026-05-08; high PostgreSQL cost with no utilization evidence"
+      },
+      "expectations": {
+        "min_recommendations": 1,
+        "expected_dq_categories": [
+          "missing_telemetry"
+        ],
+        "expected_capabilities_invoked": [
+          "amgmcp_query_azure_subscriptions",
+          "amgmcp_cost_analysis",
+          "amgmcp_query_resource_graph",
+          "amgmcp_query_activity_log",
+          "az_pixiu_waste_lane"
+        ],
+        "require_utilization_evidence_for_optimization_claims": true
+      }
+    },
+    {
+      "id": "cost-summary-pip-reconciliation-001",
+      "fixture_id": "cost-summary-pip-reconciliation-001",
+      "description": "Five exact unassociated public-IP review candidates produce 3.04-3.68 USD/week of list-price exposure for four priced candidates, while same-window billed public-IP resource-type cost is only 0.42 USD. The model must reconcile the conflict and avoid presenting exposure as realized savings.",
+      "scope": {
+        "subscription_ids": [
+          "77777777-7777-7777-7777-777777777777",
+          "88888888-8888-8888-8888-888888888888"
+        ],
+        "time_window": {
+          "start": "2026-05-01T00:00:00Z",
+          "end": "2026-05-08T00:00:00Z"
+        },
+        "analysis_type": "cost_summary",
+        "effective_scope_summary": "2 subscriptions: corp-shared-platform-test (77...77) and corp-app-team-sandbox (88...88); 2026-05-01 to 2026-05-08; public-IP list-price exposure versus billed-cost reconciliation"
+      },
+      "expectations": {
+        "min_recommendations": 1,
+        "expected_capabilities_invoked": [
+          "amgmcp_query_azure_subscriptions",
+          "amgmcp_cost_analysis",
+          "amgmcp_query_resource_graph",
+          "amgmcp_query_activity_log",
+          "az_pixiu_waste_lane"
+        ],
+        "expected_waste_lane": "orphan_public_ip",
+        "expected_candidate_ids": [
+          "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-inbound-001",
+          "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-inbound-002",
+          "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-shared-test/providers/Microsoft.Network/publicIPAddresses/pip-test-vhx-outbound-001",
+          "/subscriptions/77777777-7777-7777-7777-777777777777/resourceGroups/rg-legacy-prototype/providers/Microsoft.Network/publicIPAddresses/pip-legacy-basic-001",
+          "/subscriptions/88888888-8888-8888-8888-888888888888/resourceGroups/rg-sandbox-app/providers/Microsoft.Network/publicIPAddresses/pip-sandbox-bastion-stale"
+        ],
+        "expected_candidate_count": 5,
+        "max_unparsed_rows": 0,
+        "max_rejected_rows": 0,
+        "expected_lane_total": {
+          "low_usd": 3.04,
+          "high_usd": 3.68,
+          "point_usd": 3.36,
+          "available_count": 4,
+          "unavailable_count": 1
+        },
+        "require_waste_cost_reconciliation": {
+          "lane": "orphan_public_ip",
+          "resource_type": "microsoft.network/publicipaddresses"
+        }
+      }
+    }
+  ]
+}

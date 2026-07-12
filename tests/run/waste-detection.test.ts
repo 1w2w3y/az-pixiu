@@ -19,7 +19,7 @@ const wasteScope: Scope = {
 };
 
 describe('WasteDetectionExecutor — orphan-public-ip lane against the seeded fixture', () => {
-  it('surfaces 5 orphan public IPs and emits one EvidenceRecord per candidate', async () => {
+  it('surfaces 5 orphan public IPs and emits a distinct aggregate summary plus one EvidenceRecord per candidate', async () => {
     const transport = new FixtureMCPTransport({ fixturePath: 'fixtures/waste-orphan-ip' });
     const client = new MCPClient({ transport });
     const catalog = await client.discover();
@@ -42,20 +42,83 @@ describe('WasteDetectionExecutor — orphan-public-ip lane against the seeded fi
     expect(lane.rejected_row_count).toBe(0);
     expect(result.failures).toHaveLength(0);
 
-    // Every candidate becomes its own EvidenceRecord; the executor
-    // is the only source of waste_candidate evidence, so the count
-    // matches the candidate count exactly.
-    expect(result.evidence).toHaveLength(5);
-    for (const ev of result.evidence) {
+    // The first record is a non-candidate aggregate that makes exact lane
+    // totals citable. The remaining records preserve one-to-one candidate
+    // grounding for classification scoring.
+    expect(result.evidence).toHaveLength(6);
+    const [summary, ...candidateEvidence] = result.evidence;
+    expect(summary?.evidence_id).toMatch(
+      /^ev-az_pixiu_waste_lane-orphan_public_ip-summary-[0-9a-f]{8}$/,
+    );
+    expect(new Set(result.evidence.map((record) => record.evidence_id)).size).toBe(6);
+    expect(summary?.query_intent).toBe('waste_candidate');
+    expect(summary?.source_capability).toBe('az_pixiu_waste_lane');
+    expect(summary?.scope_subset).toEqual({
+      subscription_ids: wasteScope.subscription_ids,
+      resource_group_names: null,
+      resource_ids: null,
+    });
+    const summaryPayload = (summary?.payload_ref.kind === 'inline'
+      ? summary.payload_ref.data
+      : undefined) as {
+      record_kind?: string;
+      classification_predicate?: string;
+      candidate?: unknown;
+      candidate_count?: number;
+      candidate_evidence_ids?: string[];
+      lane_total?: unknown;
+      pricing_provenance?: unknown;
+      parse_counts?: unknown;
+      intended_scope?: unknown;
+    };
+    expect(summaryPayload).toMatchObject({
+      record_kind: 'lane_summary',
+      classification_predicate: orphanPublicIpLane.predicate_text,
+      candidate_count: 5,
+      candidate_evidence_ids: expect.arrayContaining(
+        candidateEvidence.map((record) => record.evidence_id),
+      ),
+      lane_total: {
+        low_usd: 3.04,
+        high_usd: 3.68,
+        point_usd: 3.36,
+        available_count: 4,
+        unavailable_count: 1,
+        unavailable_skus: [
+          { sku: 'PublicIPAddress_Basic_Dynamic', region: 'westus2' },
+        ],
+      },
+      pricing_provenance: {
+        source_urls: ['https://azure.microsoft.com/en-us/pricing/details/ip-addresses/'],
+        rate_source_captured_at: '2026-05-23',
+      },
+      parse_counts: { unparsed_row_count: 0, rejected_row_count: 0 },
+      intended_scope: {
+        subscription_ids: wasteScope.subscription_ids,
+        resource_group_names: null,
+        resource_type_filter: null,
+        lane_resource_types: ['microsoft.network/publicipaddresses'],
+      },
+    });
+    // Scorers recognize candidates from payload.candidate.resource_id;
+    // the aggregate deliberately has no candidate object.
+    expect(summaryPayload.candidate).toBeUndefined();
+
+    expect(candidateEvidence).toHaveLength(5);
+    for (const ev of candidateEvidence) {
       expect(ev.query_intent).toBe('waste_candidate');
       expect(ev.source_capability).toBe('az_pixiu_waste_lane');
       // The cited predicate must live on the evidence record's payload
       // so a reasoner downstream can defend the classification.
       const payload = (ev.payload_ref.kind === 'inline'
         ? ev.payload_ref.data
-        : undefined) as { classification_predicate?: string };
+        : undefined) as { record_kind?: string; classification_predicate?: string };
+      expect(payload?.record_kind).toBe('candidate');
       expect(payload?.classification_predicate).toBe(orphanPublicIpLane.predicate_text);
     }
+
+    const repeated = await executor.execute({ scope: wasteScope });
+    expect(repeated.evidence[0]?.evidence_id).toBe(summary?.evidence_id);
   });
 
   it('attaches a calibrated impact range for the Standard/Static IPs and "rate unavailable" for the Basic/Dynamic IP', async () => {
@@ -229,6 +292,14 @@ describe('WasteDetectionExecutor — orphan-public-ip lane against the seeded fi
     expect(lane.unparsed_row_count).toBe(1);
     expect(lane.rejected_row_count).toBe(3);
     expect(result.evidence).toHaveLength(1);
+    expect(
+      result.evidence.some((record) => {
+        const payload = record.payload_ref.kind === 'inline'
+          ? (record.payload_ref.data as { record_kind?: unknown })
+          : undefined;
+        return payload?.record_kind === 'lane_summary';
+      }),
+    ).toBe(false);
     expect(result.failures).toEqual([
       expect.objectContaining({
         category: 'schema_mismatch',
@@ -331,6 +402,7 @@ describe('WasteDetectionExecutor — orphan-public-ip lane against the seeded fi
     });
     expect(result.lanes[0]?.candidates).toHaveLength(0);
     expect(result.lanes[0]?.rejected_row_count).toBe(1);
+    expect(result.evidence).toHaveLength(0);
     expect(String(transport.lastParameters?.query)).toContain(
       "where resourceGroup in~ ('rg-any')",
     );

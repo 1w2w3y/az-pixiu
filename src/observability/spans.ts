@@ -43,6 +43,8 @@ export const ATTR = {
   scopeBaselineWindow: 'az_pixiu.scope.baseline_window',
   promptPlannerVersion: 'az_pixiu.prompt.planner_version',
   promptReasonerVersion: 'az_pixiu.prompt.reasoner_version',
+  promptPlannerContentSha256: 'az_pixiu.prompt.planner_content_sha256',
+  promptReasonerContentSha256: 'az_pixiu.prompt.reasoner_content_sha256',
   modelProvider: 'az_pixiu.model.provider',
   modelName: 'az_pixiu.model.name',
   modelConfigHash: 'az_pixiu.model.config_hash',
