@@ -6,7 +6,8 @@
   },
   "litellm": {
     "endpoint": "https://litellm.your-domain.com",
-    "model": "gpt-5.6-sol"
+    "model": "gpt-5.6-sol",
+    "timeout_ms": 900000
   },
   "amg": {
     "endpoint": "https://<your-amg-instance>.grafana.azure.com",

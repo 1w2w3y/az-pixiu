@@ -251,6 +251,25 @@ describe('ConfigSchema with LiteLLM provider', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts a bounded litellm model timeout', () => {
+    const result = ConfigSchema.safeParse({
+      ...validLiteLLMConfig,
+      litellm: { ...validLiteLLMConfig.litellm, timeout_ms: 900_000 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.litellm?.timeout_ms).toBe(900_000);
+    }
+  });
+
+  it.each([999, 3_600_001, 1_500.5])('rejects invalid litellm timeout_ms %s', (timeout_ms) => {
+    const result = ConfigSchema.safeParse({
+      ...validLiteLLMConfig,
+      litellm: { ...validLiteLLMConfig.litellm, timeout_ms },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects provider="litellm" without a litellm block', () => {
     const { litellm: _l, ...withoutLitellm } = validLiteLLMConfig;
     const result = ConfigSchema.safeParse(withoutLitellm);

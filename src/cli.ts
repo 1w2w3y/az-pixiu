@@ -817,6 +817,7 @@ function buildModelClient(config: Config, credential: TokenCredential): ModelCli
       endpoint: l.endpoint,
       model: l.model,
       ...(l.api_key ? { apiKey: l.api_key } : {}),
+      ...(l.timeout_ms !== undefined ? { timeoutMs: l.timeout_ms } : {}),
     });
   }
   const f = config.foundry!;

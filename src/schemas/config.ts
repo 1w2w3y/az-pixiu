@@ -23,6 +23,10 @@ export const LiteLLMConfigSchema = z
     endpoint: z.string().url(),
     model: z.string().min(1),
     api_key: z.string().min(1).optional(),
+    // Local models can need substantially longer than the 120-second
+    // client default for large structured prompts. Keep the override
+    // operator-controlled and bounded to avoid accidental unbounded runs.
+    timeout_ms: z.number().int().min(1_000).max(3_600_000).optional(),
   })
   .strict();
 
