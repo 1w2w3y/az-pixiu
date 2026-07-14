@@ -38,7 +38,10 @@ export interface LiteLLMModelClientOptions {
   timeoutMs?: number;
 }
 
-const DEFAULT_MODEL_TIMEOUT_MS = 120_000;
+// 30 minutes. Sized for slow local LiteLLM deployments (e.g. llama.cpp
+// generating a large structured cost-summary JSON at single-digit tok/s).
+// Hosted providers respond in seconds so the ceiling is inert for them.
+const DEFAULT_MODEL_TIMEOUT_MS = 1_800_000;
 
 export class LiteLLMModelClient implements ModelClient {
   private readonly client: OpenAI;
@@ -51,6 +54,12 @@ export class LiteLLMModelClient implements ModelClient {
       baseURL,
       apiKey: options.apiKey ?? 'no-auth',
       timeout: options.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS,
+      // Slow local LiteLLM deployments are deterministic-slow: retrying a
+      // request that timed out because the model is generating at a few
+      // tokens per second cannot succeed on the next attempt either, it
+      // only multiplies the wall-clock wait before the operator sees the
+      // failure. The default `maxRetries: 2` triples that wait for no gain.
+      maxRetries: 0,
     });
     this.client =
       currentInstrumentationFlavor() === 'langfuse' ? observeOpenAI(rawClient) : rawClient;

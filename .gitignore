@@ -27,3 +27,4 @@ runs-*/
 *.swp
 .DS_Store
 
+config.json.bak-*
