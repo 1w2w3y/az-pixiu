@@ -194,6 +194,13 @@ export interface RunOptions {
     sleep?: (ms: number) => Promise<void>;
     jitter?: (policy: import('../evidence/retry-policy.js').RetryPolicy) => number;
   };
+  /**
+   * Keep the tracing provider alive after this run. Sequential CLI batches
+   * use this so multiple independent subscription traces share one provider
+   * lifecycle without overlapping any model calls. The batch owner must call
+   * shutdownTracing() after the final child run. Defaults to false.
+   */
+  deferTracingShutdown?: boolean;
 }
 
 export interface AnalyzeScorePublisher {
@@ -582,7 +589,7 @@ export async function runAnalysis(options: RunOptions): Promise<RunResult> {
     // a warning, not raised. (The provider throws an Array of one or
     // more OTLPExporterErrors; we unwrap for a useful message.)
     try {
-      await shutdownTracing();
+      if (!options.deferTracingShutdown) await shutdownTracing();
     } catch (err) {
       const errs = Array.isArray(err) ? err : [err];
       for (const [i, e] of errs.entries()) {

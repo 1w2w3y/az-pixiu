@@ -147,4 +147,75 @@ describe('compiled-shape analyze CLI', () => {
     expect(report).not.toContain('No matching resources.');
     expect((await stat(htmlPath)).size).toBeGreaterThan(0);
   }, 40_000);
+
+  it('runs explicit subscriptions as independent sequential analyses', async () => {
+    const dir = await makeTempDir();
+    const configPath = join(dir, 'config.json');
+    const outputDir = join(dir, 'runs');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        foundry: {
+          endpoint: 'https://example.openai.azure.com',
+          deployment: 'mock-deployment',
+        },
+        amg: { endpoint: 'https://example.grafana.azure.com' },
+      }),
+    );
+
+    const subscriptions = [
+      '77777777-7777-7777-7777-777777777777',
+      '88888888-8888-8888-8888-888888888888',
+    ];
+    const result = await runCli([
+      'analyze',
+      'cost-summary',
+      '--fixture',
+      'waste-orphan-ip',
+      '--serial-subscriptions',
+      '--use-playbook',
+      '--mock-model',
+      '--credential',
+      'mock',
+      '--observability',
+      'noop',
+      '--no-billing-cache',
+      '--config',
+      configPath,
+      '--output-dir',
+      outputDir,
+      '--subscription',
+      subscriptions[0]!,
+      '--subscription',
+      subscriptions[1]!,
+      '--from',
+      '2026-05-01T00:00:00Z',
+      '--to',
+      '2026-05-08T00:00:00Z',
+    ]);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      'Serial subscription mode: 2 independent run(s); LLM concurrency=1.',
+    );
+    expect(result.stdout.indexOf(`[1/2] (${subscriptions[0]})`)).toBeLessThan(
+      result.stdout.indexOf(`[2/2] (${subscriptions[1]})`),
+    );
+    expect(result.stdout).toContain('Serial batch complete: 2 subscription run(s).');
+
+    const runDirectories = (await readdir(outputDir, { withFileTypes: true })).filter((entry) =>
+      entry.isDirectory(),
+    );
+    expect(runDirectories).toHaveLength(2);
+    const scopes = await Promise.all(
+      runDirectories.map(async (entry) => {
+        const runJson = JSON.parse(
+          await readFile(join(outputDir, entry.name, 'run.json'), 'utf8'),
+        ) as { scope: { subscription_ids: string[] } };
+        return runJson.scope.subscription_ids;
+      }),
+    );
+    expect(scopes.every((ids) => ids.length === 1)).toBe(true);
+    expect(scopes.flat().sort()).toEqual([...subscriptions].sort());
+  }, 40_000);
 });

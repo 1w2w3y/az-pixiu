@@ -3,9 +3,14 @@ import { parseArgs } from 'node:util';
 import { loadConfig, ConfigError } from './config.js';
 import { intakeScope } from './run/scope-intake.js';
 import { runAnalysis } from './run/orchestrator.js';
+import { shutdownTracing } from './observability/setup.js';
 import { FilesystemRunHistoryStore } from './history/filesystem-store.js';
 import { diagnose, type DiagnoseResult } from './run/diagnose.js';
-import { SubscriptionDiscoveryError } from './run/subscription-discovery.js';
+import {
+  discoverTopSubscriptions,
+  SubscriptionDiscoveryError,
+  type SubscriptionDiscoveryResult,
+} from './run/subscription-discovery.js';
 import { BillingProbeCache, defaultCachePath } from './run/billing-probe-cache.js';
 import { FileBillingCacheStore } from './billing-cache/index.js';
 import { probeBillingAccess } from './run/billing-probe.js';
@@ -64,6 +69,10 @@ analyze flags:
   --subscription-name-filter <s>   comma-separated, case-insensitive substring filters on subscription display names.
                                    The agent keeps names containing any supplied term and analyzes
                                    the top N by resource count. Mutually exclusive with --subscription.
+  --serial-subscriptions           Analyze each selected subscription as a separate run, in order. This bounds each
+                                   planner/reasoner prompt to one subscription and never overlaps LLM calls. Auto-
+                                   discovery runs once; billing probes are forced to concurrency 1. Each child writes
+                                   its own artifacts and trace; no combined portfolio report is synthesized.
   --probe-billing / --no-probe-billing
                                    Toggle the billing-access pre-flight probe (default: enabled). When enabled, each
                                    candidate is probed with a cheap amgmcp_cost_analysis call and only subs that
@@ -147,6 +156,8 @@ interface AnalyzeArgs {
    * Applied at auto-discovery time. cost-summary only.
    */
   subscriptionNameFilter?: string;
+  /** Run one complete analysis per subscription, sequentially. */
+  serialSubscriptions: boolean;
   resourceGroups?: string[];
   resourceTypeFilter?: string[];
   from?: string;
@@ -190,6 +201,7 @@ async function main(): Promise<number> {
       subscription: { type: 'string', multiple: true },
       'max-subscriptions': { type: 'string' },
       'subscription-name-filter': { type: 'string' },
+      'serial-subscriptions': { type: 'boolean' },
       'resource-group': { type: 'string', multiple: true },
       'resource-type': { type: 'string', multiple: true },
       from: { type: 'string' },
@@ -255,6 +267,7 @@ async function runAnalyzeCommand(
   const explicitSubs = stringArrayOrUndefined(values.subscription) ?? [];
   const maxSubs = parsePositiveInt(values['max-subscriptions'], 3);
   const nameFilter = stringOrUndefined(values['subscription-name-filter']);
+  const serialSubscriptions = Boolean(values['serial-subscriptions']);
   const usePlaybook = Boolean(values['use-playbook']);
   const mockModel = Boolean(values['mock-model']);
 
@@ -285,6 +298,7 @@ async function runAnalyzeCommand(
     subscriptions: explicitSubs,
     maxSubscriptions: maxSubs,
     ...(nameFilter !== undefined ? { subscriptionNameFilter: nameFilter } : {}),
+    serialSubscriptions,
     resourceGroups: stringArrayOrUndefined(values['resource-group']),
     resourceTypeFilter: stringArrayOrUndefined(values['resource-type']),
     from: stringOrUndefined(values.from),
@@ -314,17 +328,20 @@ async function runAnalyzeCommand(
     const credential = buildCredential(args.credentialMode);
     const credentialIdentity = describeAmgAuthentication(config, configuredCredentialIdentity);
 
-    let transport: MCPTransport;
-    if (args.fixture) {
-      transport = new FixtureMCPTransport({ fixturePath: `fixtures/${args.fixture}` });
-    } else {
-      transport = new LiveMCPTransport({
-        endpoint: config.amg.endpoint,
-        auth: resolveAmgAuthentication(config, credential),
-      });
-    }
+    const createClient = (): MCPClient => {
+      let transport: MCPTransport;
+      if (args.fixture) {
+        transport = new FixtureMCPTransport({ fixturePath: `fixtures/${args.fixture}` });
+      } else {
+        transport = new LiveMCPTransport({
+          endpoint: config.amg.endpoint,
+          auth: resolveAmgAuthentication(config, credential),
+        });
+      }
+      return new MCPClient({ transport });
+    };
 
-    client = new MCPClient({ transport });
+    client = createClient();
     await client.discover();
 
     // Build the shared scope-intake input. When `--subscription` is
@@ -393,7 +410,11 @@ async function runAnalyzeCommand(
       ? {
           enabled: true,
           ...(args.probePoolSize !== undefined ? { poolSize: args.probePoolSize } : {}),
-          ...(args.probeConcurrency !== undefined ? { concurrency: args.probeConcurrency } : {}),
+          ...(args.serialSubscriptions
+            ? { concurrency: 1 }
+            : args.probeConcurrency !== undefined
+              ? { concurrency: args.probeConcurrency }
+              : {}),
           ...(args.probeTimeoutMs !== undefined ? { timeoutMs: args.probeTimeoutMs } : {}),
           ...(probeCache ? { cache: probeCache } : {}),
         }
@@ -427,6 +448,145 @@ async function runAnalyzeCommand(
             },
           }
         : undefined;
+
+    const runOne = async (
+      runClient: MCPClient,
+      runScope: NonNullable<typeof scope>,
+      preflightDataQuality?: DataQualityFinding[],
+      deferTracingShutdown = false,
+    ) =>
+      runAnalysis({
+        config,
+        scope: runScope,
+        client: runClient,
+        model,
+        modelProvider,
+        credentialIdentity,
+        usePlaybook: args.usePlaybook,
+        runsDir,
+        observabilityMode: args.observability,
+        ...(config.observability?.application_insights_connection_string
+          ? {
+              applicationInsightsConnectionString:
+                config.observability.application_insights_connection_string,
+            }
+          : {}),
+        ...(args.fixture ? { fixtureId: args.fixture } : {}),
+        ...(langfusePublisher ? { langfusePublisher } : {}),
+        runHistoryStore,
+        ...(billingCacheOption ? { billingCache: billingCacheOption } : {}),
+        ...(preflightDataQuality && preflightDataQuality.length > 0
+          ? { preflightDataQuality }
+          : {}),
+        deferTracingShutdown,
+      });
+
+    if (args.serialSubscriptions) {
+      let discovered: SubscriptionDiscoveryResult | undefined;
+      let selected: Array<{ subscription_id: string; display_name?: string }>;
+
+      if (scope) {
+        selected = scope.subscription_ids.map((subscription_id) => ({
+          subscription_id,
+          ...(scope.subscription_display_names?.[subscription_id]
+            ? { display_name: scope.subscription_display_names[subscription_id] }
+            : {}),
+        }));
+      } else {
+        process.stdout.write(
+          `→ discovering top ${args.maxSubscriptions} subscription(s) for serial analysis` +
+            `${args.subscriptionNameFilter ? ` (name filter: "${args.subscriptionNameFilter}")` : ''}...\n`,
+        );
+        discovered = await discoverTopSubscriptions(client, args.maxSubscriptions, {
+          ...(args.subscriptionNameFilter !== undefined
+            ? { nameFilter: args.subscriptionNameFilter }
+            : {}),
+          ...(probeConfig ? { probe: { ...probeConfig, concurrency: 1 } } : {}),
+        });
+        selected = discovered.selected.map(({ subscription_id, display_name }) => ({
+          subscription_id,
+          ...(display_name ? { display_name } : {}),
+        }));
+        await client.close();
+        client = undefined;
+      }
+
+      // Resolve default windows once for the whole batch. Re-running
+      // intakeScope inside the loop without this frozen template would make
+      // implicit `now - 7d -> now` windows differ by a few milliseconds.
+      const selectedDisplayNames = Object.fromEntries(
+        selected
+          .filter((subscription) => subscription.display_name !== undefined)
+          .map((subscription) => [subscription.subscription_id, subscription.display_name!]),
+      );
+      const batchScope =
+        scope ??
+        intakeScope({
+          ...scopeIntake,
+          subscription_ids: selected.map((subscription) => subscription.subscription_id),
+          ...(Object.keys(selectedDisplayNames).length > 0
+            ? { subscription_display_names: selectedDisplayNames }
+            : {}),
+        });
+
+      process.stdout.write(
+        `\nSerial subscription mode: ${selected.length} independent run(s); LLM concurrency=1.` +
+          `${args.usePlaybook ? ' Deterministic planner enabled; one reasoner call per subscription.' : ' Planner and reasoner calls are sequential per subscription.'}\n`,
+      );
+      let exitCode = 0;
+      for (let i = 0; i < selected.length; i += 1) {
+        const subscription = selected[i]!;
+        process.stdout.write(
+          `\n[${i + 1}/${selected.length}] ${subscription.display_name ? `"${subscription.display_name}" ` : ''}(${subscription.subscription_id})\n`,
+        );
+        const childScope = intakeScope({
+          analysis_type: batchScope.analysis_type,
+          subscription_ids: [subscription.subscription_id],
+          ...(batchScope.resource_group_names
+            ? { resource_group_names: batchScope.resource_group_names }
+            : {}),
+          ...(batchScope.resource_type_filter
+            ? { resource_type_filter: batchScope.resource_type_filter }
+            : {}),
+          time_window_start: batchScope.time_window.start,
+          time_window_end: batchScope.time_window.end,
+          ...(batchScope.baseline_window
+            ? {
+                baseline_window_start: batchScope.baseline_window.start,
+                baseline_window_end: batchScope.baseline_window.end,
+              }
+            : {}),
+          ...(batchScope.user_context ? { user_context: batchScope.user_context } : {}),
+          ...(subscription.display_name
+            ? {
+                subscription_display_names: {
+                  [subscription.subscription_id]: subscription.display_name,
+                },
+              }
+            : {}),
+        });
+        const childClient = client ?? createClient();
+        client = childClient;
+        await childClient.discover();
+
+        // Explicit picks are probed one at a time. Auto-discovered picks
+        // already passed through the single-concurrency discovery probe.
+        const childPreflight =
+          scope && args.probeBilling && !args.fixture
+            ? await probeExplicitSubscriptions(childClient, [subscription.subscription_id], {
+                ...probeConfig!,
+                concurrency: 1,
+              })
+            : undefined;
+        const result = await runOne(childClient, childScope, childPreflight, true);
+        // doRun closes the child client after the artifacts are written.
+        client = undefined;
+        if (result.cost_retrieval_outcome === 'failed') exitCode = 6;
+        else if (!result.score.passed_all && exitCode === 0) exitCode = 3;
+      }
+      process.stdout.write(`\nSerial batch complete: ${selected.length} subscription run(s).\n`);
+      return exitCode;
+    }
 
     // Explicit-pick mode: probe still runs but does not gate selection.
     // Findings flow in as `preflightDataQuality` so the report surfaces
@@ -505,6 +665,11 @@ async function runAnalyzeCommand(
     return 4;
   } finally {
     if (client) await client.close().catch(() => undefined);
+    if (serialSubscriptions) {
+      await shutdownTracing().catch((err) => {
+        process.stderr.write(`  ⚠ trace export: ${describe(err)}\n`);
+      });
+    }
   }
 }
 

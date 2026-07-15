@@ -47,6 +47,13 @@ npx pixiu analyze cost-summary
 # or filter by one or more display-name substrings (comma-separated OR terms)
 npx pixiu analyze cost-summary --subscription-name-filter prod,shared
 
+# Low-context local-model mode: discover once, then complete one independent
+# subscription run at a time. --use-playbook removes the planner LLM call, so
+# only one reasoner request is made per subscription and LLM calls never overlap.
+# This writes one report/run.json/trace per subscription, not a portfolio report.
+npx pixiu analyze cost-summary --subscription-name-filter prod,shared \
+    --serial-subscriptions --use-playbook --probe-concurrency 1
+
 # baseline-comparison flow: surface what changed vs. the prior window
 npx pixiu analyze cost-surprise --subscription <sub-id> --resource-group <rg>
 
