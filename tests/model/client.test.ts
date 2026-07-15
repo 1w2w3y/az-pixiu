@@ -1,10 +1,26 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { z } from 'zod';
 import { MockModelClient } from '../../src/model/mock-client.js';
 import { modelConfigHash } from '../../src/model/client.js';
 import { isUnsupportedTemperatureError } from '../../src/model/openai-client.js';
+import { buildLiteLLMHttpTransport } from '../../src/model/litellm-client.js';
 
 const tiny = z.object({ greeting: z.string() }).strict();
+
+const servers: Server[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        ),
+    ),
+  );
+});
 
 describe('MockModelClient', () => {
   it('returns the constant response and validates it against the schema', async () => {
@@ -100,5 +116,31 @@ describe('OpenAIModelClient compatibility helpers', () => {
     expect(isUnsupportedTemperatureError(new Error('401 Access denied due to invalid token'))).toBe(
       false,
     );
+  });
+});
+
+describe('LiteLLMModelClient HTTP transport', () => {
+  it('applies the configured model timeout to Undici response headers', async () => {
+    const server = createServer((_request, response) => {
+      setTimeout(() => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('{}');
+      }, 1_500);
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    const url = `http://127.0.0.1:${port}`;
+
+    const short = buildLiteLLMHttpTransport(500);
+    await expect(
+      short.fetch(url, short.fetchOptions as RequestInit),
+    ).rejects.toMatchObject({ cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } });
+    await short.fetchOptions.dispatcher.close();
+
+    const long = buildLiteLLMHttpTransport(3_000);
+    const response = await long.fetch(url, long.fetchOptions as RequestInit);
+    expect(response.status).toBe(200);
+    await long.fetchOptions.dispatcher.close();
   });
 });

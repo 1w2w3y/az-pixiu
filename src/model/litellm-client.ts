@@ -3,6 +3,7 @@ import { zodResponseFormat } from 'openai/helpers/zod';
 import { observeOpenAI } from '@langfuse/openai';
 import { getPropagatedAttributesFromContext } from '@langfuse/core';
 import { context, trace } from '@opentelemetry/api';
+import { Agent, fetch as undiciFetch } from 'undici';
 import type { z } from 'zod';
 import type { GenerateStructuredArgs, ModelClient } from './client.js';
 import { currentInstrumentationFlavor } from '../observability/setup.js';
@@ -43,6 +44,28 @@ export interface LiteLLMModelClientOptions {
 // Hosted providers respond in seconds so the ceiling is inert for them.
 const DEFAULT_MODEL_TIMEOUT_MS = 1_800_000;
 
+/**
+ * Node's built-in fetch is backed by Undici, whose independent HTTP
+ * headers/body timers default to 300 seconds. A non-streaming local model
+ * commonly sends no response headers until generation finishes, so that
+ * lower transport ceiling can abort a request even when OpenAI.timeout is
+ * configured for much longer. Keep both layers on the same operator-defined
+ * budget and use fetch + Agent from the same Undici package.
+ */
+export function buildLiteLLMHttpTransport(timeoutMs: number): {
+  fetch: typeof globalThis.fetch;
+  fetchOptions: { dispatcher: Agent };
+} {
+  const dispatcher = new Agent({
+    headersTimeout: timeoutMs,
+    bodyTimeout: timeoutMs,
+  });
+  return {
+    fetch: undiciFetch as unknown as typeof globalThis.fetch,
+    fetchOptions: { dispatcher },
+  };
+}
+
 export class LiteLLMModelClient implements ModelClient {
   private readonly client: OpenAI;
   private readonly model: string;
@@ -50,10 +73,12 @@ export class LiteLLMModelClient implements ModelClient {
   constructor(options: LiteLLMModelClientOptions) {
     this.model = options.model;
     const baseURL = options.endpoint.replace(/\/+$/, '') + '/v1';
+    const timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS;
     const rawClient = new OpenAI({
       baseURL,
       apiKey: options.apiKey ?? 'no-auth',
-      timeout: options.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS,
+      timeout: timeoutMs,
+      ...buildLiteLLMHttpTransport(timeoutMs),
       // Slow local LiteLLM deployments are deterministic-slow: retrying a
       // request that timed out because the model is generating at a few
       // tokens per second cannot succeed on the next attempt either, it
